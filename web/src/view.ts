@@ -32,6 +32,7 @@ import { cleanFileName } from './zip.ts';
 import { MAX_PREVIEW_BYTES } from './image.ts';
 import { attachmentPreview, MAX_TEXT_PREVIEW_BYTES, type AttachmentPreview } from './attachment-preview.ts';
 import { clearPreview, previewGeneration, showImage, showTextPreview } from './preview.ts';
+import { closeShareDialog } from './share.ts';
 import { textPreview } from './text-preview.ts';
 
 // The File System Access API is not in TypeScript's DOM types yet.
@@ -76,12 +77,6 @@ export async function initView(id: string, fragment: string): Promise<void> {
  * with a token that proves the reader knows the key and any password.
  */
 async function open(id: string, key: Uint8Array, burn: boolean, recipient: Uint8Array | null, shareURL: string): Promise<void> {
-  const sodium = await loadSodium();
-  const progress = new Progress('view');
-  const stage = el('view-stage');
-  reveal(el('view-progress'));
-  stage.textContent = 'Downloading';
-  progress.set(0, '');
   let opened: OpenedPaste | undefined;
   let asked = false;
   let reader: ByteReader | null = null;
@@ -91,6 +86,35 @@ async function open(id: string, key: Uint8Array, burn: boolean, recipient: Uint8
   // server reported, so a wrong computer clock does not matter.
   let deadline: number | null = null;
   let file: CloneableAttachment | null = null;
+  // A paste with an open limit does not outlast the visit. The guard is in
+  // place before the first await: leaving at any point (for another page in
+  // this tab, or closing it) clears whatever has been decrypted so far, and
+  // the steps below stop at their next check, so a page the browser keeps in
+  // its back/forward cache cannot bring the paste back.
+  // Until the server says whether a separate link has a limit, assume so.
+  let limited = burn || recipient !== null;
+  let left = false;
+  let discussionKey: Uint8Array | null = null;
+  let readsKnown: number | null = null;
+  const leave = () => {
+    void reader?.cancel();
+    file?.wipe();
+    closeShareDialog();
+    if (!limited) return;
+    left = true;
+    if (discussionKey) discussionKey.fill(0);
+    el('view-text').replaceChildren();
+    el('view-content').replaceChildren();
+    showProblem('This paste was cleared from this page', `Its link has an open limit, so it was cleared when you left. ${readsKnown === 0 ? 'It can’t be opened again with this link.' : 'Open its link again to read it, if it has opens left; that uses another open.'}`);
+  };
+  const stopIfLeft = () => { if (left) throw new PasteError('cancelled', 'Left the page.'); };
+  window.addEventListener('pagehide', leave);
+  const sodium = await loadSodium();
+  const progress = new Progress('view');
+  const stage = el('view-stage');
+  reveal(el('view-progress'));
+  stage.textContent = 'Downloading';
+  progress.set(0, '');
   try {
     let download;
     if (burn || recipient !== null) {
@@ -98,9 +122,11 @@ async function open(id: string, key: Uint8Array, burn: boolean, recipient: Uint8
       // the reader proves knowledge of the link key and any password.
       const prefix = parsePrefix(await fetchBurnPrefix(id));
       for (let attempt = 0; ; attempt++) {
+        stopIfLeft();
         if (prefix.password) {
           asked = true;
           password = await askPassword(attempt);
+          stopIfLeft();
           // Nothing has been requested yet, so cancelling uses up no open.
           if (password === null) throw new PasteError('cancelled', 'Cancelled.');
         }
@@ -108,6 +134,7 @@ async function open(id: string, key: Uint8Array, burn: boolean, recipient: Uint8
         const token = recipient !== null ? recipientAccessToken(sodium, master, recipient) : burnAccessToken(sodium, master);
         sodium.memzero(master);
         try {
+          stopIfLeft();
           download = await fetchPaste(id, token, burn, recipient !== null);
           break;
         } catch (e) {
@@ -124,16 +151,22 @@ async function open(id: string, key: Uint8Array, burn: boolean, recipient: Uint8
     // A separate link without a limit has no count, whatever its link says.
     if (recipient !== null) burn = download.readsRemaining !== null;
     readsRemaining = download.readsRemaining ?? 0;
+    limited = burn;
+    if (burn) readsKnown = readsRemaining;
     if (download.expiresIn !== null) deadline = Date.now() + download.expiresIn * 1000;
     reader = new ByteReader(body, (received) => {
       if (size > 0) progress.set(received / size, `${formatBytes(received)} of ${formatBytes(size)}`);
     });
-    window.addEventListener('pagehide', () => { void reader?.cancel(); file?.wipe(); });
-    opened = await openPaste(sodium, reader, key, (attempt) => {
-      if (password !== null && attempt === 0) return Promise.resolve(password);
+    stopIfLeft();
+    opened = await openPaste(sodium, reader, key, async (attempt) => {
+      if (password !== null && attempt === 0) return password;
       asked = true;
-      return askPassword(attempt);
+      const entered = await askPassword(attempt);
+      stopIfLeft();
+      return entered;
     });
+    if (opened.discussion) discussionKey = opened.discussion.key;
+    stopIfLeft();
     if (opened.file) {
       const { meta } = opened;
       file = new CloneableAttachment(opened.file, safeFilename(meta.filename), meta.size, meta.mime ?? '');
@@ -147,13 +180,15 @@ async function open(id: string, key: Uint8Array, burn: boolean, recipient: Uint8
         stage.textContent = 'Downloading';
         reveal(el('view-progress'));
         await file.verify();
+        stopIfLeft();
       }
     }
   } catch (e) {
     if (opened?.discussion) sodium.memzero(opened.discussion.key);
     file?.wipe();
     await reader?.cancel();
-    showFailure(e, burn);
+    // After leaving, the page already says what happened.
+    if (!left) showFailure(e, burn);
     return;
   } finally {
     password = null;
@@ -196,7 +231,7 @@ async function open(id: string, key: Uint8Array, burn: boolean, recipient: Uint8
   if (meta.text.length > 0 || !opened.file) renderText(meta.text);
   const attachment = file ? renderFile(file, meta.filename, meta.size, meta.mime, () => reader!.cancel()) : null;
   initReaderActions(meta.text, shareURL, !burn || readsRemaining > 0, attachment);
-  if (file) {
+  if (!burn && file) {
     // Leaving the page wipes the attachment. If the browser restores the page
     // from its back/forward cache, keep the text but say the file is gone
     // and turn off what needs it, instead of leaving buttons that fail.

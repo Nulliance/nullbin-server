@@ -13,6 +13,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/jacobzymet/nullbin-go/internal/rooms"
 	"github.com/jacobzymet/nullbin-go/internal/storage"
 )
 
@@ -85,16 +86,29 @@ func FuzzHandler(f *testing.F) {
 		{"POST", "/api/v1/pastes", "application/json", "", `{"expires_in":300,"burn_after_reading":false,"total_size":100,"comment_token":"` + strings.Repeat("A", 43) + `"}`},
 		{"POST", "/api/v1/pastes/" + id + "/comments", "application/octet-stream", "tok", strings.Repeat("c", 64)},
 		{"GET", "/api/v1/pastes/" + id + "/comments", "", "tok", ""},
+		// Burner rooms.
+		{"POST", "/api/v1/rooms", "application/json", "", `{"expires_in":3600}`},
+		{"POST", "/api/v1/rooms/" + id + "/invites", "", "tok", ""},
+		{"POST", "/api/v1/rooms/" + id + "/join", "", "tok", ""},
+		{"POST", "/api/v1/rooms/" + id + "/records", "application/octet-stream", "tok", strings.Repeat("r", 1100)},
+		{"GET", "/api/v1/rooms/" + id + "/records?after=0", "", "tok", ""},
+		{"GET", "/api/v1/rooms/" + id + "/members", "", "tok", ""},
+		{"POST", "/api/v1/rooms/" + id + "/members/1/remove", "", "tok", ""},
+		{"DELETE", "/api/v1/rooms/" + id, "", "tok", ""},
+		{"GET", "/r/" + id, "", "", ""},
 	}
 	for _, s := range seeds {
 		f.Add(s.method, s.path, s.ct, s.token, []byte(s.body))
 	}
 
-	e := newEnv(f, nil)
+	e := newEnv(f, func(c *Config) { c.Rooms = rooms.New(rooms.DefaultMaxRooms, rooms.DefaultMaxBytes) })
+	e.srv.roomCreates.burst = 1e9
+	e.srv.roomWrites.burst = 1e9
+	e.srv.roomReads.burst = 1e9
 	e.srv.creates.burst = 1e9
 	e.srv.uploads.burst = 1e9
 	e.srv.comments.burst = 1e9
-	allowed := map[int]bool{200: true, 201: true, 204: true, 301: true, 307: true, 308: true, 400: true, 403: true, 404: true, 405: true, 409: true, 413: true, 415: true, 429: true, 503: true, 507: true}
+	allowed := map[int]bool{200: true, 201: true, 204: true, 301: true, 307: true, 308: true, 400: true, 403: true, 404: true, 405: true, 409: true, 410: true, 413: true, 415: true, 429: true, 503: true, 507: true}
 	tokenPattern := regexp.MustCompile(`^[!#$%&'*+.^_` + "`" + `|~0-9A-Za-z-]+$`)
 
 	f.Fuzz(func(t *testing.T, method, path, ct, token string, body []byte) {
@@ -112,6 +126,9 @@ func FuzzHandler(f *testing.F) {
 		r.Header.Set(DeleteTokenHeader, token)
 		r.Header.Set(CommentTokenHeader, token)
 		r.Header.Set(BurnTokenHeader, token)
+		r.Header.Set(OwnerTokenHeader, token)
+		r.Header.Set(MemberTokenHeader, token)
+		r.Header.Set(InviteTokenHeader, token)
 		w := httptest.NewRecorder()
 		e.srv.Handler().ServeHTTP(w, r)
 

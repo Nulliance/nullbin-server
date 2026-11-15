@@ -93,7 +93,7 @@ import /etc/caddy/nullbin/cloudflare-{$CLOUDFLARE:false}.caddy
 		file_server
 	}
 
-	@pages path / /index.html /p/* /d/*
+	@pages path / /index.html /p/* /d/* /r/*
 	handle @pages {
 		header Cache-Control no-store
 		rewrite * /index.html

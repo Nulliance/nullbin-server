@@ -84,8 +84,9 @@ main() {
     fi
     # Settings come only from the checked file, never from this shell, and
     # the project is always "nullbin", whatever the environment says.
-    compose=(env -u DOMAIN -u API_DOMAIN -u FRONTEND_ORIGIN -u CLOUDFLARE -u COMPOSE_PROJECT_NAME -u COMPOSE_FILE
-      -u COMPOSE_ENV_FILES -u COMPOSE_PROFILES "NULLBIN_IPV6=$ipv6" "${compose[@]}" -p nullbin)
+    compose=(env -u DOMAIN -u API_DOMAIN -u FRONTEND_ORIGIN -u CLOUDFLARE -u ROOMS -u MAX_SIZE -u MAX_STORAGE -u MAX_PASTES
+      -u MAX_PENDING -u COMPOSE_PROJECT_NAME -u COMPOSE_FILE -u COMPOSE_ENV_FILES -u COMPOSE_PROFILES
+      "NULLBIN_IPV6=$ipv6" "${compose[@]}" -p nullbin)
     # Stopping always works, even with a broken settings file.
     [[ $cmd == stop ]] || check_config
   }
@@ -121,9 +122,9 @@ main() {
     local allowed line name
     local -A value=()
     if [[ $config == .env ]]; then
-      allowed=" DOMAIN CLOUDFLARE MAX_SIZE MAX_STORAGE MAX_PENDING MAX_PASTES "
+      allowed=" DOMAIN CLOUDFLARE MAX_SIZE MAX_STORAGE MAX_PENDING MAX_PASTES ROOMS "
     else
-      allowed=" API_DOMAIN FRONTEND_ORIGIN CLOUDFLARE MAX_SIZE MAX_STORAGE MAX_PENDING MAX_PASTES "
+      allowed=" API_DOMAIN FRONTEND_ORIGIN CLOUDFLARE MAX_SIZE MAX_STORAGE MAX_PENDING MAX_PASTES ROOMS "
     fi
     while IFS= read -r line || [[ -n $line ]]; do
       [[ $line == *[[:cntrl:]]* ]] &&
@@ -142,6 +143,8 @@ main() {
       valid_domain "${value[API_DOMAIN]:-}" || die "API_DOMAIN in deploy/.env.api is not a lowercase domain name such as api.example.com"
       valid_origin "${value[FRONTEND_ORIGIN]:-}" || die "FRONTEND_ORIGIN in deploy/.env.api is not an address such as https://paste.example.com"
     fi
+    [[ ${value[ROOMS]:-true} =~ ^(true|false)$ ]] ||
+      die "ROOMS in deploy/$config must be true or false"
     # It picks a file of the proxy's configuration by name.
     [[ ${value[CLOUDFLARE]:-false} =~ ^(true|false|self-signed)$ ]] ||
       die "CLOUDFLARE in deploy/$config must be true, false or self-signed. Change it with: sudo ./nullbin cloudflare on (or self-signed, or off)"

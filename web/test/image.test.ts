@@ -15,18 +15,25 @@ const u32be = (n: number) => [(n >>> 24) & 255, (n >>> 16) & 255, (n >>> 8) & 25
 const u16le = (n: number) => [n & 255, (n >>> 8) & 255];
 const u24le = (n: number) => [n & 255, (n >>> 8) & 255, (n >>> 16) & 255];
 
+const chunk = (type: string, data: Uint8Array) => {
+  const body = bytes(type, data);
+  return bytes(u32be(data.length), body, u32be(crc32(body)));
+};
+const PNG_SIGNATURE = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
+const ihdr = (w: number, h: number) => chunk('IHDR', bytes(u32be(w), u32be(h), [8, 6, 0, 0, 0]));
+
 /** A complete, valid PNG: what a browser can really decode. */
 function makePng(width: number, height: number): Uint8Array {
-  const chunk = (type: string, data: Uint8Array) => {
-    const body = bytes(type, data);
-    return bytes(u32be(data.length), body, u32be(crc32(body)));
-  };
-  const ihdr = bytes(u32be(width), u32be(height), [8, 6, 0, 0, 0]);
   const raw = new Uint8Array(height * (1 + width * 4)); // filter byte 0, transparent pixels
-  return bytes([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a], chunk('IHDR', ihdr), chunk('IDAT', deflateSync(raw)), chunk('IEND', new Uint8Array()));
+  return bytes(PNG_SIGNATURE, ihdr(width, height), chunk('IDAT', deflateSync(raw)), chunk('IEND', new Uint8Array()));
 }
 
-const pngHeader = (w: number, h: number) => bytes([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a], u32be(13), 'IHDR', u32be(w), u32be(h), [8, 6, 0, 0, 0]);
+/** The chunks of a PNG, without pixel data: enough for the preflight. */
+const pngHeader = (w: number, h: number, ...more: Uint8Array[]) => bytes(PNG_SIGNATURE, ihdr(w, h), ...more, chunk('IEND', new Uint8Array()));
+const acTL = (frames: number) => chunk('acTL', bytes(u32be(frames), u32be(0)));
+const fcTL = () => chunk('fcTL', new Uint8Array(26));
+const riff = (...chunks: Uint8Array[]) => bytes('RIFF', [0, 0, 0, 0], 'WEBP', ...chunks);
+const webpChunk = (type: string, size: number) => bytes(type, [size & 255, (size >>> 8) & 255, 0, 0], new Uint8Array(size + (size & 1)));
 const gifHeader = (w: number, h: number) => bytes('GIF89a', u16le(w), u16le(h), [0, 0, 0]);
 const gifFrame = (w: number, h: number, x = 0, y = 0) =>
   bytes([0x2c], u16le(x), u16le(y), u16le(w), u16le(h), [0, 2, 2, 0x44, 0x01, 0]);
@@ -39,7 +46,7 @@ const webpLossless = (w: number, h: number) => {
   const bits = ((w - 1) & 0x3fff) | (((h - 1) & 0x3fff) << 14);
   return bytes('RIFF', [0, 0, 0, 0], 'WEBP', 'VP8L', [0, 0, 0, 0], [0x2f], [bits & 255, (bits >>> 8) & 255, (bits >>> 16) & 255, (bits >>> 24) & 255], new Uint8Array(8));
 };
-const webpExtended = (w: number, h: number) => bytes('RIFF', [0, 0, 0, 0], 'WEBP', 'VP8X', [10, 0, 0, 0], [0, 0, 0, 0], u24le(w - 1), u24le(h - 1), new Uint8Array(4));
+const webpExtended = (w: number, h: number) => bytes('RIFF', [0, 0, 0, 0], 'WEBP', 'VP8X', [10, 0, 0, 0], [0, 0, 0, 0], u24le(w - 1), u24le(h - 1));
 
 test('the format and size come from the file itself', () => {
   assert.deepEqual(previewInfo(makePng(3, 2)), { type: 'image/png', width: 3, height: 2 });
@@ -90,6 +97,26 @@ test('GIF frames cannot expand a small canvas or exceed the animation budget', (
   assert.notEqual(previewInfo(canvas), null, 'one canvas at the pixel limit');
   assert.equal(previewInfo(gifImage(10_000, 5_000, gifFrame(1, 1), gifFrame(1, 1))), null, 'two full compositing canvases exceed the budget');
   assert.deepEqual(previewInfo(gifImage(10, 10, gifFrame(10, 10), gifFrame(5, 5, 5, 5))), { type: 'image/gif', width: 10, height: 10 });
+});
+
+test('animated PNG and WebP frames are held to the same budget as GIF frames', () => {
+  assert.notEqual(previewInfo(pngHeader(100, 100, acTL(3), fcTL(), fcTL(), fcTL())), null, 'a short animation');
+  assert.notEqual(previewInfo(pngHeader(10_000, 5_000, acTL(1), fcTL())), null, 'one canvas at the pixel limit');
+  assert.equal(previewInfo(pngHeader(8_000, 6_000, acTL(60_000), fcTL())), null, 'too many declared frames');
+  assert.equal(previewInfo(pngHeader(8_000, 6_000, acTL(1), fcTL(), fcTL())), null, 'more frames than declared');
+  assert.equal(previewInfo(pngHeader(10, 10, acTL(0))), null, 'zero frames');
+  assert.equal(previewInfo(pngHeader(10, 10, acTL(1), acTL(1))), null, 'two animation controls');
+  const real = makePng(2, 2);
+  for (let i = 0; i < real.length; i++) assert.equal(previewInfo(real.subarray(0, i)), null, `PNG truncated at byte ${i}`);
+  const vp8x = webpExtended(8_000, 6_000).subarray(12);
+  assert.notEqual(previewInfo(riff(vp8x, webpChunk('ANIM', 6), webpChunk('ANMF', 17))), null, 'one frame');
+  assert.equal(previewInfo(riff(vp8x, webpChunk('ANIM', 6), webpChunk('ANMF', 17), webpChunk('ANMF', 17))), null, 'two full canvases');
+  assert.notEqual(previewInfo(riff(webpExtended(100, 100).subarray(12), webpChunk('ANIM', 6), ...Array.from({ length: 50 }, () => webpChunk('ANMF', 17)))), null, 'a short animation');
+  // A cut last chunk ends the list, as in browsers, which decode a WebP
+  // with stray bytes at the end; a cut frame still counts.
+  assert.notEqual(previewInfo(riff(vp8x, bytes('ANMF', [255, 255, 0, 0]))), null, 'one cut frame');
+  assert.equal(previewInfo(riff(vp8x, webpChunk('ANMF', 17), bytes('ANMF', [255, 255, 0, 0]))), null, 'a cut frame counts');
+  assert.notEqual(previewInfo(bytes(riff(vp8x, webpChunk('ANMF', 17)), [1, 2, 3])), null, 'stray bytes at the end');
 });
 
 test('GIF palettes, extensions and data blocks must be complete', () => {

@@ -20,7 +20,7 @@ export function reveal(e: HTMLElement): void {
   e.classList.add('nb-enter');
 }
 
-const SECTIONS = ['create', 'result', 'view', 'delete', 'problem'];
+const SECTIONS = ['create', 'result', 'view', 'room', 'delete', 'problem'];
 
 /** Shows one top-level section and hides the others. */
 export function showSection(id: string): HTMLElement {

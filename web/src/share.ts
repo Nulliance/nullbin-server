@@ -30,6 +30,16 @@ export function qrSvg(value: string): SVGSVGElement {
 }
 
 let dialogReady = false;
+
+/** Closes the QR dialog; its close handler forgets the link it showed. */
+export function closeShareDialog(): void {
+  const dialog = document.getElementById('qr-dialog');
+  if (dialog instanceof HTMLDialogElement && dialog.open) dialog.close();
+  activeLink = '';
+  el('qr-image').replaceChildren();
+  el('qr-link').textContent = '';
+}
+
 let activeLink = '';
 
 export function initShareActions(scope: 'result' | 'view', url: string, available = true): void {

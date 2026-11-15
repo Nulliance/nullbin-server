@@ -281,11 +281,16 @@ test('text that can look different from what it contains is flagged', () => {
   // Trojan Source: an override makes a line display reversed.
   assert.equal(hasHiddenChars('if (admin) {\u202E } \u2066// check\u2069'), true);
   for (const c of ['\u061C', '\u200B', '\u200E', '\u200F', '\u202A', '\u202E', '\u2060', '\u2066', '\u2069', '\uFEFF', '\u{E0041}',
-    '\u00AD', '\u2061', '\u2064', '\u206A', '\u206F', '\u180E', '\uFFF9', '\uFFFB', '\u0008', '\u001B']) {
+    '\u00AD', '\u2061', '\u2064', '\u206A', '\u206F', '\u180E', '\uFFF9', '\uFFFB', '\u0008', '\u001B',
+    // Default-ignorable characters outside category Cf: the combining grapheme
+    // joiner, Hangul fillers, Khmer inherent vowels, Mongolian and other
+    // variation selectors; and joiners or emoji selectors doing no visible job.
+    '\u034F', '\u115F', '\u1160', '\u17B4', '\u180B', '\u3164', '\uFFA0', '\uFE00', '\uFE0E', '\uFE0F', '\u{E0100}', '\u200C', '\u200D']) {
     assert.equal(hasHiddenChars(`a${c}b`), true, `U+${c.codePointAt(0)!.toString(16)} must be flagged`);
   }
   // Ordinary text, accents, right-to-left scripts, emoji and a leading BOM are fine.
-  for (const ok of ['plain text\n\tindented', 'café naïve', 'שלום עולם', 'مرحبا', '👍🏽 👨\u200D👩\u200D👧', 'می\u200Cخواهم', '\uFEFFfirst line']) {
+  for (const ok of ['plain text\n\tindented', 'café naïve', 'שלום עולם', 'مرحبا', '👍🏽 👨\u200D👩\u200D👧', 'می\u200Cخواهم', '\uFEFFfirst line',
+    '\u2764\uFE0F red heart', '\u{1F3F4}\u{E0067}\u{E0062}\u{E0065}\u{E006E}\u{E0067}\u{E007F}', '\u0915\u094D\u200D\u0937', 'windows\r\nlines']) {
     assert.equal(hasHiddenChars(ok), false, `${JSON.stringify(ok)} must not be flagged`);
   }
 });

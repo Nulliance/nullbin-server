@@ -980,6 +980,9 @@ func (s *Store) Delete(id, deleteToken string) error {
 		return ErrNotFound
 	}
 	claim, err := s.claim(dir, id)
+	if errors.Is(err, errStillOpen) {
+		return ErrConflict
+	}
 	if err != nil {
 		return err
 	}
@@ -1299,23 +1302,33 @@ func (s *Store) claim(dir, id string) (string, error) {
 	s.mu.Lock()
 	s.claims[name] = true // registered first, so Sweep never races us
 	s.mu.Unlock()
-	s.quotaMu.Lock()
-	err := s.root.Rename(dir, path.Join(dirClaimed, name))
+	rename := func() error {
+		s.quotaMu.Lock()
+		defer s.quotaMu.Unlock()
+		err := s.root.Rename(dir, path.Join(dirClaimed, name))
+		if err == nil {
+			s.moveLocked(dir, path.Join(dirClaimed, name), false)
+		}
+		return err
+	}
+	err := rename()
 	// Windows refuses to rename a directory while another request has a
-	// file inside it open (for example reading meta.json). That is brief,
-	// so retry for a moment. Linux renames regardless, so it never loops.
+	// file inside it open (reading meta.json, or streaming the paste).
+	// Retry for a moment, without holding the quota lock while waiting so
+	// uploads elsewhere go on; a download still running after that makes
+	// a delete fail as busy (try again), not as a server error. Linux
+	// renames regardless, so it never loops.
 	for attempt := 0; err != nil && runtime.GOOS == "windows" && !errors.Is(err, fs.ErrNotExist) && attempt < 40; attempt++ {
 		time.Sleep(5 * time.Millisecond)
-		err = s.root.Rename(dir, path.Join(dirClaimed, name))
+		err = rename()
 	}
-	if err == nil {
-		s.moveLocked(dir, path.Join(dirClaimed, name), false)
-	}
-	s.quotaMu.Unlock()
 	if err != nil {
 		s.mu.Lock()
 		delete(s.claims, name)
 		s.mu.Unlock()
+		if runtime.GOOS == "windows" && !errors.Is(err, fs.ErrNotExist) {
+			return "", errStillOpen
+		}
 		return "", notFoundIfMissing(err)
 	}
 	// Make the move durable before anyone is served: otherwise a power
@@ -1330,6 +1343,10 @@ func (s *Store) claim(dir, id string) (string, error) {
 	}
 	return name, nil
 }
+
+// errStillOpen: Windows would not move a paste's directory because a
+// request still has one of its files open.
+var errStillOpen = errors.New("storage: paste files still open")
 
 func (s *Store) removeClaim(name string) error {
 	err := s.removeAllocated(path.Join(dirClaimed, name)) // Sweep retries on failure

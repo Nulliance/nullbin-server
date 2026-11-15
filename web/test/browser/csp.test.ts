@@ -69,10 +69,14 @@ before(async () => {
   env['NULLBIN_LISTEN_ADDR'] = `127.0.0.1:${port}`;
   env['NULLBIN_DATA_DIR'] = path.join(tmp, 'data');
   if (split) {
+    // The frontend build accepts a plain-HTTP API origin on this computer
+    // only when asked (frontend.mjs).
+    process.env['NULLBIN_LOCAL_TEST_HTTP'] = '1';
     env['NULLBIN_API_ONLY'] = 'true';
     env['NULLBIN_FRONTEND_ORIGIN'] = origin;
-    execFileSync(process.execPath, ['web/build.mjs', '--frontend-only'], { cwd: root, env: { ...process.env, NULLBIN_API_ORIGIN: apiOrigin }, stdio: 'inherit' });
-    const directory = path.join(root, 'web', 'dist');
+    // Built into the temporary directory: web/dist stays as it was.
+    execFileSync(process.execPath, ['web/build.mjs', '--frontend-only', `--out-dir=${path.join(tmp, 'frontend')}`], { cwd: root, env: { ...process.env, NULLBIN_API_ORIGIN: apiOrigin }, stdio: 'inherit' });
+    const directory = path.join(tmp, 'frontend', 'dist');
     const manifest = JSON.parse(await readFile(path.join(directory, 'version.json'), 'utf8')) as { js: string; css: string };
     const files = new Map<string, { bytes: Buffer; type: string }>();
     for (const [name, type] of [['/index.html', 'text/html; charset=utf-8'], [manifest.js, 'text/javascript'], [manifest.css, 'text/css'], ['/version.json', 'application/json']] as const) {
@@ -80,7 +84,7 @@ before(async () => {
     }
     frontend = createServer((req, res) => {
       const pathname = new URL(req.url ?? '/', origin).pathname;
-      const name = pathname === '/' || /^\/(p|d)\/[0-9a-f]{32}$/.test(pathname) ? '/index.html' : pathname;
+      const name = pathname === '/' || /^\/(p|d|r)\/[0-9a-f]{32}$/.test(pathname) ? '/index.html' : pathname;
       const file = files.get(name);
       for (const [k, v] of Object.entries(frontendHeaders(apiOrigin))) res.setHeader(k, v);
       res.setHeader('Cache-Control', name.startsWith('/assets/') ? 'public, max-age=31536000, immutable' : 'no-store');
@@ -162,7 +166,7 @@ async function open(options: { colorScheme?: 'light' | 'dark'; noFileSystemAcces
     const u = new URL(req.url());
     if (u.protocol === 'data:' || u.protocol === 'blob:') return;
     if (u.origin !== origin && !(split && u.origin === apiOrigin && u.pathname.startsWith('/api/v1/'))) problems.push(`request to another origin: ${req.url()}`);
-    if (u.pathname.startsWith('/api/v1/pastes') && req.method() !== 'OPTIONS') {
+    if ((u.pathname.startsWith('/api/v1/pastes') || u.pathname.startsWith('/api/v1/rooms')) && req.method() !== 'OPTIONS') {
       apiCalls.push(`${req.method()} ${u.pathname}`);
       sent.push({ method: req.method(), path: u.pathname, headers: req.headers(), body: req.postDataBuffer() });
     }
@@ -215,6 +219,7 @@ async function createPaste(o: CreateOptions): Promise<{ share: string; del: stri
   if (o.files) await h.page.setInputFiles('#file', o.files);
   if (o.burn) await h.page.check('#burn');
   if (o.maxReads !== undefined) await h.page.fill('#burn-reads', String(o.maxReads));
+  if (o.discussion) await openMore(h.page);
   if (o.discussion) await h.page.check('#discussion');
   if (o.password) {
     await h.page.check('#password-switch');
@@ -243,6 +248,11 @@ async function createPaste(o: CreateOptions): Promise<{ share: string; del: stri
   await h.check();
   await h.context.close();
   return { share, del };
+}
+
+/** Opens "More options", where Separate links and Discussion are. */
+async function openMore(page: Page) {
+  if (await page.getAttribute('#more-toggle', 'aria-expanded') !== 'true') await page.click('#more-toggle');
 }
 
 /** The text shown in the viewer, line by line (line numbers excluded). */
@@ -850,6 +860,40 @@ test('password + file paste: wrong password, retry, verified download', async ()
   await h.context.close();
 });
 
+test('burn after reading: leaving while it is still opening clears it too', async () => {
+  const { share } = await createPaste({ text: 'leave me unread', burn: true });
+  const h = await open();
+  let release!: () => void;
+  const held = new Promise<void>((resolve) => { release = resolve; });
+  let requested!: () => void;
+  const seen = new Promise<void>((resolve) => { requested = resolve; });
+  // Hold the paste's download (an open-limited paste is read from /read)
+  // until the reader has left the page.
+  await h.page.route('**/api/v1/pastes/*/read', async (route) => {
+    requested();
+    await held;
+    await route.continue();
+  });
+  await goto(h, share);
+  await h.page.waitForSelector('#gate-burn', { state: 'visible' });
+  await h.page.click('#burn-open');
+  await Promise.race([seen, new Promise((_, reject) => setTimeout(() => reject(new Error('the paste was never requested')), 15_000))]);
+  await h.page.evaluate(() => {
+    window.dispatchEvent(new PageTransitionEvent('pagehide', { persisted: true }));
+    window.dispatchEvent(new PageTransitionEvent('pageshow', { persisted: true }));
+  });
+  release();
+  await h.page.waitForSelector('#problem', { state: 'visible' });
+  // The download finishes after the page was left: nothing may appear.
+  await h.page.waitForTimeout(1500);
+  assert.match((await h.page.textContent('#problem-title')) ?? '', /cleared/);
+  assert.equal(await h.page.isVisible('#view-text-card'), false);
+  assert.ok(!((await h.page.content()).includes('leave me unread')), 'the text never reached the page');
+  await h.page.unroute('**/api/v1/pastes/*/read');
+  await h.check();
+  await h.context.close();
+});
+
 test('burn after reading: warning before fetching, then gone', async () => {
   const { share } = await createPaste({ text: 'read me once', burn: true });
   assert.match(share, new RegExp(`#${KEY}\\.b$`));
@@ -864,6 +908,15 @@ test('burn after reading: warning before fetching, then gone', async () => {
   assert.equal(await h.page.getAttribute('#view-email', 'href'), null, 'exhausted links cannot be emailed');
   assert.ok(await h.page.isDisabled('#view-qr'));
   assert.ok(await h.page.isVisible('#burned-note'), 'the reader is told the paste is gone');
+  // Leaving clears it: the back/forward cache cannot bring it back.
+  await h.page.evaluate(() => {
+    window.dispatchEvent(new PageTransitionEvent('pagehide', { persisted: true }));
+    window.dispatchEvent(new PageTransitionEvent('pageshow', { persisted: true }));
+  });
+  await h.page.waitForSelector('#problem', { state: 'visible' });
+  assert.match((await h.page.textContent('#problem-title')) ?? '', /cleared/);
+  assert.equal(await h.page.locator('#view-text').count(), 0, 'the text left the page');
+  assert.ok(!((await h.page.content()).includes('read me once')));
   await h.check();
   await h.context.close();
 
@@ -971,6 +1024,7 @@ test('separate links: one per person, each with its own opens, revocable one by 
   const c = await open();
   await goto(c, `${origin}/`);
   await c.page.fill('#text', 'for three people');
+  await openMore(c.page);
   await c.page.check('#recipients');
   assert.ok(await c.page.isDisabled('#discussion'), 'separate links rule out a discussion');
   await c.page.fill('#recipients-count', '3');
@@ -1084,6 +1138,7 @@ test('separate links without an open limit open any number of times', async (t) 
   const c = await open();
   await goto(c, `${origin}/`);
   await c.page.fill('#text', 'unlimited links');
+  await openMore(c.page);
   await c.page.check('#recipients');
   await c.page.click('#create-submit');
   await c.page.waitForSelector('#recipient-links:not([hidden])', { timeout: 60_000 });
@@ -1102,6 +1157,212 @@ test('separate links without an open limit open any number of times', async (t) 
     assert.match(chips, /Your own link/);
     assert.doesNotMatch(chips, /left|Burned/);
     assert.equal(await h.page.isVisible('#burned-note'), false);
+    await h.check();
+    await h.context.close();
+  }
+});
+
+test('burner room: create, invite once, chat, reply, react, edit, unsend, remove, self-destruct', async (t) => {
+  await restartAPI();
+  t.after(() => restartAPI());
+  const texts = (h: Harness) => h.page.$$eval('#room-messages .nb-m-text .nb-m-words', (ps) => ps.map((p) => p.textContent ?? ''));
+  const waitText = (h: Harness, text: string) =>
+    h.page.waitForFunction((x) => [...document.querySelectorAll('#room-messages .nb-m-text .nb-m-words')].some((p) => p.textContent === x), text, { timeout: 30_000 });
+  const say = async (h: Harness, text: string) => {
+    await h.page.fill('#room-text', text);
+    await h.page.press('#room-text', 'Enter');
+    await waitText(h, text);
+  };
+  const invite = async (h: Harness, who: string) => {
+    await h.page.click('#room-invite-open');
+    await h.page.fill('#room-invite-label', who);
+    await h.page.click('#room-invite-create');
+    await h.page.waitForSelector('#room-invite-result:not([hidden])');
+    const link = (await h.page.textContent('#room-invite-link')) ?? '';
+    await h.page.click('#room-invite-close');
+    return link;
+  };
+  const join = async (link: string, name: string) => {
+    const h = await open();
+    await goto(h, link);
+    await h.page.waitForSelector('#room-join:not([hidden])');
+    assert.ok(!h.page.url().includes('#'), 'the key left the address bar');
+    await h.page.fill('#room-join-name', name);
+    await h.page.click('#room-join-submit');
+    await h.page.waitForSelector('#room-chat:not([hidden])');
+    return h;
+  };
+
+  // Ada creates the room from the home page tab.
+  const a = await open();
+  await goto(a, `${origin}/`);
+  await a.page.click('#tab-room');
+  assert.ok(await a.page.isVisible('#room-create-form'));
+  assert.equal(await a.page.isVisible('#create-form'), false);
+  await a.page.click('#room-create-submit');
+  await a.page.waitForSelector('#room-create-error:not([hidden])');
+  await a.page.fill('#room-you', 'Ada');
+  await a.page.fill('#room-name', 'Weekend plans');
+  await a.page.click('#room-create-submit');
+  await a.page.waitForURL(new RegExp(`/r/${ID}$`));
+  await a.page.waitForSelector('#room-chat:not([hidden])');
+  await a.page.waitForFunction(() => document.getElementById('room-title')?.textContent === 'Weekend plans');
+  await a.page.waitForFunction(() => /^Self-destructs in (23h|1d)/.test(document.getElementById('room-expires')?.textContent ?? ''));
+  const link = await invite(a, 'Bob');
+  assert.match(link, new RegExp(`/r/${ID}#${KEY}\\.i${KEY}\\.c${KEY}\\.s${KEY}\\.n1$`));
+
+  // Bob joins, once.
+  const b = await join(link, 'Bob');
+  const again = await open();
+  await goto(again, link);
+  await again.page.fill('#room-join-name', 'Eve');
+  await again.page.click('#room-join-submit');
+  await again.page.waitForSelector('#problem:not([hidden])');
+  assert.equal(await again.page.textContent('#problem-title'), 'This invite was already used');
+  await again.check(/status of 410/);
+  await again.context.close();
+
+  // Chat both ways, once keys have reached each other.
+  await a.page.waitForFunction(() => [...document.querySelectorAll('.nb-sys')].some((li) => li.textContent === 'Bob joined.'), undefined, { timeout: 30_000 });
+  await a.page.waitForFunction(() => document.getElementById('room-member-count')?.textContent === '2 members');
+  await say(a, 'Hi Bob <b>not bold</b>');
+  await waitText(b, 'Hi Bob <b>not bold</b>');
+  assert.equal(await b.page.locator('#room-messages b').count(), 0, 'messages are text, never HTML');
+  // Bob replies to Ada's message, from the ⋯ button beside it; the menu
+  // opens on its first item and Escape closes it.
+  const theirs = '#room-messages .nb-m:not(.nb-own)';
+  await b.page.hover(`${theirs} .nb-m-bubble`);
+  await b.page.click(`${theirs} .nb-m-more`);
+  await b.page.waitForSelector('.nb-menu:not([hidden])');
+  assert.equal(await b.page.evaluate(() => document.activeElement?.textContent), 'Reply');
+  assert.equal(await b.page.locator('.nb-menu-item', { hasText: 'Edit' }).count(), 0, 'only your own messages can be edited');
+  await b.page.keyboard.press('Escape');
+  await b.page.waitForSelector('.nb-menu', { state: 'hidden' });
+  assert.equal(await b.page.getAttribute(`${theirs} .nb-m-more`, 'aria-expanded'), 'false');
+  await b.page.click(`${theirs} .nb-m-more`);
+  await b.page.click('.nb-menu-item:has-text("Reply")');
+  assert.match((await b.page.textContent('#room-context-title')) ?? '', /^Reply to Ada/);
+  await say(b, 'Hi Ada');
+  await waitText(a, 'Hi Ada');
+  assert.match((await a.page.textContent('#room-messages .nb-m:not(.nb-own) .nb-m-quote')) ?? '', /You.*Hi Bob/);
+  // Ada reacts to it from the right-click menu; Bob sees the reaction.
+  await a.page.click('#room-messages .nb-m:not(.nb-own) .nb-m-bubble', { button: 'right' });
+  await a.page.click('.nb-menu-reacts button >> nth=0');
+  await b.page.waitForSelector('#room-messages .nb-own .nb-react', { timeout: 30_000 });
+  assert.match((await b.page.getAttribute('#room-messages .nb-own .nb-react', 'aria-label')) ?? '', /1: Ada/);
+  // Bob edits his message; Ada sees it marked (edited).
+  await b.page.click('#room-messages .nb-own .nb-m-bubble', { button: 'right' });
+  await b.page.click('.nb-menu-item:has-text("Edit")');
+  assert.equal(await b.page.inputValue('#room-text'), 'Hi Ada');
+  await b.page.fill('#room-text', 'Hi Ada, see you Saturday');
+  await b.page.press('#room-text', 'Enter');
+  await waitText(a, 'Hi Ada, see you Saturday');
+  assert.match((await a.page.textContent('#room-messages .nb-m:not(.nb-own) .nb-m-meta')) ?? '', /\(edited\)/);
+  // Bob sends and unsends a message: Ada sees that it was unsent, not its text.
+  await say(b, 'oops, wrong room');
+  await waitText(a, 'oops, wrong room');
+  const lastOwn = '#room-messages .nb-own >> nth=-1';
+  await b.page.click(`${lastOwn} >> .nb-m-bubble`, { button: 'right' });
+  await b.page.click('.nb-menu-item:has-text("Unsend")');
+  assert.equal(await b.page.textContent('.nb-menu-item.nb-armed'), 'Unsend for everyone?', 'unsending asks first');
+  await b.page.click('.nb-menu-item.nb-armed'); // at once: a double-click does not confirm
+  assert.equal(await b.page.isVisible('.nb-menu-item.nb-armed'), true);
+  await b.page.waitForTimeout(600);
+  await b.page.click('.nb-menu-item.nb-armed');
+  await a.page.waitForFunction(() => [...document.querySelectorAll('.nb-m-gone .nb-m-words')].some((p) => p.textContent === 'This message was unsent.'), undefined, { timeout: 30_000 });
+  assert.ok(!(await texts(a)).includes('oops, wrong room'));
+
+  // Both see the same safety code for each other.
+  await a.page.click('#room-members-open');
+  await a.page.waitForSelector('#room-member-list li');
+  const codesA = await a.page.$$eval('#room-member-list .nb-member-detail', (s) => s.map((x) => x.textContent ?? ''));
+  await b.page.click('#room-members-open');
+  await b.page.waitForSelector('#room-member-list li');
+  const codesB = await b.page.$$eval('#room-member-list .nb-member-detail', (s) => s.map((x) => x.textContent ?? ''));
+  assert.deepEqual(codesA, codesB);
+  assert.equal(codesA.length, 2, 'both members are listed');
+  assert.ok(codesA.every((c) => /^(Created the room · )?Code \d{5} \d{5} \d{5} \d{5} \d{5} \d{5}$/.test(c)), codesA.join(' | '));
+  assert.equal(await b.page.locator('#room-member-list .nb-btn-remove').count(), 0, 'only the creator can remove people');
+  // Bob compared codes with Ada: he marks her verified, and her name shows a check.
+  await b.page.click('#room-member-list .nb-btn-verify');
+  await b.page.waitForFunction(() => document.querySelector('#room-member-list .nb-btn-verify')?.textContent === 'Unmark verified');
+  assert.match((await b.page.textContent('#room-member-list .nb-member-detail')) ?? '', /^Verified · Created the room · Code /);
+  await b.page.click('#room-members-close');
+  await b.page.waitForSelector('#room-messages .nb-m-name .nb-verified');
+
+  // Bob leaves the page and comes back through the back/forward cache: the
+  // conversation and keys left the page when he left, and coming back
+  // reloads it, rejoining with new messages only.
+  await b.page.evaluate(() => window.dispatchEvent(new PageTransitionEvent('pagehide', { persisted: true })));
+  assert.equal(await b.page.locator('#room-messages li').count(), 0, 'the conversation left the page');
+  await Promise.all([
+    b.page.waitForEvent('load'),
+    b.page.evaluate(() => { setTimeout(() => window.dispatchEvent(new PageTransitionEvent('pageshow', { persisted: true })), 0); }),
+  ]);
+  await b.page.waitForSelector('#room-chat:not([hidden])');
+  await say(b, 'Back again'); // Ada's members dialog is still open
+  await waitText(a, 'Back again');
+  assert.ok(!(await texts(b)).includes('Hi Bob <b>not bold</b>'), 'older messages do not come back');
+
+  // Nothing secret ever reached the server: not the room key, not the text.
+  const roomKey = link.split('#')[1]!.split('.i')[0]!;
+  for (const h of [a, b]) {
+    for (const s of h.sent) {
+      const seen = `${s.path} ${JSON.stringify(s.headers)} ${s.body?.toString('latin1') ?? ''}`;
+      assert.ok(!seen.includes(roomKey), `the room key was sent in ${s.method} ${s.path}`);
+      for (const secret of ['Hi Bob', 'Hi Ada', 'Weekend', 'Saturday', 'oops']) assert.ok(!seen.includes(secret), `plaintext was sent in ${s.method} ${s.path}`);
+    }
+  }
+  const posts = [...a.sent, ...b.sent].filter((s) => s.method === 'POST' && s.path.endsWith('/records')).map((s) => s.body!.length);
+  assert.ok(posts.length >= 8 && posts.every((n) => n >= 1065), `record sizes ${posts}`);
+
+  // Ada removes Bob (it asks first): his page ends.
+  await a.page.click('[aria-label="Remove Bob"]');
+  assert.equal(await a.page.textContent('[aria-label="Remove Bob"]'), 'Sure?');
+  await a.page.waitForTimeout(600);
+  await a.page.click('[aria-label="Remove Bob"]');
+  await a.page.waitForFunction(() => [...document.querySelectorAll('#room-member-list .nb-member-detail')].some((s) => s.textContent?.startsWith('Removed · Code ')), undefined, { timeout: 30_000 });
+  await a.page.click('#room-members-close');
+  await b.page.waitForSelector('#problem:not([hidden])', { timeout: 30_000 });
+  assert.match((await b.page.textContent('#problem-title')) ?? '', /removed|ended/);
+  assert.equal(await b.page.locator('#room-messages li').count(), 0, 'the conversation left the page');
+  await b.check(/status of 404/);
+  await b.context.close();
+
+  // Cleo joins; anyone in the room, not only its creator, can self-destruct it.
+  const c = await join(await invite(a, 'Cleo'), 'Cleo');
+  assert.ok(await c.page.isVisible('#room-destroy'));
+  assert.equal(await c.page.isVisible('#room-invite-open'), false, 'only the creator invites');
+  await c.page.click('#room-destroy');
+  await c.page.waitForSelector('#room-destroy-dialog[open]');
+  await c.page.click('#room-destroy-cancel');
+  assert.equal(await c.page.isVisible('#room-destroy-dialog'), false, 'cancel keeps the room');
+  await c.page.click('#room-destroy');
+  await c.page.click('#room-destroy-confirm');
+  await c.page.waitForSelector('#problem:not([hidden])');
+  assert.equal(await c.page.textContent('#problem-title'), 'Burner room destroyed');
+  assert.equal(await c.page.evaluate(() => sessionStorage.length), 0, 'nothing left in the tab');
+  await c.check();
+  await c.context.close();
+  await a.page.waitForSelector('#problem:not([hidden])', { timeout: 30_000 });
+  assert.equal(await a.page.textContent('#problem-title'), 'This burner room has ended');
+  assert.equal(await a.page.evaluate(() => sessionStorage.length), 0);
+  await a.check(/status of 404/);
+  await a.context.close();
+});
+
+test('burner room links that are incomplete, or opened in another tab, explain what to do', async () => {
+  const id = '0123456789abcdef0123456789abcdef';
+  for (const [url, title] of [
+    [`${origin}/r/${id}`, 'This burner room isn’t open in this tab'],
+    [`${origin}/r/${id}#short`, 'This invite link is incomplete'],
+    [`${origin}/r/${id}#${'A'.repeat(43)}`, 'This invite link is incomplete'],
+  ] as const) {
+    const h = await open();
+    await goto(h, url);
+    await h.page.waitForSelector('#problem:not([hidden])');
+    assert.equal(await h.page.textContent('#problem-title'), title);
+    assert.deepEqual(h.apiCalls, []);
     await h.check();
     await h.context.close();
   }
@@ -1141,6 +1402,7 @@ test('create form: a discussion rules out burning, and the open count is validat
   assert.ok(await h.page.isEnabled('#burn'), 'a password is compatible with burn after reading');
   assert.equal(await h.page.locator('.nb-option-notes, .nb-option-note').count(), 0, 'settings do not add inline notices');
   await h.page.uncheck('#password-switch');
+  await openMore(h.page);
   await h.page.check('#discussion');
   assert.equal(await h.page.isChecked('#password-switch'), false, 'a discussion does not need a password');
   assert.ok(await h.page.isEnabled('#password-switch'), 'a password stays optional');
@@ -1434,7 +1696,7 @@ test('settings keep logical rows across viewport sizes, option states, and input
               .map((element) => ({ id: element.id || element.textContent!.trim(), height: element.getBoundingClientRect().height, clipped: element.scrollWidth > element.clientWidth + 1 }));
             return {
               overflow: document.documentElement.scrollWidth > innerWidth,
-              toolbar: rect('.nb-toolbar'), expiry: rect('#expiry'), burn: rect('.nb-burn-setting'), recipients: rect('.nb-recipients-setting'),
+              toolbar: rect('.nb-toolbar'), expiry: rect('#expiry'), burn: rect('.nb-burn-setting'), recipients: rect('.nb-recipients-setting'), more: rect('#more-toggle'), passwordSetting: rect('.nb-password-setting'),
               discussion: rect('label:has(#discussion)'), password: rect('label:has(#password-switch)'),
               passwordField: rect('#password-row'), attach: rect('#attach'), submit: rect('#create-submit'), controls,
             };
@@ -1446,16 +1708,18 @@ test('settings keep logical rows across viewport sizes, option states, and input
             assert.equal(control.height, width < 768 || hasTouch ? 44 : 36, `${label}: ${control.id} height`);
           }
           if (width < 768) {
-            assert.ok(layout.recipients.y >= layout.burn.bottom + 7, `${label}: separate links need their own row`);
-            assert.ok(layout.discussion.y >= layout.recipients.bottom + 7, `${label}: discussion needs its own row`);
-            assert.ok(layout.password.y >= layout.discussion.bottom + 7, `${label}: password needs its own row`);
+            assert.ok(layout.burn.y >= layout.expiry.bottom + 7, `${label}: burn needs its own row`);
+            assert.ok(layout.password.y >= layout.burn.bottom + 7, `${label}: password needs its own row`);
             if (layout.passwordField.height) assert.ok(layout.passwordField.y >= layout.password.bottom + 7, `${label}: password field follows its checkbox`);
+            assert.ok(layout.more.y >= layout.passwordSetting.bottom + 7, `${label}: more options follow`);
+            if (layout.recipients.height) {
+              assert.ok(layout.recipients.y >= layout.more.bottom + 7, `${label}: separate links need their own row`);
+              assert.ok(layout.discussion.y >= layout.recipients.bottom + 7, `${label}: discussion needs its own row`);
+            }
             assert.ok(layout.submit.y >= layout.attach.bottom + 11, `${label}: Create follows Attach`);
             for (const action of [layout.attach, layout.submit]) assert.ok(Math.abs(action.width - layout.toolbar.width) < 1, `${label}: standalone actions fill their row`);
           } else if (width < 1200) {
             assert.equal(layout.expiry.y, layout.burn.y, `${label}: first settings row aligns`);
-            assert.equal(layout.recipients.y, layout.discussion.y, `${label}: second settings row aligns`);
-            assert.ok(layout.password.y >= layout.discussion.bottom + 7, `${label}: password has the third row`);
             assert.equal(layout.attach.y, layout.submit.y, `${label}: action row aligns`);
           }
         };
@@ -1464,11 +1728,13 @@ test('settings keep logical rows across viewport sizes, option states, and input
         await h.page.fill('#burn-reads', '1000');
         await h.page.check('#password-switch');
         await checkLayout('burn limit and password');
+        await openMore(h.page);
         await h.page.check('#recipients');
         await h.page.fill('#recipients-count', '20');
         await checkLayout('separate links, burn limit and password');
         await h.page.uncheck('#recipients');
         await h.page.uncheck('#burn');
+        await openMore(h.page);
         await h.page.check('#discussion');
         await checkLayout('discussion and password');
         await h.page.uncheck('#discussion');
@@ -1497,6 +1763,7 @@ test('paste controls stay reachable at phone and desktop widths in both themes',
       if (width < 768) assert.ok(submit && toolbar && Math.abs(submit.width - toolbar.width) < 2, 'mobile create action fills its row');
       await h.page.waitForFunction(() => document.fonts.check('30px "Damion"', 'Nullbin') && [...document.fonts].some((font) => font.family === 'Damion' && font.status === 'loaded'));
       assert.equal(await h.page.locator('.nb-brand svg, .nb-brand-description').count(), 0);
+      await openMore(h.page);
       await h.page.check('#discussion');
       await h.page.check('#password-switch');
       assert.ok(await h.page.isVisible('#password'));

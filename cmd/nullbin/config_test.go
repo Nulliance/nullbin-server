@@ -93,12 +93,29 @@ func TestConfigRejectsBadValues(t *testing.T) {
 		"NULLBIN_TRUSTED_PROXIES=fe80::1%eth0",
 		"NULLBIN_TRUSTED_PROXIES=::ffff:10.0.0.0/104",
 		"NULLBIN_TRUSTED_PROXIES=*",
+		"NULLBIN_TRUSTED_PROXIES=0.0.0.0/0",
+		"NULLBIN_TRUSTED_PROXIES=::/0",
+		"NULLBIN_TRUSTED_PROXIES=10.0.0.0/8,128.0.0.0/1",
+		"NULLBIN_TRUSTED_PROXIES=2000::/3",
+		"NULLBIN_TRUSTED_PROXIES=2000::/7",
+		"NULLBIN_TRUSTED_PROXIES=11.0.0.0/8",
+		"NULLBIN_TRUSTED_PROXIES=104.0.0.0/11",
+		"NULLBIN_TRUSTED_PROXIES=2400::/28",
 		"NULLBIN_MAXSIZE=100MiB", // typo: unknown variable
 		"NULLBIN_DEBUG=1",
 	}
 	for _, kv := range bad {
 		if _, err := loadConfig([]string{kv}); err == nil {
 			t.Errorf("%s accepted", kv)
+		}
+	}
+}
+
+func TestProxyRanges(t *testing.T) {
+	// Private and loopback space may be wide; public ranges as wide as a CDN's.
+	for _, v := range []string{"10.0.0.0/8", "127.0.0.0/8", "172.16.0.0/12", "100.64.0.0/10", "fc00::/7", "fe80::/10", "104.16.0.0/12", "2400:cb00::/32", "2a06:98c0::/29", "192.0.2.1", "2001:db8::1"} {
+		if _, err := loadConfig([]string{"NULLBIN_TRUSTED_PROXIES=" + v}); err != nil {
+			t.Errorf("%s refused: %v", v, err)
 		}
 	}
 }
@@ -189,5 +206,21 @@ func TestDeletePasteCommand(t *testing.T) {
 	link := "https://paste.example.com/p/" + c.ID + "#key"
 	if code := deletePaste(env, link, &out); code != 2 || !strings.Contains(out.String(), "32 characters") {
 		t.Fatalf("delete with a link: %d %q", code, out.String())
+	}
+}
+
+func TestConfigRooms(t *testing.T) {
+	cfg, err := loadConfig(nil)
+	if err != nil || !cfg.Rooms {
+		t.Fatalf("burner rooms are on by default: %v %v", cfg.Rooms, err)
+	}
+	for v, want := range map[string]bool{"false": false, "true": true, "0": false, "": true} {
+		cfg, err := loadConfig([]string{"NULLBIN_ROOMS=" + v})
+		if err != nil || cfg.Rooms != want {
+			t.Fatalf("NULLBIN_ROOMS=%q: %v %v", v, cfg.Rooms, err)
+		}
+	}
+	if _, err := loadConfig([]string{"NULLBIN_ROOMS=maybe"}); err == nil {
+		t.Fatal("NULLBIN_ROOMS=maybe accepted")
 	}
 }

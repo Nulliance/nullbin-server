@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/jacobzymet/nullbin-go/internal/assets"
+	"github.com/jacobzymet/nullbin-go/internal/rooms"
 	"github.com/jacobzymet/nullbin-go/internal/storage"
 )
 
@@ -95,7 +96,9 @@ var allowedExpiry = map[int64]time.Duration{
 
 // Config configures a Server.
 type Config struct {
-	Store          *storage.Store
+	Store *storage.Store
+	// Rooms holds burner rooms; nil turns them off.
+	Rooms          *rooms.Store
 	Assets         *assets.Bundle
 	Version        string
 	MaxSize        int64
@@ -116,6 +119,9 @@ type Server struct {
 	comments      *limiter
 	pages         *limiter
 	downloads     *limiter
+	roomCreates   *limiter
+	roomWrites    *limiter
+	roomReads     *limiter
 	downloadBytes *limiter
 	globalBytes   *limiter
 	chunkSlots    *slotPool
@@ -144,6 +150,9 @@ func New(cfg Config) *Server {
 		comments:      newClientLimiter(1.0/3, 10), // 20 per minute, burst 10
 		pages:         newClientLimiter(5, 100),    // pages, static assets and the version
 		downloads:     newClientLimiter(1.0/3, 20),
+		roomCreates:   newClientLimiter(1.0/6, 10), // 10 rooms per minute
+		roomWrites:    newClientLimiter(2, 30),     // messages, invites, joins and owner actions
+		roomReads:     newClientLimiter(10, 100),   // polling: a room of 20 behind one network polls every 2.5 s each
 		downloadBytes: newLimiter(clientBytesPerSecond, clientBytesPerSecond, limiterMaxEntries),
 		globalBytes:   newLimiter(globalBytesPerSecond, globalBytesPerSecond, 1),
 		chunkSlots:    newSlotPool(chunkSlotsTotal, chunkSlotsPerClient, chunkSlotsPerSite),
@@ -183,6 +192,7 @@ func New(cfg Config) *Server {
 	mux.Handle("POST /api/v1/pastes/{id}/comments", s.route(storage.MaxCommentBytes, s.comments, s.handleAddComment))
 	mux.Handle("GET /api/v1/pastes/{id}/comments", s.route(0, s.downloads, s.handleComments))
 	mux.Handle("GET /api/v1/version", s.route(0, s.pages, s.handleVersion))
+	s.registerRooms(mux)
 
 	var h http.Handler = mux
 	crossOrigin := http.NewCrossOriginProtection()
@@ -232,6 +242,9 @@ func (s *Server) Prune() {
 	s.comments.prune(now)
 	s.pages.prune(now)
 	s.downloads.prune(now)
+	s.roomCreates.prune(now)
+	s.roomWrites.prune(now)
+	s.roomReads.prune(now)
 	s.downloadBytes.prune(time.Now())
 	s.globalBytes.prune(time.Now())
 	s.pending.prune(now)

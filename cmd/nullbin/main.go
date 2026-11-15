@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/jacobzymet/nullbin-go/internal/assets"
+	"github.com/jacobzymet/nullbin-go/internal/rooms"
 	"github.com/jacobzymet/nullbin-go/internal/server"
 	"github.com/jacobzymet/nullbin-go/internal/storage"
 )
@@ -209,8 +210,13 @@ func run() int {
 	}
 	defer store.Close()
 
+	var roomStore *rooms.Store
+	if cfg.Rooms {
+		roomStore = rooms.New(rooms.DefaultMaxRooms, rooms.DefaultMaxBytes)
+	}
 	srv := server.New(server.Config{
 		Store:          store,
+		Rooms:          roomStore,
 		Assets:         bundle,
 		Version:        version,
 		MaxSize:        cfg.MaxSize,
@@ -225,7 +231,7 @@ func run() int {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	sweep(store, srv, logger) // clean up anything left by a previous run
+	sweep(store, roomStore, srv, logger) // clean up anything left by a previous run
 	go func() {
 		t := time.NewTicker(sweepInterval)
 		defer t.Stop()
@@ -234,7 +240,7 @@ func run() int {
 			case <-ctx.Done():
 				return
 			case <-t.C:
-				sweep(store, srv, logger)
+				sweep(store, roomStore, srv, logger)
 			}
 		}
 	}()
@@ -243,6 +249,9 @@ func run() int {
 	go func() { errc <- httpSrv.ListenAndServe() }()
 	logger.Printf("nullbin %s listening on %s (max paste size %d bytes, %d trusted proxies, https headers %v)",
 		version, cfg.ListenAddr, cfg.MaxSize, len(cfg.TrustedProxies), cfg.BehindHTTPS)
+	if roomStore == nil {
+		logger.Printf("burner rooms are turned off")
+	}
 	if cfg.APIOnly {
 		logger.Printf("API-only mode; frontend files are served separately")
 	} else {
@@ -266,7 +275,10 @@ func run() int {
 	return 0
 }
 
-func sweep(store *storage.Store, srv *server.Server, logger *log.Logger) {
+func sweep(store *storage.Store, roomStore *rooms.Store, srv *server.Server, logger *log.Logger) {
+	if roomStore != nil {
+		roomStore.Sweep() // expired rooms; no count is logged
+	}
 	st := store.Sweep()
 	srv.Prune()
 	if st != (storage.SweepStats{}) {

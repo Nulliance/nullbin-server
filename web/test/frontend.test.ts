@@ -1,14 +1,34 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import { parseAPIOrigin, parseSiteOrigin, contentSecurityPolicy, frontendHeaders } from '../frontend.mjs';
 
 test('static frontend API origin is explicit and rejects unsafe or ambiguous URLs', () => {
   assert.equal(parseAPIOrigin(''), '');
   assert.equal(parseAPIOrigin('https://api.example.com/'), 'https://api.example.com');
   assert.equal(parseAPIOrigin('https://api.example.com:8443'), 'https://api.example.com:8443');
-  assert.equal(parseAPIOrigin('http://127.0.0.1:8000'), 'http://127.0.0.1:8000');
+  assert.throws(() => parseAPIOrigin('http://127.0.0.1:8000'), Error, 'plain HTTP only when the tests ask for it');
+  process.env.NULLBIN_LOCAL_TEST_HTTP = '1';
+  try {
+    assert.equal(parseAPIOrigin('http://127.0.0.1:8000'), 'http://127.0.0.1:8000');
+    assert.throws(() => parseAPIOrigin('http://api.example.com'), Error);
+  } finally {
+    delete process.env.NULLBIN_LOCAL_TEST_HTTP;
+  }
   for (const value of ['*', '//api.example.com', 'http://api.example.com', 'https://u:p@api.example.com', 'https://api.example.com/api', 'https://api.example.com?x', 'https://api.example.com#x', 'https://api.example.com\n', 'https://API.example.com', 'https://api.example.com:443']) {
     assert.throws(() => parseAPIOrigin(value), Error, value);
+  }
+});
+
+test('a build with a plain-HTTP API origin never writes web/dist or the embedded frontend', () => {
+  const root = fileURLToPath(new URL('../..', import.meta.url));
+  const env = { ...process.env, NULLBIN_LOCAL_TEST_HTTP: '1', NULLBIN_API_ORIGIN: 'http://127.0.0.1:8000' };
+  // Each of these stops before anything is built or written.
+  for (const args of [[], ['--frontend-only'], ['--frontend-only', '--out-dir=web/dist-test'], ['--frontend-only', `--out-dir=${root}`]]) {
+    const run = spawnSync(process.execPath, ['web/build.mjs', ...args], { cwd: root, env, encoding: 'utf8' });
+    assert.equal(run.status, 1, args.join(' '));
+    assert.match(run.stderr, /for the browser tests only/);
   }
 });
 

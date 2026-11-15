@@ -4,6 +4,7 @@
 import { initCreate } from './create.ts';
 import { el, show, showProblem } from './dom.ts';
 import { initDelete } from './remove.ts';
+import { initRoom, initRoomCreate } from './room.ts';
 import { initTheme } from './theme.ts';
 import { initView } from './view.ts';
 import { initWordmark } from './wordmark.ts';
@@ -31,12 +32,23 @@ initWordmark();
 initTheme();
 show(el('loading'), false);
 
+// Some protections exist only as response headers, which a static host can
+// drop without anyone noticing: framing rules (frame-ancestors,
+// X-Frame-Options) and process isolation (COOP and COEP, which make the page
+// cross-origin isolated). Without them, refuse to handle any key.
+const misconfigured = window.top !== window.self || window.crossOriginIsolated !== true;
 const path = window.location.pathname;
 const view = /^\/p\/([0-9a-f]{32})$/.exec(path);
 const del = /^\/d\/([0-9a-f]{32})$/.exec(path);
+const room = /^\/r\/([0-9a-f]{32})$/.exec(path);
 
-if (path === '/') {
+if (misconfigured) {
+  showProblem('This copy of Nullbin is set up wrongly', 'The website is missing security headers it needs, or is shown inside another page, so it will not open or create anything. If you run this site, serve it with the headers from its build (see the README).');
+} else if (path === '/') {
   initCreate();
+  initRoomCreate();
+} else if (room?.[1]) {
+  initRoom(room[1], fragment).catch(() => showProblem('This burner room can’t be opened', 'Something went wrong while opening it. Try the link again.'));
 } else if (view?.[1]) {
   initView(view[1], fragment).catch(() => showProblem('This paste can’t be opened', 'Something went wrong while opening it. Try the link again.'));
 } else if (del?.[1]) {

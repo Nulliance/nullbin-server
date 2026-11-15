@@ -107,6 +107,9 @@
   }
 }
 
+/* The scrollbar's space is always kept, so pages of different lengths
+   have exactly the same width. */
+html { scrollbar-gutter: stable; }
 body { display: flex; flex-direction: column; min-height: 100vh; }
 [hidden] { display: none !important; }
 a { text-underline-offset: 2px; }
@@ -314,6 +317,213 @@ input.form-control, select.form-select { height: var(--nb-control-height); }
 .nb-recipient-state { flex: 1 1 200px; padding-block: var(--nb-control-padding-y); color: var(--nb-muted); }
 .nb-recipients-manage { max-width: 720px; margin: 24px auto 0; }
 .nb-countdown { display: flex; align-items: center; gap: 6px; margin: 8px 0 0; font-variant-numeric: tabular-nums; }
+/* Paste / Burner room switch on the home page: plain tabs, not options. */
+.nb-mode-tabs { display: flex; gap: 24px; margin: 0 0 16px; border-bottom: 1px solid var(--nb-line); }
+.nb-tab { display: inline-flex; align-items: center; gap: 8px; min-height: var(--nb-control-height); margin-bottom: -1px; padding: 0 2px; border: 0; border-bottom: 2px solid transparent; background: transparent; color: var(--nb-muted); font: inherit; font-size: 15px; font-weight: 600; cursor: pointer; }
+.nb-tab:hover { color: var(--nb-ink); }
+.nb-tab[aria-selected="true"] { color: var(--nb-ink); border-bottom-color: var(--nb-accent); }
+.nb-tab:focus-visible { outline: 2px solid var(--nb-accent); outline-offset: 2px; border-radius: 4px; }
+/* Less common paste options wait behind "More options". */
+.nb-more-toggle { display: inline-flex; align-items: center; gap: 6px; min-height: var(--nb-control-height); padding: 0 6px; border: 0; background: transparent; color: var(--nb-muted); font: inherit; cursor: pointer; }
+.nb-more-toggle:hover { color: var(--nb-ink); }
+.nb-more-toggle:focus-visible { outline: 2px solid var(--nb-accent); outline-offset: 2px; border-radius: var(--nb-pill); }
+.nb-more-toggle .nb-i { transition: transform .15s; }
+.nb-more-toggle[aria-expanded="true"] .nb-i { transform: rotate(180deg); }
+@media (prefers-reduced-motion: reduce) { .nb-more-toggle .nb-i { transition: none; } }
+.nb-more-options:not([hidden]) { display: contents; }
+.nb-room-create { max-width: 560px; }
+.nb-room-create > .nb-h2 { align-items: center; margin-bottom: 8px; }
+.nb-room-fields { display: grid; gap: 6px; margin: 12px 0 16px; }
+.nb-room-fields .form-label { margin: 8px 0 0; }
+.nb-room-fineprint { margin: 12px 0 0; }
+
+/* A burner room: a chat that fills the page, like a messaging app. */
+:root {
+  --nb-in-bubble: color-mix(in srgb, var(--nb-ink) 7%, var(--nb-canvas));
+  --nb-out-bubble: color-mix(in srgb, var(--nb-accent) 20%, var(--nb-canvas));
+  --nb-soft: color-mix(in srgb, var(--nb-ink) 7%, transparent);
+}
+/* In a room the chat is the page: same content column and scrollbar as
+   every other page, with the room's header and the message box kept in view. */
+body.nb-in-room .nb-foot { display: none; }
+body.nb-in-room .nb-main { display: flex; flex-direction: column; padding-top: 0; padding-bottom: 0; }
+body.nb-in-room #room { display: flex; flex: 1; flex-direction: column; }
+#room { max-width: none; }
+.nb-chat { --nb-top-h: 53px; --nb-head-h: 69px; display: flex; flex: 1; flex-direction: column; min-height: calc(100dvh - var(--nb-top-h)); }
+.nb-chat[hidden] { display: none; }
+
+/* Header: who and what, on one quiet line under the name. */
+.nb-chat-head { position: sticky; top: var(--nb-top-h); z-index: 5; display: flex; align-items: center; gap: 12px; min-height: 68px; padding: 12px 0; border-bottom: 1px solid var(--nb-line); background: var(--nb-canvas); box-shadow: 0 calc(-1 * var(--nb-top-h)) 0 var(--nb-canvas); }
+/* (The shadow covers the gap under the site's see-through bar, so messages
+   scrolled past do not show through it.) */
+.nb-chat-avatar { display: grid; place-items: center; flex: none; width: 42px; height: 42px; border-radius: 50%; background: var(--nb-accent); color: var(--nb-on-accent); font-size: 17px; font-weight: 700; }
+.nb-chat-heading { flex: 1; min-width: 0; }
+.nb-chat-title { margin: 0; overflow: hidden; color: var(--nb-ink); font-size: 16px; font-weight: 600; line-height: 1.3; white-space: nowrap; text-overflow: ellipsis; }
+.nb-chat-title:focus { outline: none; }
+.nb-chat-sub { flex-wrap: nowrap; margin-top: 5px; overflow: hidden; }
+.nb-chat-sub .nb-chip { flex: none; padding: 2px 9px; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.nb-chat-sub .nb-chip .nb-i { width: 12px; height: 12px; }
+.nb-chip-ok { color: var(--nb-ok); background: var(--nb-ok-tint); }
+.nb-chip-btn { color: var(--nb-text); font-family: inherit; line-height: inherit; cursor: pointer; }
+.nb-chip-btn:hover { border-color: var(--nb-line-strong); color: var(--nb-ink); }
+.nb-chip-btn:focus-visible { outline: 2px solid var(--nb-accent); outline-offset: 1px; }
+.nb-chat .nb-narrow { display: none; }
+.nb-chat-tools { display: flex; flex: none; align-items: center; gap: 4px; }
+.nb-chat-invite { --bs-btn-padding-y: 0; display: inline-flex; align-items: center; gap: 6px; height: 36px; margin-right: 6px; border-radius: var(--nb-pill); }
+.nb-chat-tool { display: grid; place-items: center; width: 38px; height: 38px; padding: 0; border: 0; border-radius: 50%; background: transparent; color: var(--nb-muted); cursor: pointer; }
+.nb-chat-tool:hover { background: var(--nb-raised); color: var(--nb-ink); }
+.nb-chat-tool:focus-visible { outline: 2px solid var(--nb-accent); outline-offset: 1px; }
+.nb-chat-tool .nb-i { width: 20px; height: 20px; }
+.nb-chat-tool-danger:hover { background: var(--nb-danger-tint); color: var(--nb-danger); }
+.nb-chat-status { margin: 0 0 8px; font-size: 13px; }
+
+/* The conversation. */
+.nb-chat-log { display: flex; flex: 1; flex-direction: column; margin: 0; padding: 14px 0 6px; list-style: none; }
+.nb-chat-empty { margin: auto; padding: 20px 24px; max-width: 360px; border: 1px solid var(--nb-line); border-radius: var(--nb-radius-card); background: var(--nb-surface); color: var(--nb-muted); font-size: 13.5px; text-align: center; }
+.nb-chat-empty strong { display: block; margin-bottom: 4px; color: var(--nb-ink); font-size: 15px; }
+.nb-chat-empty .btn { margin-top: 12px; }
+.nb-day, .nb-sys { align-self: center; padding: 3px 11px; border-radius: var(--nb-pill); background: var(--nb-in-bubble); color: var(--nb-muted); font-size: 12.5px; font-weight: 500; text-align: center; }
+.nb-day { margin: 10px 0 8px; font-weight: 600; }
+.nb-sys { margin: 6px 0; }
+
+/* One message: avatar | bubble | menu button. */
+.nb-m { display: flex; align-items: flex-end; gap: 8px; padding-top: 2px; }
+.nb-m.nb-first { padding-top: 8px; }
+.nb-m.nb-own { flex-direction: row-reverse; }
+.nb-m-avatar { display: grid; place-items: center; flex: none; width: 34px; height: 34px; border-radius: 50%; color: #fff; font-size: 14px; font-weight: 700; visibility: hidden; }
+.nb-m.nb-last .nb-m-avatar { visibility: visible; }
+.nb-m.nb-own .nb-m-avatar { display: none; }
+.nb-m-bubble { position: relative; min-width: 0; max-width: min(68%, 560px); padding: 7px 11px 8px 12px; border-radius: 16px; background: var(--nb-in-bubble); color: var(--nb-text); }
+.nb-m:not(.nb-own):not(.nb-first) .nb-m-bubble { border-top-left-radius: 6px; }
+.nb-m:not(.nb-own):not(.nb-last) .nb-m-bubble { border-bottom-left-radius: 6px; }
+.nb-m:not(.nb-own).nb-last .nb-m-bubble { border-bottom-left-radius: 4px; }
+.nb-m.nb-own .nb-m-bubble { background: var(--nb-out-bubble); color: var(--nb-ink); }
+.nb-m.nb-own:not(.nb-first) .nb-m-bubble { border-top-right-radius: 6px; }
+.nb-m.nb-own:not(.nb-last) .nb-m-bubble { border-bottom-right-radius: 6px; }
+.nb-m.nb-own.nb-last .nb-m-bubble { border-bottom-right-radius: 4px; }
+.nb-m-name { display: block; margin-bottom: 1px; font-size: 13.5px; font-weight: 600; line-height: 1.3; overflow-wrap: anywhere; }
+.nb-m-text { margin: 0; font-size: 14.5px; line-height: 1.38; white-space: pre-wrap; overflow-wrap: anywhere; unicode-bidi: isolate; }
+.nb-m-gone { margin: 0; color: var(--nb-muted); font-size: 14px; font-style: italic; }
+/* The time floats at the end of the last line of text, in the bubble's
+   corner; it drops to a line of its own only when that line is full. */
+.nb-m-text, .nb-m-gone { display: flow-root; }
+.nb-m-meta { float: right; margin: 6px -2px 0 14px; color: var(--nb-muted); font-size: 11.5px; font-style: normal; line-height: 1; white-space: nowrap; font-variant-numeric: tabular-nums; user-select: none; -webkit-user-select: none; }
+/* With reactions, they and the time share a row under the text. */
+.nb-m-foot { display: flex; align-items: flex-end; justify-content: space-between; gap: 12px; margin-top: 6px; }
+.nb-m-foot .nb-m-meta { float: none; margin: 0 -2px 1px 0; }
+.nb-m-reacts { display: flex; flex-wrap: wrap; gap: 4px; margin: 0; padding: 0; list-style: none; }
+.nb-react { display: inline-flex; align-items: center; gap: 4px; height: 26px; padding: 0 9px 0 7px; border: 0; border-radius: 13px; background: color-mix(in srgb, var(--nb-accent) 14%, transparent); color: var(--nb-ink); font: inherit; font-size: 13px; font-weight: 600; cursor: pointer; }
+.nb-react:hover { background: color-mix(in srgb, var(--nb-accent) 24%, transparent); }
+.nb-react[aria-pressed="true"] { background: var(--nb-accent); color: var(--nb-on-accent); }
+.nb-react:focus-visible { outline: 2px solid var(--nb-accent); outline-offset: 1px; }
+.nb-react-emoji { font-size: 15px; line-height: 1; }
+/* A reply quote, inside the bubble. */
+.nb-m-quote { display: block; width: 100%; min-width: 120px; margin: 2px 0 5px; padding: 4px 8px; border: 0; border-left: 3px solid var(--nb-accent); border-radius: 6px; background: color-mix(in srgb, var(--nb-accent) 10%, transparent); color: inherit; font: inherit; text-align: left; cursor: pointer; }
+.nb-m-quote strong { display: block; color: var(--nb-accent); font-size: 13px; }
+.nb-m-quote > span { display: block; overflow: hidden; font-size: 13px; opacity: .85; white-space: nowrap; text-overflow: ellipsis; unicode-bidi: isolate; }
+.nb-m-quote-missing { cursor: default; font-size: 13px; font-style: italic; opacity: .85; }
+.nb-m-quote > .nb-m-quote-edited { font-size: 11.5px; font-style: italic; opacity: .7; }
+/* Names stay apart from the text around them, and nothing a member writes
+   draws outside its own box. */
+.nb-name, .nb-sys-name { unicode-bidi: isolate; }
+/* A name in a notice sits in its own box, so a name such as "Bob. Ada" cannot read as notice text about someone else. */
+.nb-sys-name { padding: 0 4px; border-radius: 4px; background: color-mix(in srgb, var(--nb-text) 9%, transparent); color: var(--nb-text); font-weight: 700; }
+.nb-m-bubble, .nb-sys, .nb-m-name, .nb-member-name { overflow: clip; overflow-clip-margin: 4px; }
+.nb-tag { display: inline-block; padding: 0 6px; border: 1px solid var(--nb-line-strong); border-radius: var(--nb-pill); color: var(--nb-muted); font: 600 11px/1.55 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; letter-spacing: .02em; vertical-align: 1px; white-space: nowrap; }
+.nb-flash .nb-m-bubble { animation: nb-flash 1.2s ease-out; }
+@keyframes nb-flash { from { box-shadow: 0 0 0 3px var(--nb-accent); } to { box-shadow: 0 0 0 3px transparent; } }
+@media (prefers-reduced-motion: reduce) { .nb-flash .nb-m-bubble { animation: none; box-shadow: 0 0 0 3px var(--nb-accent); } }
+/* The menu button waits in the gutter beside the bubble: it never covers
+   a message or a name. */
+.nb-m-more { display: grid; place-items: center; flex: none; align-self: center; width: 30px; height: 30px; padding: 0; border: 0; border-radius: 50%; background: transparent; color: var(--nb-muted); opacity: 0; cursor: pointer; }
+.nb-m:hover .nb-m-more, .nb-m-more:focus-visible, .nb-m-more[aria-expanded="true"] { opacity: 1; }
+.nb-m-more:hover { background: var(--nb-soft); color: var(--nb-ink); }
+.nb-m-more:focus-visible { outline: 2px solid var(--nb-accent); }
+.nb-m-more .nb-i { width: 18px; height: 18px; }
+
+/* The message menu: reactions on top, then actions. */
+.nb-menu { position: fixed; z-index: 1060; min-width: 230px; padding: 6px; border: 1px solid var(--nb-line); border-radius: 14px; background: var(--nb-surface); box-shadow: 0 10px 30px rgba(0, 0, 0, .22); }
+.nb-menu-reacts { display: flex; justify-content: space-between; gap: 2px; padding: 2px 2px 6px; margin-bottom: 4px; border-bottom: 1px solid var(--nb-line); }
+.nb-menu-reacts button { display: grid; place-items: center; width: 34px; height: 34px; padding: 0; border: 0; border-radius: 50%; background: transparent; font-size: 20px; cursor: pointer; transition: transform .1s; }
+.nb-menu-reacts button:hover, .nb-menu-reacts button:focus-visible { background: var(--nb-raised); transform: scale(1.15); outline: none; }
+.nb-menu-reacts button[aria-checked="true"] { background: color-mix(in srgb, var(--nb-accent) 18%, transparent); }
+@media (prefers-reduced-motion: reduce) { .nb-menu-reacts button { transition: none; } .nb-menu-reacts button:hover { transform: none; } }
+.nb-menu-item { display: flex; align-items: center; gap: 12px; width: 100%; padding: 8px 12px; border: 0; border-radius: 8px; background: transparent; color: var(--nb-text); font: inherit; font-size: 14px; text-align: left; cursor: pointer; }
+.nb-menu-item:hover, .nb-menu-item:focus-visible { background: var(--nb-raised); outline: none; }
+.nb-menu-item .nb-i { width: 18px; height: 18px; color: var(--nb-muted); }
+.nb-menu-item.nb-danger { color: var(--nb-danger); }
+.nb-menu-item.nb-danger .nb-i { color: var(--nb-danger); }
+
+/* The dock: status, the jump button and the message box, kept at the bottom.
+   Messages fade out under it. */
+.nb-chat-dock { position: sticky; bottom: 0; z-index: 5; padding: 14px 0 16px; background: linear-gradient(to bottom, transparent, var(--nb-canvas) 14px); }
+.nb-chat-jump { position: absolute; right: 0; bottom: calc(100% + 2px); display: grid; place-items: center; width: 42px; height: 42px; padding: 0; border: 1px solid var(--nb-line-strong); border-radius: 50%; background: var(--nb-surface); color: var(--nb-ink); box-shadow: 0 2px 10px rgba(0, 0, 0, .14); cursor: pointer; }
+.nb-chat-jump[hidden] { display: none; }
+.nb-chat-jump:focus-visible { outline: 2px solid var(--nb-accent); outline-offset: 2px; }
+.nb-chat-jump-count { position: absolute; top: -6px; right: -4px; min-width: 20px; padding: 1px 6px; border-radius: var(--nb-pill); background: var(--nb-accent); color: var(--nb-on-accent); font-size: 11px; font-weight: 700; text-align: center; }
+
+/* The composer: one rounded field in the message column, like the app's
+   other inputs, with room under it. A reply or edit shows at its top. */
+.nb-chat-foot { border: 1px solid var(--nb-line-strong); border-radius: 20px; background: var(--nb-surface); transition: border-color .15s, box-shadow .15s; }
+.nb-chat-foot:focus-within { border-color: rgba(var(--nb-accent-rgb), .6); box-shadow: 0 0 0 .25rem var(--bs-focus-ring-color); }
+@media (prefers-reduced-motion: reduce) { .nb-chat-foot { transition: none; } }
+.nb-chat-context { display: flex; align-items: center; gap: 10px; padding: 8px 6px 8px 14px; border-bottom: 1px solid var(--nb-line); }
+.nb-chat-context[hidden] { display: none; }
+.nb-chat-context > .nb-i { flex: none; width: 18px; height: 18px; color: var(--nb-accent); }
+.nb-chat-context-text { flex: 1; min-width: 0; padding-left: 10px; border-left: 2px solid var(--nb-accent); font-size: 13px; line-height: 1.35; }
+.nb-chat-context-title { display: block; color: var(--nb-accent); font-weight: 600; }
+.nb-chat-context-quote { display: block; overflow: hidden; color: var(--nb-muted); white-space: nowrap; text-overflow: ellipsis; unicode-bidi: isolate; }
+.nb-chat-context .nb-chat-tool { width: 32px; height: 32px; }
+.nb-chat-context .nb-chat-tool .nb-i { width: 16px; height: 16px; }
+.nb-chat-composer { display: flex; align-items: flex-end; gap: 8px; padding: 4px 5px 4px 16px; }
+.nb-chat-composer textarea { flex: 1; min-height: 38px; max-height: 168px; padding: 8px 0; border: 0; background: transparent; color: var(--nb-text); font: inherit; font-size: 15px; line-height: 22px; resize: none; field-sizing: content; outline: none; }
+.nb-chat-composer textarea::placeholder { color: var(--nb-muted); opacity: 1; }
+.nb-chat-composer textarea:disabled { background: transparent; }
+.nb-chat-send { display: grid; place-items: center; flex: none; width: 36px; height: 36px; margin-bottom: 1px; padding: 0; border: 0; border-radius: 50%; background: var(--nb-accent); color: var(--nb-on-accent); cursor: pointer; transition: opacity .12s, transform .12s; }
+.nb-chat-send .nb-i { width: 18px; height: 18px; }
+.nb-chat-send:disabled { background: var(--nb-raised); color: var(--nb-muted); cursor: default; }
+.nb-chat-send:not(:disabled):hover { transform: scale(1.06); }
+.nb-chat-send:focus-visible { outline: 2px solid var(--nb-accent); outline-offset: 2px; }
+@media (prefers-reduced-motion: reduce) { .nb-chat-send { transition: none; } .nb-chat-send:not(:disabled):hover { transform: none; } }
+
+/* Member colours: names and avatars, the same for everyone. */
+.nb-c0 { --nb-who: #e17076; } .nb-c1 { --nb-who: #4fa3e0; } .nb-c2 { --nb-who: #7bc862; } .nb-c3 { --nb-who: #ee7aae; }
+.nb-c4 { --nb-who: #6ec9cb; } .nb-c5 { --nb-who: #faa774; } .nb-c6 { --nb-who: #a695e7; } .nb-c7 { --nb-who: #e5ca77; }
+.nb-m-avatar[class*="nb-c"], .nb-member-list .nb-m-avatar { background: var(--nb-who); }
+.nb-m-name[class*="nb-c"] { color: var(--nb-who); filter: brightness(.82); }
+[data-bs-theme="dark"] .nb-m-name[class*="nb-c"] { filter: none; }
+
+.nb-member-list { display: grid; gap: 4px; margin: 12px 0 0; padding: 0; list-style: none; }
+.nb-member-list > li { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 2px 12px; padding: 8px 6px; border-radius: 10px; }
+.nb-member-list > li:hover { background: var(--nb-raised); }
+.nb-member-list .nb-m-avatar { grid-row: 1 / span 2; visibility: visible; width: 38px; height: 38px; }
+.nb-member-name { grid-column: 2; font-weight: 600; overflow-wrap: anywhere; }
+.nb-member-detail { grid-column: 2; color: var(--nb-muted); font-size: 12.5px; font-variant-numeric: tabular-nums; }
+.nb-member-actions { display: flex; grid-column: 3; grid-row: 1 / span 2; flex-wrap: wrap; justify-content: flex-end; gap: 6px; }
+.nb-btn-verify .nb-i { width: 14px; height: 14px; margin-right: 4px; vertical-align: -2px; }
+.nb-btn-verify.nb-on { --bs-btn-color: var(--nb-ok, #2e7d4f); --bs-btn-border-color: currentColor; }
+.nb-verified { width: 13px; height: 13px; color: var(--nb-ok, #2e7d4f); vertical-align: -1px; }
+/* On phones the buttons go under the name and code, which keep the width. */
+@media (max-width: 575.98px) {
+  .nb-member-list > li { grid-template-columns: auto minmax(0, 1fr); }
+  .nb-member-actions { grid-column: 2; grid-row: auto; justify-content: flex-start; margin-top: 6px; }
+}
+.nb-btn-remove { --bs-btn-color: var(--nb-danger); --bs-btn-hover-color: #fff; --bs-btn-hover-bg: #a94442; --bs-btn-hover-border-color: #a94442; }
+.nb-btn-remove.nb-armed { --bs-btn-color: #fff; --bs-btn-bg: #a94442; --bs-btn-border-color: #a94442; }
+
+@media (max-width: 767.98px) {
+  .nb-chat-head { min-height: 60px; padding: 8px 0; gap: 10px; }
+  .nb-chat-avatar { width: 38px; height: 38px; font-size: 15px; }
+  .nb-chat-invite > span { display: none; }
+  .nb-chat-invite { width: 38px; padding: 0; justify-content: center; margin-right: 0; }
+  .nb-chat .nb-wide { display: none; }
+  .nb-chat .nb-narrow { display: inline; }
+  .nb-chat-sub .nb-chip-ok > .nb-narrow { display: none; }
+  .nb-chat-dock { padding-bottom: max(10px, env(safe-area-inset-bottom)); }
+  .nb-m-bubble { max-width: 80%; }
+  .nb-m-more { display: none; } /* touch: long-press a message for its menu */
+  .nb-m-avatar { width: 30px; height: 30px; font-size: 13px; }
+}
 .nb-facts { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 8px 16px; margin: 0; }
 .nb-facts dt { font-weight: 500; }
 .nb-facts dd { margin: 0; }
@@ -328,7 +538,7 @@ input.form-control, select.form-select { height: var(--nb-control-height); }
 .nb-details-body { padding: 0 0 12px; }
 
 /* Warnings and password/deletion forms are ordinary application panels. */
-.nb-gate { max-width: 560px; margin: 24px 0; padding: 20px; border: 1px solid var(--nb-line); border-radius: var(--nb-radius-card); background: var(--nb-surface); }
+.nb-gate { max-width: 560px; margin: 24px auto; padding: 20px; border: 1px solid var(--nb-line); border-radius: var(--nb-radius-card); background: var(--nb-surface); }
 .nb-gate-icon { display: none; }
 .nb-gate-title { margin: 0 0 10px; font-size: 20px; font-weight: 500; line-height: 1.25; }
 .nb-gate-text { margin: 0 0 16px; line-height: 1.5; }

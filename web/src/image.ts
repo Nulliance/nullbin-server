@@ -42,7 +42,27 @@ function png(b: Uint8Array): ImageInfo | null {
   if (b.length < 24 || !signature.every((v, i) => b[i] === v)) return null;
   // The first chunk must be IHDR, 13 bytes long.
   if (be32(b, 8) !== 13 || !ascii(b, 12, 'IHDR')) return null;
-  return { type: 'image/png', width: be32(b, 16), height: be32(b, 20) };
+  const width = be32(b, 16), height = be32(b, 20);
+  if (!width || !height || width > MAX_PREVIEW_SIDE || height > MAX_PREVIEW_SIDE || width * height > MAX_PREVIEW_PIXELS) return null;
+  // An animated PNG (APNG) may need a full canvas for every frame, as an
+  // animated GIF does: walk every chunk up to IEND and bound the frames,
+  // counting both what acTL declares and the frame controls (fcTL) present.
+  let i = 8, declared = 0, controls = 0;
+  for (;;) {
+    if (b.length - i < 12) return null; // truncated: no IEND
+    const length = be32(b, i);
+    if (length > b.length - i - 12) return null;
+    if (ascii(b, i + 4, 'IEND')) break;
+    if (ascii(b, i + 4, 'acTL')) {
+      if (length < 8 || declared) return null;
+      declared = be32(b, i + 8);
+      if (!declared) return null;
+    }
+    if (ascii(b, i + 4, 'fcTL')) controls++;
+    i += 12 + length;
+  }
+  if (Math.max(declared, controls, 1) > Math.floor(MAX_PREVIEW_PIXELS / (width * height))) return null;
+  return { type: 'image/png', width, height };
 }
 
 function gif(b: Uint8Array): ImageInfo | null {
@@ -131,7 +151,22 @@ function webp(b: Uint8Array): ImageInfo | null {
     return { type: 'image/webp', width: (bits & 0x3fff) + 1, height: ((bits >>> 14) & 0x3fff) + 1 };
   }
   if (ascii(b, 12, 'VP8X')) {
-    return { type: 'image/webp', width: le24(b, 24) + 1, height: le24(b, 27) + 1 };
+    const width = le24(b, 24) + 1, height = le24(b, 27) + 1;
+    if (width > MAX_PREVIEW_SIDE || height > MAX_PREVIEW_SIDE || width * height > MAX_PREVIEW_PIXELS) return null;
+    // An animated WebP may need a full canvas for every frame, as an
+    // animated GIF does: walk every chunk and bound the frames (ANMF).
+    // Browsers decode a WebP with stray bytes after its last chunk, so a
+    // cut chunk ends the list instead of refusing the file. A frame whose
+    // header is there counts, even if its data is cut.
+    let i = 12, frames = 0;
+    while (i + 8 <= b.length) {
+      if (ascii(b, i, 'ANMF')) frames++;
+      const size = (b[i + 4]! | (b[i + 5]! << 8) | (b[i + 6]! << 16) | (b[i + 7]! << 24)) >>> 0;
+      if (size > b.length - i - 8) break;
+      i += 8 + size + (size & 1);
+    }
+    if (Math.max(frames, 1) > Math.floor(MAX_PREVIEW_PIXELS / (width * height))) return null;
+    return { type: 'image/webp', width, height };
   }
   return null;
 }

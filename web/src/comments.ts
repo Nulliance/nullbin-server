@@ -43,7 +43,7 @@ const TAG_BYTES = 16;
 const ID = /^[0-9a-f]{32}$/;
 // Control characters, bidi overrides and invisible characters, which could
 // disguise a name.
-const UNSAFE_CHARS = /(?![\u200C\u200D])[\p{Cf}\p{Cc}\p{Zl}\p{Zp}\u115F\u1160\u3164\uFFA0\u2800]/gu;
+const UNSAFE_CHARS = /(?![\u200C\u200D])[\p{Cf}\p{Cc}\p{Zl}\p{Zp}\p{Default_Ignorable_Code_Point}\u115F\u1160\u3164\uFFA0\u2800]/gu;
 
 export interface CommentDraft {
   /** id of the comment this replies to, or null. */

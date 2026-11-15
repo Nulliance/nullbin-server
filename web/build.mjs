@@ -16,10 +16,27 @@ import { parseAPIOrigin, parseSiteOrigin, frontendHeaders, contentSecurityPolicy
 
 const root = fileURLToPath(new URL('..', import.meta.url));
 const outDir = path.join(root, 'internal', 'assets', 'dist');
-const staticDir = path.join(root, 'web', 'dist');
-const generatedDir = path.join(root, 'web', 'generated');
 const frontendOnly = process.argv.includes('--frontend-only');
+// --out-dir=DIR writes the static frontend to DIR/dist and DIR/generated
+// instead of web/dist and web/generated (the browser tests use a temporary
+// directory, so a test build never sits where a real one is deployed from).
+const outArg = process.argv.find((a) => a.startsWith('--out-dir='));
+const outBase = outArg ? path.resolve(outArg.slice('--out-dir='.length)) : null;
+const staticDir = outBase ? path.join(outBase, 'dist') : path.join(root, 'web', 'dist');
+const generatedDir = outBase ? path.join(outBase, 'generated') : path.join(root, 'web', 'generated');
 const apiOrigin = parseAPIOrigin(process.env.NULLBIN_API_ORIGIN ?? '');
+// A plain-HTTP API origin (the browser tests only, NULLBIN_LOCAL_TEST_HTTP=1)
+// needs a frontend-only build into a directory of its own: never web/dist,
+// nor the embedded frontend.
+const localTest = apiOrigin.startsWith('http:');
+const inside = (dir, parent) => {
+  const rel = path.relative(parent, dir);
+  return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
+};
+if (localTest && (!frontendOnly || outBase === null || inside(outBase, root))) {
+  console.error('build: a plain-HTTP API origin is for the browser tests only: build with --frontend-only and --out-dir set to a temporary directory outside the repository');
+  process.exit(1);
+}
 const siteOrigin = parseSiteOrigin(process.env.NULLBIN_SITE_ORIGIN ?? '');
 
 // The version shown in the footer. Docker and release builds pass it in
@@ -195,13 +212,14 @@ await writeFile(path.join(staticDir, 'assets', cssName), cssBytes);
 if (siteOrigin !== '') await writeFile(path.join(staticDir, 'assets', previewName), previewBytes);
 const headers = frontendHeaders(apiOrigin);
 let headersFile = '/*\n' + Object.entries(headers).map(([k, v]) => `  ${k}: ${v}\n`).join('');
-for (const page of ['/', '/index.html', '/p/*', '/d/*', '/version.json']) headersFile += `${page}\n  Cache-Control: no-store\n`;
+for (const page of ['/', '/index.html', '/p/*', '/d/*', '/r/*', '/version.json']) headersFile += `${page}\n  Cache-Control: no-store\n`;
 headersFile += '/assets/*\n  Cache-Control: public, max-age=31536000, immutable\n';
 await writeFile(path.join(staticDir, '_headers'), headersFile);
-await writeFile(path.join(staticDir, '_redirects'), '/p/* /index.html 200\n/d/* /index.html 200\n');
+await writeFile(path.join(staticDir, '_redirects'), '/p/* /index.html 200\n/d/* /index.html 200\n/r/* /index.html 200\n');
 await writeFile(path.join(staticDir, 'version.json'), JSON.stringify({
   version,
   api_origin: apiOrigin || 'same-origin',
+  ...(localTest ? { local_test_http: true } : {}),
   site_origin: siteOrigin || 'not set',
   html_sha256: hex(new TextEncoder().encode(staticHTML)),
   js: `/assets/${jsName}`, js_sha256: hex(jsBytes),
@@ -213,4 +231,4 @@ await writeFile(path.join(generatedDir, 'headers.caddy'), 'header {\n' +
 console.log(`app.js     ${String(jsBytes.length).padStart(8)} bytes  sha256 ${hex(jsBytes)}`);
 console.log(`app.css    ${String(cssBytes.length).padStart(8)} bytes  sha256 ${hex(cssBytes)}`);
 console.log(`index.html ${String(htmlBytes.length).padStart(8)} bytes  sha256 ${hex(htmlBytes)}`);
-console.log(`Static frontend: web/dist/ (API: ${apiOrigin || 'same origin'})`);
+console.log(`Static frontend: ${outBase ? staticDir : 'web/dist/'} (API: ${apiOrigin || 'same origin'})`);

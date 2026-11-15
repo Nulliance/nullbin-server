@@ -13,6 +13,10 @@ const hidden = new Set([
   0x061c, 0x200b, 0x200c, 0x200d, 0x200e, 0x200f, 0x202a, 0x202b, 0x202c, 0x202d, 0x202e,
   0x2060, 0x2066, 0x2067, 0x2068, 0x2069, 0xfeff,
 ]);
+// Also what the app itself treats as hidden (web/src/hidden.ts): fillers,
+// variation selectors, other default-ignorable characters, line and
+// paragraph separators, and control characters other than tab and CR.
+const HIDDEN_CLASSES = /(?![\t\r])[\p{Cc}\p{Cf}\p{Zl}\p{Zp}\p{Cs}\p{Default_Ignorable_Code_Point}\u034F\u115F\u1160\u17B4\u17B5\u180B-\u180F\u3164\uFFA0\uFE00-\uFE0F\u{E0100}-\u{E01EF}]/u;
 const skipDirs = new Set(['node_modules', '.git', 'dist', 'generated', 'out', 'data', 'testdata']);
 const textFile = /\.(ts|mjs|js|go|html|css|md|ya?ml|json|txt|example|caddy)$|^(Dockerfile|Caddyfile.*|LICENSE|THIRD_PARTY_NOTICES|CODEOWNERS|nullbin|go\.mod|\.[a-z]+)$/;
 
@@ -35,7 +39,7 @@ test('no source, config or doc file contains invisible or direction-changing cha
     readFileSync(file, 'utf8').split('\n').forEach((line, i) => {
       for (const ch of line) {
         const cp = ch.codePointAt(0)!;
-        if (hidden.has(cp) || /\p{Cf}/u.test(ch)) {
+        if (hidden.has(cp) || HIDDEN_CLASSES.test(ch)) {
           found.push(`${path.relative(root, file)}:${i + 1} U+${cp.toString(16).toUpperCase()}`);
         }
       }

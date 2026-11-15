@@ -6,7 +6,8 @@ cannot read. The key is the part of the link after `#`, which browsers never
 send to the server.
 
 Passwords, file attachments, encrypted comments, expiry, and burn after
-reading are all built in. There are no accounts and no database.
+reading are all built in, and so are **burner rooms**: temporary end-to-end
+encrypted group chats. There are no accounts and no database.
 
 ## Start here
 
@@ -43,7 +44,7 @@ mid-2022 on; Safari 16.4 or later). Older browsers cannot open it.
 | **Password** | Readers need the password as well as the link. At least 8 characters. The key button generates a strong random one (20 characters, about 116 bits) and shows it, so you can copy it and send it separately. |
 | **Separate links** | One link for each person (2 to 20), instead of one shared link. Each link counts its own opens (with burn after reading, each gets that many), and the delete link shows how often each was opened and can revoke any of them. Revoking stops that link from opening the paste, but cannot take back what its holder already saw. Cannot be combined with a discussion. |
 | **Discussion** | Everyone who can open the paste can read and post encrypted comments: with a password, only people who also know it. Cannot be combined with burn after reading. |
-| **Burn after reading** | The paste is deleted after a set number of opens (1 to 1,000; 1 by default). Every authorized open counts, including reloads and interrupted downloads; wrong passwords and link previews do not. |
+| **Burn after reading** | The paste is deleted after a set number of opens (1 to 1,000; 1 by default). Every authorized open counts, including reloads and interrupted downloads; wrong passwords and link previews do not. Leaving the page clears the paste from it, even while it is still opening, so **Back** does not bring it back. |
 
 After opening a paste:
 
@@ -65,7 +66,61 @@ way. If a paste contains invisible or direction-changing characters (a trick
 that makes text look different from what it does when copied), Nullbin shows
 a warning above it.
 
-Large attachments: desktop Chrome and Edge save files of any size directly
+### Burner rooms
+
+A burner room is a group chat that deletes itself. Choose **Burner room** at
+the top of the home page, enter your name, optionally a room name, and how
+long it lasts (5 minutes to 1 week), then **Create burner room**.
+
+- **Invite** people one at a time: type who the invite is for, then copy the
+  link and send it to that person. Each invite works once, and only for an
+  hour: once used or expired, the link opens nothing. Keep the room open
+  while people join: your tab lets them in, and until it does they see that
+  they are waiting (and their safety code). Each invite lets one person in. If your tab sees two people
+  prove they had the same invite (only a tampered server allows it), it
+  closes that place, even if one of them got in: send a new invite another
+  way. It also tells you when someone's invite link was changed on the way.
+- **Chat** as in any messaging app. Right-click a message (long-press on a
+  phone, or use the ⋯ button beside it) to react with one of six emoji,
+  reply, copy it, or edit or unsend your own; double-click to reply. Edited
+  messages show "(edited)".
+  Unsending removes a message from everyone's screen, but anyone may already
+  have read or copied it. There are no typing indicators or read receipts
+  on screen: both would tell the server who is active. (Each message does
+  tell the other members, not the server, what its sender had read, so the
+  room can warn when people were shown different things.)
+- **Members** (the member count at the top) lists everyone with a code, and
+  whose invite they used when their name differs from it. To be sure nobody
+  is posing as someone, compare a person's code with the one they see, in
+  person or on a call, then **Mark verified**: their name then shows a check
+  mark, in this tab. Names that look like another one in the room get the
+  start of their code as a badge. The creator can remove people there.
+- **Warnings**: the room tells you if someone seems to be showing people
+  different messages or keys, or leaving you out. Take them seriously:
+  compare with the others another way, and leave if in doubt.
+- **Self-destruct** (the flame at the top): anyone in the room can end it for
+  everyone, at once, after confirming. Otherwise it self-destructs when its
+  time is up.
+
+Messages are end-to-end encrypted with forward secrecy: every message has its
+own key, which is deleted once used, and keys change when someone is
+removed. Names, the room's name and invite labels are encrypted too, so an
+invite link alone shows none of them. Only people in the room can read it, not even the server, which
+keeps rooms only in memory: a server restart also ends them. Your access
+stays in the browser tab where you joined (one tab at a time); closing it
+ends your access unless the browser restores the tab (ask for a new invite
+to come back), and after a reload you see new messages only. New members
+cannot read messages from before they joined. If the room ever shows that
+someone else took your place, leave and tell the person who invited you.
+Rooms are text only: up to 20 places (each invite uses one, even if it is
+cancelled, expires or the person is removed) and 1,000 records (messages,
+reactions, edits and key changes all count). Keys take more of them the
+more people join: a room of 5 keeps roughly 900 for messages, a full room
+of 20 roughly 400 to 500.
+
+### Large attachments
+
+Desktop Chrome and Edge save attachments of any size directly
 to disk. Other browsers can save attachments up to 64 MiB. Clone works for
 attachments up to 64 MiB, or for larger ones after you save them.
 
@@ -106,7 +161,7 @@ macOS.
 3. Start it:
 
    ```sh
-   docker run --rm -p 127.0.0.1:8080:8080 -v nullbin-dev-data:/data nullbin-dev
+   docker run --rm --ulimit core=0 -p 127.0.0.1:8080:8080 -v nullbin-dev-data:/data nullbin-dev
    ```
 
 4. Open [http://localhost:8080](http://localhost:8080) and create a paste.
@@ -376,6 +431,7 @@ change with `sudo ./nullbin start`.
 | `MAX_PASTES` | `100000` | Most pastes kept at once. Each uses about four inodes; check with `df -i` before raising it. |
 | `DOMAIN` (A) or `API_DOMAIN` (B) | set by `setup` | The server's domain name. |
 | `FRONTEND_ORIGIN` (B only) | set by `setup-api` | The website's exact address. |
+| `ROOMS` | `true` | `false` turns burner rooms off. |
 | `CLOUDFLARE` | not set (off) | `true` when Cloudflare's proxy is in front, `self-signed` to also never use Let's Encrypt. Change it with `sudo ./nullbin cloudflare on`, `self-signed` or `off`, not by hand. See [Behind Cloudflare](#behind-cloudflare). |
 
 Write each setting on its own line as `NAME=value`, with no quotes or
@@ -476,6 +532,13 @@ addresses are refused rather than trusted.
    [SSL Labs server test](https://www.ssllabs.com/ssltest/) and
    [Mozilla HTTP Observatory](https://developer.mozilla.org/en-US/observatory).
    Both should give top grades; look into any warning.
+5. **Consider HSTS preloading.** Nullbin sends
+   `Strict-Transport-Security`, but a browser learns it only on its first
+   HTTPS visit, so a first visit typed as `http://` on a hostile network
+   can still be intercepted. If every name under your domain serves
+   HTTPS, send `max-age=63072000; includeSubDomains; preload` from the
+   domain itself and submit it at [hstspreload.org](https://hstspreload.org/).
+   This affects every subdomain, so it is your decision, not a default.
 
 The API's request and bandwidth limits cover encrypted transfers. Website
 files are served separately by Caddy (Option A) or your static host (Option
@@ -728,7 +791,8 @@ startup.
 | `NULLBIN_MAX_PASTES` | `100000` | Pastes at once, including unfinished ones (1 to 10,000,000). Keeps a volume from running out of inodes before bytes. |
 | `NULLBIN_MAX_SIZE` | `100MiB` | Largest paste, `64KiB` to `2GiB`. |
 | `NULLBIN_BEHIND_HTTPS` | `false` | `true` sends `Strict-Transport-Security: max-age=31536000`. |
-| `NULLBIN_TRUSTED_PROXIES` | empty | IPs or CIDR ranges whose `X-Forwarded-For` header is trusted. |
+| `NULLBIN_TRUSTED_PROXIES` | empty | IPs or CIDR ranges whose `X-Forwarded-For` header is trusted. Public ranges wider than /12 (IPv4) or /29 (IPv6) are refused; private, shared and loopback ranges may be wider (such as 10.0.0.0/8 or fc00::/7). |
+| `NULLBIN_ROOMS` | `true` | Burner rooms. `false` removes their API: a separately hosted website's room page then says rooms are off, and the all-in-one server answers room links with 404. They are kept in memory only: at most 1,000 rooms and 128 MiB in total; 4 MiB of messages per room; and per client network (IPv4 address or IPv6 /64) at most 10 live rooms holding 4 MiB of messages together, four times that per IPv6 /48. |
 
 The `nullbin` program also has `nullbin healthcheck` (used by the container
 health check) and `nullbin delete <paste id>` (used by `./nullbin delete`;
@@ -744,6 +808,9 @@ the server must be stopped).
 | Delete a paste | 60 per minute | 20 |
 | Downloads, burn reads and comment reads (shared) | 20 per minute | 20 |
 | Pages, assets and the version link | 5 per second | 100 |
+| Create a burner room | 10 per minute | 10 |
+| Burner room messages, invites, joins and creator actions | 2 per second | 30 |
+| Burner room reads (polling) | 10 per second | 100 |
 
 One IPv6 `/48` as a whole gets four times a client's rates and bursts.
 Each limiter tracks up to 100,000 clients and refuses new ones when full.
@@ -874,6 +941,178 @@ required for every change.
 </details>
 
 <details>
+<summary><strong>Burner rooms</strong>: keys, forward secrecy, formats and endpoints</summary>
+
+**Keys.** A room key (32 random bytes) travels only in invite links, after
+the `#`. It encrypts *control records*: joins, admits, the room name, invite labels,
+removals and key deliveries (`crypto_kdf` context `nbroomen`,
+XChaCha20-Poly1305, additional data `nullbin room v1 <room> <slot>`). Names,
+the room's name and labels inside them are encrypted again, padded to 160
+bytes, under a *roster key* that only members get: the creator makes it, and
+seals it to each member in the `admit` that lets them in (with their name,
+encrypted under it). A joiner's join carries its name sealed to the
+creator's *name key* (an X25519 key in the creator's join), so only the
+creator reads it before letting them in. So the room key, which every
+invite link carries, shows who is in the room only as places and public
+keys. Each
+member's browser makes an Ed25519 signing key and an X25519 key and announces
+both in its join record, signed with that signing key. Every record is
+signed and checked against its slot's keys. Invite links also carry the
+creator's signing key, a per-invite secret and the invite's place
+(`#<room key>.i<invite token>.c<creator key>.s<invite secret>.n<place>`): a
+joiner checks the creator's join against the key and that the server gave
+it the place the invite was made for, and proves with the secret (a keyed
+BLAKE2b hash of the room, place and its keys) that its join came from that
+link; the secret never reaches the server. Anyone else becomes a member only
+once the creator's app posts a signed `admit` record naming their signing
+key; it admits each place once, when it sees joins with a valid proof that
+all carry the same keys. (Only the holder of a place's member token can post
+as that place, so two different ones mean the server let someone else post
+there; it then admits neither.) So the room key alone adds nobody, even with
+the server's help. X25519 keys of low order are refused. Each tab remembers the keys
+it has seen for each place and the removals, and refuses a later history
+that contradicts them. Only slot 0 (the creator) may name the room, label
+invites, admit and announce removals. An invite nobody used within an hour
+stops working (the server refuses it).
+
+**Messages and forward secrecy** ("sender keys", as in Signal and WhatsApp
+groups). Each member has a sending chain: a 32-byte chain key `CK`, from which
+each message's key is `crypto_kdf(CK, 1, "nbrmmsgk")` and the next chain key is
+`crypto_kdf(CK, 1, "nbrmnext")`. Keys are deleted once used, by the sender
+and by every reader. A member hands their chain to each other member in a
+`keys` record, sealed to that member's X25519 key with `crypto_box_seal`
+together with a 16-byte BLAKE2b hash of the room, the sender's slot and the
+chain position, so the room key alone reads no message and nobody can hand
+on someone else's chain as their own. Each delivery also carries a 16-byte
+*commitment* to the chain key at its position (a BLAKE2b hash keyed with it):
+every recipient checks theirs, and members who hold that chain check
+deliveries to others, so a sender cannot give members different chains for
+one place unnoticed. Chains restart from fresh random keys
+(a new generation) after a removal and every 50 messages; a removed member
+never gets the new ones. A new member receives each chain at its current
+position, so they read only what is sent after they join. Readers step a
+chain forward only after a message decrypts and its signature checks, at most
+1,000 messages ahead, and never move a chain back.
+
+**Receiving keys rotate too.** Each member's X25519 receiving keys are
+numbered (0 in their join record, then signed `box` records), and each key
+delivery names the number it was sealed to. After a delivery arrives, the
+member announces a new key at their next successful check for messages, at
+most once every three minutes (each change is a record); the one before is
+deleted two minutes later. A
+new key is stored in the tab before it is announced, so a lost reply cannot
+lose it, and deleted keys are saved as deleted at once. So a delivery
+that someone recorded cannot be opened with keys taken from the member's
+device afterwards: a later compromise normally exposes the last five
+minutes or so. Each tab remembers every member's newest receiving key and refuses
+a history that rolls it back or swaps it. A server can still keep a key in
+use: by hiding a delivery and that sender's messages from the member (their
+app replaces the key whenever it sees new messages it cannot read), or by
+showing a member who joined later only an older key of someone's; that
+someone is warned when a delivery reaches them sealed to a key they had
+replaced more than ten minutes before. A member also checks that the join
+record for their own place carries their own signing key, and warns if not.
+
+**Copies of a member's keys.** Each tab saves a hash of every record it
+posts before posting it, and keeps it even when posting fails. Every message
+also carries an outer Ed25519 signature by its sender over everything
+before it, which every reader checks before decrypting, so it cannot be
+stripped. A record signed with a member's key that their tab never posted
+is a copy's: the tab then ends the room and deletes its keys.
+
+**Forked conversations.** Every message carries *receipts*: for each of the
+20 places, the newest record the sender read from it (its place in that
+member's chain and a hash of its content), or nothing, so a message's size
+does not show what its sender read. A reader who read something else at
+that place is told: either that member's receipts are false, or someone,
+maybe with the server's help, is showing people different conversations. Every reader also checks each sender's
+signed records (key deliveries, and messages by their outer signature,
+even ones it cannot read) only move forward in the history: a sender who
+splits the room into groups with separate chains has to step back
+somewhere, and everyone is told (the server, which can reorder records,
+could also cause this). And a reader is told when a sender's keys keep
+going to others but not to them, for more than two minutes after they
+were let in.
+
+**Chat records** travel as messages, with forward secrecy: a message (maybe
+a reply, naming the message's id and sender), a reaction (one of six fixed
+emoji, added or taken back, also naming the message's sender), an edit or an
+unsend. Ids count per sender. Readers accept an edit or unsend only from the
+message's sender, a reaction once per person, and nothing about a message
+they do not have. A quote shows what its message said when the reply
+arrived, and "Edited since" if it changed. Readers refuse text with control,
+format or direction characters (zero-width spaces, soft hyphens, tag
+characters and the like), line or paragraph separators, fillers that show
+as nothing, variation selectors other than emoji ones, zero-width joiners
+and characters Unicode marks as default-ignorable (drawn as nothing, even
+unassigned ones), zero-width joiners and non-joiners outside emoji and the
+scripts that spell with them (Arabic, Indic and others), stacks of more
+than five combining marks on one character, more than two blank or
+blank-looking lines in a row, blank lines at the start, spaces at the end,
+or nothing visible at all; the app removes them before sending. The flags
+of England, Scotland and Wales keep their tag characters; no other tags
+are allowed. Names and invite labels may hold at most four digits, none in
+brackets, no check marks, not the word "verified", and no more than three
+stacked marks, so they cannot pass for the codes and marks the app shows;
+the room's name may hold any digits. Names in scripts with
+Latin lookalikes (Cyrillic, Greek, Cherokee, Lisu and others) always show
+the start of their code, and so do Latin names in a room that has one.
+
+**Formats.** Control: `1 || nonce (24) || ciphertext`. Message:
+`2 || generation (4) || index (4) || nonce (24) || ciphertext || outer signature (64)`,
+with additional data `nullbin room msg v1 <room> <slot> <generation> <index>`.
+The creator's signed `room` record carries the room's name and the time it
+ends; the countdown never runs past it, and the app says so when the server
+claims an end more than ten minutes later (clocks differ), or when the
+record is missing. The plaintext
+is `length (4) || JSON || Ed25519 signature (64) || zeros`, padded like
+pastes but with a 1 KiB minimum for control records and 2 KiB for messages
+(their receipts take about 1.2 KiB), so every message of up to about 600
+bytes of UTF-8 text (600 plain letters, fewer with accents or emoji) has
+the same size. Signatures cover a context string with the
+room, slot (and for messages, generation and index), then the JSON.
+
+**Safety codes** are 30 digits (about 99 bits) from a BLAKE2b hash of a
+member's signing key, which signs everything else they announce.
+
+**Endpoints** (all under `/api/v1/rooms`; wrong tokens, unknown and expired
+rooms all return `404`, and token checks take the same time whether or not
+the room exists; a request that can never work gets `400`, some before any
+token check; a valid token can also get `409` for a full room and `410` for
+a used or expired invite, which tells whoever holds such an invite whether
+the room still exists):
+
+- `POST /api/v1/rooms` with `{"expires_in": 300 | 1800 | 3600 | 10800 | 43200 | 86400 | 259200 | 604800}` returns
+  `201` with `id`, `owner_token`, `member_token` and `slot` 0 (the creator);
+  `429` when this client network already has 10 live rooms.
+- `POST /{id}/invites` (with `Nullbin-Owner-Token`) returns `201` with a
+  single-use `invite_token` and its `slot`; `409` when 20 slots are used.
+- `POST /{id}/join` (with `Nullbin-Invite-Token`) returns `200` with a new
+  `member_token` and the `slot`; `410` if that invite was used, removed or
+  made more than an hour ago.
+- `POST /{id}/records` (with `Nullbin-Member-Token`, `application/octet-stream`,
+  41 bytes to 16 KiB) stores one record and stamps it with the sender's slot.
+  `409` after 1,000 records or 4 MiB, or when the creator's network holds
+  4 MiB in its rooms (16 MiB per IPv6 /48).
+- `GET /{id}/records?after=n` (with `Nullbin-Member-Token`; `n` up to 1000)
+  returns up to 200 records, and 64 KiB, after the first `n`:
+  `{"next": m, "expires_in": seconds, "records": [{"from": slot, "data": "<base64>"}]}`,
+  streamed under the download bandwidth limits.
+- `GET /{id}/members` (owner) returns each used slot's state
+  (`invited`, `expired`, `joined`, `removed`).
+- `POST /{id}/members/{n}/remove` (owner) closes slot `n` (not 0) for good.
+- `DELETE /{id}` (with `Nullbin-Member-Token` of any current member, or the
+  owner token) self-destructs the room for everyone.
+
+Invite links look like
+`https://host/r/<id>#<room key>.i<invite token>.c<creator key>.s<invite secret>.n<place>`.
+Rooms are kept in memory only. The server zeroes a room's stored records
+when it ends; copies made while serving them can stay in memory until it is
+reused (all of it ciphertext).
+
+</details>
+
+<details>
 <summary><strong>Verify a build</strong>: check that a release or a live site matches the source</summary>
 
 Each release is its tagged source plus a `SHA256SUMS` file. The release
@@ -944,8 +1183,11 @@ break the security policy. Cloudflare's guides:
 
 Serve the output folder from the site root, over HTTPS, and:
 
-- serve `index.html` for `/p/<id>` and `/d/<id>`, without changing the URL;
-- send the headers in `_headers`, including the Content-Security-Policy;
+- serve `index.html` for `/p/<id>`, `/d/<id>` and `/r/<id>`, without
+  changing the URL;
+- send the headers in `_headers`, including the Content-Security-Policy.
+  Without the framing and isolation headers the site refuses to open or
+  create anything;
 - cache files under `/assets/` (their names contain their hash), but always
   serve a fresh `index.html`;
 - add no scripts and change no files.
@@ -982,6 +1224,10 @@ go build -trimpath -o nullbin ./cmd/nullbin
 ```
 
 Then open `http://127.0.0.1:8080`.
+
+Burner rooms live in the server's memory, so outside Docker (whose files
+here already turn them off) run it with core dumps off: `ulimit -c 0` first
+on Linux and macOS, and on systemd `LimitCORE=0`.
 
 **Website only:** `NULLBIN_API_ORIGIN=https://api.example.com npm run build:frontend`
 builds `web/dist`. The API address is fixed at build time; links and API

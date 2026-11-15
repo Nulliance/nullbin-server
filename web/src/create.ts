@@ -82,7 +82,7 @@ export function initCreate(draft?: { text: string; file: File | null }): void {
   show(el('nav-new'));
   bindResultCopy();
   if (/Mac|iPhone|iPad/.test(navigator.userAgent)) el('kbd-mod').textContent = '⌘';
-  text.focus();
+  text.focus({ preventScroll: true }); // keep the page at the top, where the tabs are
 
   // --- File attachments: button or drag and drop. Several files are sent
   // as one zip archive (zip.ts). ---
@@ -229,6 +229,25 @@ export function initCreate(draft?: { text: string; file: File | null }): void {
     }
   };
   for (const s of [burn, recipients, pwSwitch, discussion]) s.addEventListener('change', sync);
+
+  // Separate links and Discussion wait behind "More options". The toggle
+  // says how many of them are on, so nothing switched on is ever hidden
+  // without a sign.
+  const more = el<HTMLButtonElement>('more-toggle');
+  const moreBox = el('more-options');
+  const moreLabel = more.querySelector('span')!;
+  const syncMore = () => {
+    const on = [recipients, discussion].filter((c) => c.checked).length;
+    moreLabel.textContent = on > 0 ? `More options (${on} on)` : 'More options';
+  };
+  const setMore = (open: boolean) => {
+    more.setAttribute('aria-expanded', String(open));
+    show(moreBox, open);
+  };
+  more.addEventListener('click', () => setMore(more.getAttribute('aria-expanded') !== 'true'));
+  for (const s of [recipients, discussion]) s.addEventListener('change', syncMore);
+  if (recipients.checked || discussion.checked) setMore(true);
+  syncMore();
   const focusPasswordIfNew = () => {
     if (pwSwitch.checked && password.value === '') password.focus();
   };

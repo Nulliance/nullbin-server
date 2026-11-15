@@ -24,6 +24,7 @@ type config struct {
 	TrustedProxies []netip.Prefix
 	APIOnly        bool
 	FrontendOrigin string
+	Rooms          bool // burner rooms (in memory only)
 }
 
 const (
@@ -43,6 +44,7 @@ var knownVars = map[string]bool{
 	"NULLBIN_TRUSTED_PROXIES": true,
 	"NULLBIN_API_ONLY":        true,
 	"NULLBIN_FRONTEND_ORIGIN": true,
+	"NULLBIN_ROOMS":           true,
 }
 
 // loadConfig reads and validates the environment. Any bad value, and any
@@ -73,6 +75,7 @@ func loadConfig(environ []string) (config, error) {
 		MaxStorage: storage.DefaultMaxBytes,
 		MaxPending: storage.DefaultMaxPending,
 		MaxPastes:  storage.DefaultMaxPastes,
+		Rooms:      true,
 	}
 	var errs []error
 	if v := env["NULLBIN_API_ONLY"]; v != "" {
@@ -81,6 +84,13 @@ func loadConfig(environ []string) (config, error) {
 			errs = append(errs, errors.New("NULLBIN_API_ONLY: must be true or false"))
 		}
 		cfg.APIOnly = b
+	}
+	if v, ok := env["NULLBIN_ROOMS"]; ok && v != "" {
+		b, err := strconv.ParseBool(v)
+		if err != nil {
+			errs = append(errs, errors.New("NULLBIN_ROOMS: must be true or false"))
+		}
+		cfg.Rooms = b
 	}
 	if v := env["NULLBIN_FRONTEND_ORIGIN"]; v != "" {
 		if err := server.ValidateFrontendOrigin(v); err != nil {
@@ -201,6 +211,31 @@ func parseSizeLimit(v string, maximum int64) (int64, error) {
 	return n, nil
 }
 
+// privateRanges are the address blocks no public client comes from.
+var privateRanges = []netip.Prefix{
+	netip.MustParsePrefix("10.0.0.0/8"),
+	netip.MustParsePrefix("100.64.0.0/10"),
+	netip.MustParsePrefix("127.0.0.0/8"),
+	netip.MustParsePrefix("172.16.0.0/12"),
+	netip.MustParsePrefix("192.168.0.0/16"),
+	netip.MustParsePrefix("::1/128"),
+	netip.MustParsePrefix("fc00::/7"),
+	netip.MustParsePrefix("fe80::/10"),
+}
+
+// proxyRangeOK reports whether p is narrow enough to name proxies.
+func proxyRangeOK(p netip.Prefix) bool {
+	if (p.Addr().Is4() && p.Bits() >= 12) || (p.Addr().Is6() && p.Bits() >= 29) {
+		return true
+	}
+	for _, r := range privateRanges {
+		if r.Bits() <= p.Bits() && r.Contains(p.Addr()) {
+			return true
+		}
+	}
+	return false
+}
+
 // parseProxies parses comma-separated IPs or CIDR prefixes.
 func parseProxies(v string) ([]netip.Prefix, error) {
 	var out []netip.Prefix
@@ -219,6 +254,14 @@ func parseProxies(v string) ([]netip.Prefix, error) {
 			}
 			if p.Addr().Is4In6() || p.Addr().Zone() != "" {
 				return nil, fmt.Errorf("%q: write IPv4 prefixes in IPv4 form, without zones", item)
+			}
+			// A range this wide is no proxy: it would trust X-Forwarded-For
+			// from almost anyone, so every per-network limit would key on an
+			// address the client chose. Public ranges may be as wide as a
+			// CDN's (/12 for IPv4, /29 for IPv6); wider ones only inside
+			// private, shared or loopback space (10.0.0.0/8, fc00::/7).
+			if !proxyRangeOK(p) {
+				return nil, fmt.Errorf("%q is too wide to be a proxy range (at most /12 for IPv4 and /29 for IPv6, or a private range such as 10.0.0.0/8 or fc00::/7)", item)
 			}
 			out = append(out, p)
 			continue

@@ -14,11 +14,14 @@ function parseOrigin(value, name, example) {
   if (value === '') return '';
   let url;
   try { url = new URL(value); } catch { throw new Error(`${name} must be an HTTPS origin, such as ${example}`); }
-  const local = ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname);
+  // Plain HTTP to this computer is for the browser tests only, and only when
+  // they ask for it: a bundle built that way would send every visitor's
+  // tokens to whatever listens on that port on their own computer.
+  const local = process.env.NULLBIN_LOCAL_TEST_HTTP === '1' && ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname);
   if ((url.protocol !== 'https:' && !(url.protocol === 'http:' && local)) ||
       url.username || url.password || url.pathname !== '/' || url.search || url.hash ||
       ![url.origin, `${url.origin}/`].includes(value)) {
-    throw new Error(`${name} must be a canonical HTTPS origin without a path, credentials, query or fragment (HTTP is local-test only)`);
+    throw new Error(`${name} must be a canonical HTTPS origin without a path, credentials, query or fragment (HTTP to localhost is for the browser tests only, with NULLBIN_LOCAL_TEST_HTTP=1)`);
   }
   return url.origin;
 }

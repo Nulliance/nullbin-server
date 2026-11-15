@@ -38,6 +38,7 @@ var corsMethods = map[string]bool{"GET": true, "HEAD": true, "POST": true, "PUT"
 var corsHeaders = map[string]bool{
 	"content-type": true, "nullbin-upload-token": true, "nullbin-delete-token": true,
 	"nullbin-burn-token": true, "nullbin-comment-token": true,
+	"nullbin-owner-token": true, "nullbin-member-token": true, "nullbin-invite-token": true,
 }
 
 // Grant only the explicitly configured frontend origin. No cookies or
@@ -74,7 +75,7 @@ func cors(frontend string, next http.Handler) http.Handler {
 				}
 			}
 			w.Header().Set("Access-Control-Allow-Methods", "GET, HEAD, POST, PUT, DELETE")
-			w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Nullbin-Upload-Token, Nullbin-Delete-Token, Nullbin-Burn-Token, Nullbin-Comment-Token")
+			w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Nullbin-Upload-Token, Nullbin-Delete-Token, Nullbin-Burn-Token, Nullbin-Comment-Token, Nullbin-Owner-Token, Nullbin-Member-Token, Nullbin-Invite-Token")
 			w.Header().Set("Access-Control-Max-Age", "600")
 		}
 		w.Header().Set("Access-Control-Allow-Origin", frontend)

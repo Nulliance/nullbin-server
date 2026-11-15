@@ -49,6 +49,13 @@
   <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></symbol>
   <symbol id="i-key" viewBox="0 0 24 24"><circle cx="8" cy="15" r="4"/><path d="M11 12l9-9M17 6l3 3M14.5 8.5l2 2"/></symbol>
   <symbol id="i-users" viewBox="0 0 24 24"><circle cx="9" cy="8" r="3.5"/><path d="M2.5 20a6.5 6.5 0 0 1 13 0M16 4.5a3.5 3.5 0 0 1 0 7M18 14a6.5 6.5 0 0 1 3.5 6"/></symbol>
+  <symbol id="i-user-plus" viewBox="0 0 24 24"><circle cx="9" cy="8" r="3.5"/><path d="M2.5 20a6.5 6.5 0 0 1 13 0M19 8v6M16 11h6"/></symbol>
+  <symbol id="i-more" viewBox="0 0 24 24"><circle cx="5.5" cy="12" r=".9"/><circle cx="12" cy="12" r=".9"/><circle cx="18.5" cy="12" r=".9"/></symbol>
+  <symbol id="i-down" viewBox="0 0 24 24"><path d="M12 5v14M6 13l6 6 6-6"/></symbol>
+  <symbol id="i-send" viewBox="0 0 24 24"><path d="M4 12l16-8-6 16-2.5-6.5z"/><path d="M11.5 13.5L20 4"/></symbol>
+  <symbol id="i-smile" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M8.5 14.5a4.5 4.5 0 0 0 7 0M9 9.5h.01M15 9.5h.01"/></symbol>
+  <symbol id="i-edit" viewBox="0 0 24 24"><path d="M4 20h4l10.5-10.5-4-4L4 16z"/><path d="M13.5 6.5l4 4"/></symbol>
+  <symbol id="i-chevron" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></symbol>
   <symbol id="i-qr" viewBox="0 0 24 24"><path d="M3 3h6v6H3zM15 3h6v6h-6zM3 15h6v6H3zM15 15h3v3h3v3h-6zM12 3v9H3M12 15v6M15 12h6M21 12v3"/></symbol>
 </svg>
 
@@ -71,7 +78,35 @@
   <!-- New paste -->
   <section id="create" aria-labelledby="create-title" hidden>
     <h1 id="create-title" class="visually-hidden">New paste</h1>
-    <form id="create-form" novalidate>
+    <div class="nb-mode-tabs" role="tablist" aria-label="What to create">
+      <button id="tab-paste" type="button" class="nb-tab" role="tab" aria-selected="true" aria-controls="create-form"><svg class="nb-i" aria-hidden="true"><use href="#i-new"/></svg><span>Paste</span></button>
+      <button id="tab-room" type="button" class="nb-tab" role="tab" aria-selected="false" aria-controls="room-create-form" tabindex="-1"><svg class="nb-i" aria-hidden="true"><use href="#i-users"/></svg><span>Burner room</span></button>
+    </div>
+    <form id="room-create-form" class="nb-card nb-pad nb-room-create" role="tabpanel" aria-labelledby="tab-room" novalidate hidden>
+      <h2 class="nb-h2"><svg class="nb-i" aria-hidden="true"><use href="#i-users"/></svg>Burner room</h2>
+      <p class="nb-muted">An end-to-end encrypted group chat that deletes itself when time’s up. Only people you invite can read it, not even the server.</p>
+      <p id="room-create-error" class="nb-note nb-tone-danger" role="alert" tabindex="-1" hidden></p>
+      <div class="nb-room-fields">
+        <label for="room-you" class="form-label">Your name</label>
+        <input id="room-you" class="form-control" maxlength="40" autocomplete="off" spellcheck="false" autocorrect="off" autocapitalize="off" aria-invalid="false">
+        <label for="room-name" class="form-label">Room name <span class="nb-muted">(optional)</span></label>
+        <input id="room-name" class="form-control" maxlength="40" autocomplete="off" spellcheck="false" autocorrect="off" autocapitalize="off">
+        <label for="room-expiry" class="form-label">Self-destructs after</label>
+        <select id="room-expiry" class="form-select">
+          <option value="300">5 minutes</option>
+          <option value="1800">30 minutes</option>
+          <option value="3600">1 hour</option>
+          <option value="10800">3 hours</option>
+          <option value="43200">12 hours</option>
+          <option value="86400" selected>1 day</option>
+          <option value="259200">3 days</option>
+          <option value="604800">1 week</option>
+        </select>
+      </div>
+      <button id="room-create-submit" type="submit" class="btn nb-btn-primary"><svg class="nb-i" aria-hidden="true"><use href="#i-lock"/></svg><span>Create burner room</span></button>
+      <p class="nb-meta nb-room-fineprint">Your access stays in this browser tab: if you close it, you’ll need a new invite to get back in. Rooms are never written to the server’s disk, so a server restart also ends them.</p>
+    </form>
+    <form id="create-form" role="tabpanel" aria-labelledby="tab-paste" novalidate>
       <div id="error-banner" class="nb-note nb-tone-danger" role="alert" tabindex="-1" hidden></div>
 
       <!-- The editor comes first, so keyboard and reading order run from the
@@ -115,6 +150,21 @@
             <span id="burn-reads-unit">open</span>
           </div>
         </div>
+        <div class="nb-password-setting">
+        <label class="nb-check" title="Readers need the password as well as the link. Send it separately."><input id="password-switch" class="form-check-input" type="checkbox" aria-describedby="password-help" aria-controls="password-row">Password</label>
+        <div id="password-row" class="nb-toolbar-password" hidden>
+          <label for="password" class="visually-hidden">Password</label>
+          <div class="input-group has-validation">
+            <input id="password" type="password" class="form-control" autocomplete="off" spellcheck="false" autocorrect="off" autocapitalize="off" placeholder="At least 8 characters" aria-describedby="password-error" aria-invalid="false">
+            <button id="password-generate" type="button" class="btn nb-btn-ghost" aria-label="Generate a strong password" title="Generate a strong random password"><svg class="nb-i" aria-hidden="true"><use href="#i-key"/></svg></button>
+            <button id="password-copy" type="button" class="btn nb-btn-ghost nb-copy-btn" aria-label="Copy password" title="Copy the password, to send it separately from the link"><svg class="nb-i" aria-hidden="true"><use href="#i-copy"/></svg></button>
+            <button id="password-reveal" type="button" class="btn nb-btn-ghost" aria-pressed="false" aria-label="Show password"><svg class="nb-i" aria-hidden="true"><use href="#i-eye"/></svg></button>
+            <div id="password-error" class="invalid-feedback">Use at least 8 characters.</div>
+          </div>
+        </div>
+        </div>
+        <button id="more-toggle" type="button" class="nb-more-toggle" aria-expanded="false" aria-controls="more-options"><span>More options</span><svg class="nb-i" aria-hidden="true"><use href="#i-chevron"/></svg></button>
+        <div id="more-options" class="nb-more-options" hidden>
         <div class="nb-recipients-setting">
           <label class="nb-check" title="Give each person their own link. You can see how often each was opened and revoke it on its own."><input id="recipients" class="form-check-input" type="checkbox" aria-describedby="recipients-help" aria-controls="recipients-field"><span>Separate links</span></label>
           <div id="recipients-field" class="nb-toolbar-field nb-read-limit" hidden>
@@ -124,18 +174,6 @@
           </div>
         </div>
         <label class="nb-check" title="Allow encrypted comments from everyone who can open the paste."><input id="discussion" class="form-check-input" type="checkbox" aria-describedby="discussion-help">Discussion</label>
-        <div class="nb-password-setting">
-        <label class="nb-check" title="Readers need the password as well as the link. Send it separately."><input id="password-switch" class="form-check-input" type="checkbox" aria-describedby="password-help" aria-controls="password-row">Password</label>
-        <div id="password-row" class="nb-toolbar-password" hidden>
-          <label for="password" class="visually-hidden">Password</label>
-          <div class="input-group has-validation">
-            <input id="password" type="password" class="form-control" autocomplete="new-password" spellcheck="false" autocorrect="off" autocapitalize="off" placeholder="At least 8 characters" aria-describedby="password-error" aria-invalid="false">
-            <button id="password-generate" type="button" class="btn nb-btn-ghost" aria-label="Generate a strong password" title="Generate a strong random password"><svg class="nb-i" aria-hidden="true"><use href="#i-key"/></svg></button>
-            <button id="password-copy" type="button" class="btn nb-btn-ghost nb-copy-btn" aria-label="Copy password" title="Copy the password, to send it separately from the link"><svg class="nb-i" aria-hidden="true"><use href="#i-copy"/></svg></button>
-            <button id="password-reveal" type="button" class="btn nb-btn-ghost" aria-pressed="false" aria-label="Show password"><svg class="nb-i" aria-hidden="true"><use href="#i-eye"/></svg></button>
-            <div id="password-error" class="invalid-feedback">Use at least 8 characters.</div>
-          </div>
-        </div>
         </div>
         </div>
         <div class="nb-toolbar-attachment">
@@ -330,6 +368,58 @@
     </div>
   </section>
 
+  <!-- Burner room -->
+  <section id="room" class="nb-room" aria-labelledby="room-title" hidden>
+    <div id="room-join" class="nb-gate" hidden>
+      <div class="nb-gate-icon"><svg class="nb-i" aria-hidden="true"><use href="#i-users"/></svg></div>
+      <h1 id="room-join-title" class="nb-gate-title" tabindex="-1">You’re invited to a burner room</h1>
+      <p class="nb-gate-text">An end-to-end encrypted group chat. Only invited people can read it, and it deletes itself when time’s up. This invite works once, within an hour of being made.</p>
+      <form id="room-join-form" class="nb-gate-form" novalidate>
+        <label for="room-join-name" class="form-label">Your name</label>
+        <input id="room-join-name" class="form-control" maxlength="40" autocomplete="off" spellcheck="false" autocorrect="off" autocapitalize="off" aria-invalid="false">
+        <p id="room-join-error" class="nb-note nb-tone-danger mt-2" role="alert" hidden></p>
+        <button id="room-join-submit" type="submit" class="btn nb-btn-primary w-100 mt-3">Join</button>
+      </form>
+    </div>
+    <div id="room-chat" class="nb-chat" hidden>
+      <header class="nb-chat-head">
+        <div id="room-avatar" class="nb-chat-avatar" aria-hidden="true">B</div>
+        <div class="nb-chat-heading">
+          <h1 id="room-title" class="nb-chat-title" tabindex="-1">Burner room</h1>
+          <div class="nb-chips nb-chat-sub">
+            <span class="nb-chip nb-chip-ok" title="End-to-end encrypted: only people in this room can read it, not even the server."><svg class="nb-i" aria-hidden="true"><use href="#i-lock"/></svg><span class="nb-wide">End-to-end encrypted</span><span class="nb-narrow">Encrypted</span></span>
+            <button id="room-members-open" type="button" class="nb-chip nb-chip-btn" aria-haspopup="dialog" aria-controls="room-members-dialog" title="Members and safety codes"><svg class="nb-i" aria-hidden="true"><use href="#i-users"/></svg><span id="room-member-count">1 member</span></button>
+            <span id="room-expires" class="nb-chip nb-chip-warn"></span>
+          </div>
+        </div>
+        <div class="nb-chat-tools">
+          <button id="room-invite-open" type="button" class="btn nb-btn-primary nb-chat-invite" aria-haspopup="dialog" aria-controls="room-invite-dialog" hidden><svg class="nb-i" aria-hidden="true"><use href="#i-user-plus"/></svg><span>Invite</span></button>
+          <button id="room-destroy" type="button" class="nb-chat-tool nb-chat-tool-danger" aria-haspopup="dialog" aria-controls="room-destroy-dialog" title="Self-destruct this room" aria-label="Self-destruct this room"><svg class="nb-i" aria-hidden="true"><use href="#i-flame"/></svg></button>
+        </div>
+      </header>
+      <ol id="room-messages" class="nb-chat-log" aria-label="Messages" aria-live="polite"></ol>
+      <div class="nb-chat-dock">
+        <button id="room-jump" type="button" class="nb-chat-jump" aria-label="Go to the latest messages" hidden><svg class="nb-i" aria-hidden="true"><use href="#i-down"/></svg><span id="room-jump-count" class="nb-chat-jump-count" hidden></span></button>
+        <p id="room-status" class="nb-note nb-tone-warn nb-chat-status" role="status" hidden></p>
+        <div class="nb-chat-foot">
+          <div id="room-context" class="nb-chat-context" hidden>
+            <svg class="nb-i" aria-hidden="true"><use href="#i-reply"/></svg>
+            <div class="nb-chat-context-text">
+              <span id="room-context-title" class="nb-chat-context-title"></span>
+              <span id="room-context-quote" class="nb-chat-context-quote" dir="auto"></span>
+            </div>
+            <button id="room-context-cancel" type="button" class="nb-chat-tool" aria-label="Cancel"><svg class="nb-i" aria-hidden="true"><use href="#i-x"/></svg></button>
+          </div>
+          <form id="room-composer" class="nb-chat-composer" novalidate>
+            <label for="room-text" class="visually-hidden">Message</label>
+            <textarea id="room-text" rows="1" maxlength="2000" placeholder="Write a message…" spellcheck="false" autocomplete="off" autocorrect="off" autocapitalize="off" enterkeyhint="send" dir="auto"></textarea>
+            <button id="room-send" type="submit" class="nb-chat-send" aria-label="Send"><svg class="nb-i" aria-hidden="true"><use href="#i-send"/></svg></button>
+          </form>
+        </div>
+      </div>
+    </div>
+  </section>
+
   <!-- Delete a paste -->
   <section id="delete" aria-labelledby="delete-title" hidden>
     <div id="delete-ask" class="nb-gate">
@@ -374,6 +464,48 @@
     <a href="/api/v1/version" class="nb-foot-link" title="This website's version. Opens the server's version details.">Nullbin __NULLBIN_VERSION__</a>
   </nav>
 </footer>
+
+<dialog id="room-destroy-dialog" class="nb-dialog" aria-labelledby="room-destroy-title" aria-describedby="room-destroy-text">
+  <div class="nb-dialog-head">
+    <h2 id="room-destroy-title" class="nb-h2">Self-destruct this room?</h2>
+    <button id="room-destroy-close" type="button" class="btn nb-btn-ghost nb-dialog-close" aria-label="Close"><svg class="nb-i" aria-hidden="true"><use href="#i-x"/></svg></button>
+  </div>
+  <p id="room-destroy-text" class="nb-muted">It ends right now for everyone, with all its messages. This can’t be undone.</p>
+  <p id="room-destroy-error" class="nb-note nb-tone-danger" role="alert" hidden></p>
+  <div class="nb-actions">
+    <button id="room-destroy-cancel" type="button" class="btn nb-btn-secondary" autofocus>Cancel</button>
+    <button id="room-destroy-confirm" type="button" class="btn nb-btn-danger"><svg class="nb-i" aria-hidden="true"><use href="#i-flame"/></svg><span>Self-destruct</span></button>
+  </div>
+</dialog>
+
+<dialog id="room-invite-dialog" class="nb-dialog" aria-labelledby="room-invite-title">
+  <div class="nb-dialog-head">
+    <h2 id="room-invite-title" class="nb-h2">Invite someone</h2>
+    <button id="room-invite-close" type="button" class="btn nb-btn-ghost nb-dialog-close" aria-label="Close"><svg class="nb-i" aria-hidden="true"><use href="#i-x"/></svg></button>
+  </div>
+  <form id="room-invite-form" novalidate>
+    <label for="room-invite-label" class="form-label">Who is this invite for?</label>
+    <input id="room-invite-label" class="form-control" maxlength="40" autocomplete="off" spellcheck="false" autocorrect="off" autocapitalize="off" placeholder="For example, Alex">
+    <button id="room-invite-create" type="submit" class="btn nb-btn-primary w-100 mt-3">Create invite link</button>
+  </form>
+  <div id="room-invite-result" hidden>
+    <p class="nb-muted">Send this link to <strong id="room-invite-who"></strong> only. It works once, within the next hour, and lets them read what is sent in this room from when they join.</p>
+    <p id="room-invite-link" class="nb-link" tabindex="0" aria-label="Invite link"></p>
+    <button id="room-invite-copy" type="button" class="btn nb-btn-primary nb-copy-btn w-100 mt-3"><svg class="nb-i" aria-hidden="true"><use href="#i-copy"/></svg><span>Copy link</span></button>
+    <button id="room-invite-another" type="button" class="btn nb-btn-secondary w-100 mt-2">Invite someone else</button>
+  </div>
+  <p id="room-invite-error" class="nb-note nb-tone-danger mt-2" role="alert" hidden></p>
+</dialog>
+
+<dialog id="room-members-dialog" class="nb-dialog" aria-labelledby="room-members-title">
+  <div class="nb-dialog-head">
+    <h2 id="room-members-title" class="nb-h2">Members</h2>
+    <button id="room-members-close" type="button" class="btn nb-btn-ghost nb-dialog-close" aria-label="Close"><svg class="nb-i" aria-hidden="true"><use href="#i-x"/></svg></button>
+  </div>
+  <p class="nb-muted">To be sure nobody is posing as someone, compare a person’s code with the one they see, in person or on a call.</p>
+  <p id="room-members-error" class="nb-note nb-tone-danger" role="alert" hidden></p>
+  <ul id="room-member-list" class="nb-member-list"></ul>
+</dialog>
 
 <dialog id="qr-dialog" class="nb-dialog" aria-labelledby="qr-title" aria-describedby="qr-description">
   <div class="nb-dialog-head">

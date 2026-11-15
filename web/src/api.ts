@@ -320,3 +320,150 @@ export async function fetchComments(id: string, commentToken: string): Promise<U
   }
   return out;
 }
+
+// --- Burner rooms ---
+
+export interface RoomCreated {
+  id: string;
+  ownerToken: string;
+  memberToken: string;
+}
+
+/** Starts a room that lasts expiresIn seconds: one of 300, 1800, 3600, 10800, 43200, 86400, 259200 or 604800. */
+export async function createRoom(expiresIn: number): Promise<RoomCreated> {
+  const resp = await fetch(apiURL('/api/v1/rooms'), {
+    ...base, signal: AbortSignal.timeout(REQUEST_MS),
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ expires_in: expiresIn }),
+  });
+  if (resp.status !== 201) throw await errorFrom(resp);
+  const v = (await resp.json()) as Record<string, unknown>;
+  const { id, owner_token: owner, member_token: member, slot } = v;
+  if (typeof id !== 'string' || !ID.test(id) || typeof owner !== 'string' || !TOKEN.test(owner) || typeof member !== 'string' || !TOKEN.test(member) || slot !== 0) {
+    throw new Error('The server sent an invalid response.');
+  }
+  return { id, ownerToken: owner, memberToken: member };
+}
+
+const ROOM_SLOTS = 20;
+const validSlot = (n: unknown, min: number): n is number => typeof n === 'number' && Number.isInteger(n) && n >= min && n < ROOM_SLOTS;
+
+/** Makes a single-use invite (owner only). */
+export async function createInvite(id: string, ownerToken: string): Promise<{ token: string; slot: number }> {
+  const resp = await fetch(apiURL(`/api/v1/rooms/${id}/invites`), {
+    ...base, signal: AbortSignal.timeout(REQUEST_MS),
+    method: 'POST',
+    headers: { 'Nullbin-Owner-Token': ownerToken },
+  });
+  if (resp.status !== 201) throw await errorFrom(resp);
+  const v = (await resp.json()) as Record<string, unknown>;
+  const { invite_token: token, slot } = v;
+  if (typeof token !== 'string' || !TOKEN.test(token) || !validSlot(slot, 1)) throw new Error('The server sent an invalid response.');
+  return { token, slot };
+}
+
+/** Uses an invite. It works once. */
+export async function joinRoom(id: string, inviteToken: string): Promise<{ memberToken: string; slot: number }> {
+  const resp = await fetch(apiURL(`/api/v1/rooms/${id}/join`), {
+    ...base, signal: AbortSignal.timeout(REQUEST_MS),
+    method: 'POST',
+    headers: { 'Nullbin-Invite-Token': inviteToken },
+  });
+  if (resp.status !== 200) throw await errorFrom(resp);
+  const v = (await resp.json()) as Record<string, unknown>;
+  const { member_token: token, slot } = v;
+  if (typeof token !== 'string' || !TOKEN.test(token) || !validSlot(slot, 1)) throw new Error('The server sent an invalid response.');
+  return { memberToken: token, slot };
+}
+
+/** Posts one encrypted record. */
+export async function postRecord(id: string, memberToken: string, data: Uint8Array<ArrayBuffer>): Promise<void> {
+  const resp = await fetch(apiURL(`/api/v1/rooms/${id}/records`), {
+    ...base, signal: AbortSignal.timeout(REQUEST_MS),
+    method: 'POST',
+    headers: { 'Content-Type': 'application/octet-stream', 'Nullbin-Member-Token': memberToken },
+    body: data,
+  });
+  if (resp.status !== 201) throw await errorFrom(resp);
+  await resp.body?.cancel();
+}
+
+export interface RoomRecords {
+  records: { from: number; data: Uint8Array }[];
+  next: number;
+  expiresIn: number;
+}
+
+/** Fetches the records after the first `after`, in server order. */
+export async function fetchRecords(id: string, memberToken: string, after: number): Promise<RoomRecords> {
+  const resp = await fetch(apiURL(`/api/v1/rooms/${id}/records?after=${after}`), {
+    ...base, signal: AbortSignal.timeout(REQUEST_MS),
+    method: 'GET',
+    headers: { 'Nullbin-Member-Token': memberToken },
+  });
+  if (resp.status !== 200) throw await errorFrom(resp);
+  const v = (await resp.json()) as Record<string, unknown>;
+  const { records, next, expires_in: left } = v;
+  if (!Array.isArray(records) || records.length > 200 || typeof next !== 'number' || !Number.isSafeInteger(next) || next !== after + records.length ||
+    typeof left !== 'number' || !Number.isSafeInteger(left) || left < 0 || left > 8 * 24 * 3600) {
+    throw new Error('The server sent an invalid response.');
+  }
+  const out: { from: number; data: Uint8Array }[] = [];
+  for (const item of records as unknown[]) {
+    const r = (typeof item === 'object' && item !== null ? item : {}) as Record<string, unknown>;
+    const from = r['from'];
+    const data = r['data'];
+    if (!validSlot(from, 0) || typeof data !== 'string' || data.length > 22 * 1024) throw new Error('The server sent an invalid response.');
+    let bytes: Uint8Array;
+    try {
+      bytes = Uint8Array.from(atob(data), (c) => c.charCodeAt(0));
+    } catch {
+      throw new Error('The server sent an invalid response.');
+    }
+    out.push({ from, data: bytes });
+  }
+  return { records: out, next, expiresIn: left };
+}
+
+export type SlotState = 'invited' | 'joined' | 'removed' | 'expired';
+
+/** Every used slot's state, for the owner. */
+export async function fetchMembers(id: string, ownerToken: string): Promise<Map<number, SlotState>> {
+  const resp = await fetch(apiURL(`/api/v1/rooms/${id}/members`), {
+    ...base, signal: AbortSignal.timeout(REQUEST_MS),
+    method: 'GET',
+    headers: { 'Nullbin-Owner-Token': ownerToken },
+  });
+  if (resp.status !== 200) throw await errorFrom(resp);
+  const v = (await resp.json()) as Record<string, unknown>;
+  const members = v['members'];
+  if (typeof members !== 'object' || members === null || Array.isArray(members)) throw new Error('The server sent an invalid response.');
+  const out = new Map<number, SlotState>();
+  for (const [k, state] of Object.entries(members)) {
+    const n = Number(k);
+    if (!/^\d{1,2}$/.test(k) || !validSlot(n, 0) || (state !== 'invited' && state !== 'joined' && state !== 'removed' && state !== 'expired')) throw new Error('The server sent an invalid response.');
+    out.set(n, state);
+  }
+  return out;
+}
+
+/** Closes a member's slot for good (owner only). */
+export async function removeMember(id: string, ownerToken: string, slot: number): Promise<void> {
+  const resp = await fetch(apiURL(`/api/v1/rooms/${id}/members/${slot}/remove`), {
+    ...base, signal: AbortSignal.timeout(REQUEST_MS),
+    method: 'POST',
+    headers: { 'Nullbin-Owner-Token': ownerToken },
+  });
+  if (resp.status !== 204) throw await errorFrom(resp);
+}
+
+/** Self-destructs the room for everyone. Any member can. */
+export async function destroyRoom(id: string, memberToken: string): Promise<void> {
+  const resp = await fetch(apiURL(`/api/v1/rooms/${id}`), {
+    ...base, signal: AbortSignal.timeout(REQUEST_MS),
+    method: 'DELETE',
+    headers: { 'Nullbin-Member-Token': memberToken },
+  });
+  if (resp.status !== 204) throw await errorFrom(resp);
+}

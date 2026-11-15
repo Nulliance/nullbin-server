@@ -349,7 +349,10 @@ input.form-control, select.form-select { height: var(--nb-control-height); }
 body.nb-in-room .nb-foot { display: none; }
 body.nb-in-room .nb-main { display: flex; flex-direction: column; padding-top: 0; padding-bottom: 0; }
 body.nb-in-room #room { display: flex; flex: 1; flex-direction: column; }
-#room { max-width: none; }
+/* One centred column of reading width, as in messaging apps on a desktop:
+   on a wide screen, your messages (on the right) and everyone else's (on
+   the left) stay close enough to read as one conversation. */
+#room { width: 100%; max-width: 860px; margin-inline: auto; }
 .nb-chat { --nb-top-h: 53px; --nb-head-h: 69px; display: flex; flex: 1; flex-direction: column; min-height: calc(100dvh - var(--nb-top-h)); }
 .nb-chat[hidden] { display: none; }
 

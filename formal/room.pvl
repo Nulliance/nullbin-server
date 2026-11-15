@@ -1,0 +1,136 @@
+(* A ProVerif model of the burner room protocol's core (ROOM_PROTOCOL.md):
+   the creator's invites and admits, joining with an invite proof, chain key
+   deliveries and messages. Shared by member.pv and outsider.pv; run with
+     proverif -lib formal/room formal/member.pv
+     proverif -lib formal/room formal/outsider.pv
+
+   The attacker is the server: it controls every record (sees, drops,
+   replays, reorders, stamps any place as sender) and always holds the room
+   key, so control records are modelled in the clear. Places 1 and 2 are
+   honest members (Alice and Bob); place 3's invite is either unused
+   (outsider.pv) or in the attacker's hands, so the attacker is a member too
+   (member.pv).
+
+   Abstractions: each chain goes to two members (honest ones, or the
+   attacker), with one message on it (stepping the chain is modelled for
+   forward secrecy only); the creator (place 0) does not send messages;
+   padding, schemas, record ids, removal and the warnings of section 8 are
+   left out (the unit tests and the fuzzer cover them). *)
+
+free c: channel.
+
+type skey.
+type pkey.
+type bskey.
+type bpkey.
+
+(* Ed25519. A signature reveals what it signs (the record is sent anyway). *)
+fun spk(skey): pkey.
+fun sign(bitstring, skey): bitstring.
+reduc forall m: bitstring, k: skey; verify(sign(m, k), m, spk(k)) = true.
+
+(* X25519 sealed boxes (crypto_box_seal). *)
+fun bpk(bskey): bpkey.
+fun seal(bitstring, bpkey): bitstring.
+reduc forall m: bitstring, k: bskey; unseal(seal(m, bpk(k)), k) = m.
+
+(* XChaCha20-Poly1305 with additional data. *)
+fun aead(bitstring, bitstring, bitstring): bitstring.
+reduc forall m: bitstring, k: bitstring, ad: bitstring; aeadOpen(aead(m, k, ad), k, ad) = m.
+
+(* crypto_kdf and keyed BLAKE2b: one-way. *)
+fun msgKey(bitstring): bitstring.
+fun nextKey(bitstring): bitstring.
+fun keyhash(bitstring, bitstring): bitstring.
+
+(* Record types and places. *)
+const tJoin, tAdmit, tKeys, tMsg, tName: bitstring.
+const s0, s1, s2, s3: bitstring.
+
+(* The roster key and a message only Alice and Bob should ever read. *)
+free roster: bitstring [private].
+free secretMsg: bitstring [private].
+
+event Joining(bitstring, pkey, bpkey).        (* an honest joiner announces its keys for a place *)
+event Admitted(bitstring, pkey, bpkey).       (* the creator admits keys for a place *)
+event AcceptMember(bitstring, bitstring, pkey). (* reader, place, key: a tab takes someone as a member *)
+event Sent(bitstring, bitstring, bitstring).    (* sender, recipient, text *)
+event Received(bitstring, bitstring, bitstring). (* reader, sender, text *)
+
+(* The creator admits one join per place, ever, and only with a valid
+   proof under that place's invite secret. The admit carries the roster key
+   sealed to the joiner's receiving key, bound to the place. *)
+let Admit(sk0: skey, j: bitstring, is: bitstring) =
+  in(c, (=j, =tJoin, kj: pkey, bj: bpkey, prf: bitstring, sigj: bitstring));
+  if verify(sigj, (j, tJoin, kj, bj, prf), kj) then
+  if prf = keyhash((j, kj, bj), is) then
+  event Admitted(j, kj, bj);
+  let adm = (tAdmit, j, kj, seal((roster, j), bj)) in
+  out(c, (s0, adm, sign((s0, adm), sk0))).
+
+(* A sender delivers one fresh chain key to two members the creator
+   admitted (the same chain, as in the real protocol, where every member
+   gets it; either may be the attacker), each sealed to the receiving key in
+   that member's own signed join and bound to both places, with one
+   commitment; then sends one message on it. *)
+let Deliver(a: bitstring, ska: skey, pk0: pkey, b1: bitstring, b2: bitstring, text: bitstring) =
+  in(c, (=s0, (=tAdmit, =b1, k1: pkey, r1: bitstring), sa1: bitstring));
+  if verify(sa1, (s0, (tAdmit, b1, k1, r1)), pk0) then
+  in(c, (=b1, =tJoin, =k1, box1: bpkey, p1: bitstring, sj1: bitstring));
+  if verify(sj1, (b1, tJoin, k1, box1, p1), k1) then
+  in(c, (=s0, (=tAdmit, =b2, k2: pkey, r2: bitstring), sa2: bitstring));
+  if verify(sa2, (s0, (tAdmit, b2, k2, r2)), pk0) then
+  in(c, (=b2, =tJoin, =k2, box2: bpkey, p2: bitstring, sj2: bitstring));
+  if verify(sj2, (b2, tJoin, k2, box2, p2), k2) then
+  new ck: bitstring;
+  let keys = (tKeys, a, b1, seal((ck, a, b1), box1), b2, seal((ck, a, b2), box2), keyhash(a, ck)) in
+  out(c, (a, keys, sign((a, keys), ska)));
+  event Sent(a, b1, text);
+  event Sent(a, b2, text);
+  let body = (tMsg, a, aead(text, msgKey(ck), a)) in
+  out(c, (a, body, sign((a, body), ska))).
+
+(* Once a reader has its entry of a delivery: the chain key must be sealed
+   to it and bound to the sender and itself, and match the commitment; the
+   message must be signed by the sender. After reading, it replaces its
+   receiving key; then (phase 1) its device is taken: the attacker gets its
+   signing key, its newest receiving key and the stepped chain key. *)
+let ReadOn(b: bitstring, skb: skey, bb: bskey, a: bitstring, ka: pkey, sealed: bitstring, commit: bitstring) =
+  let (ck: bitstring, =a, =b) = unseal(sealed, bb) in
+  if commit = keyhash(a, ck) then
+  in(c, (=a, (=tMsg, =a, ct: bitstring), sigm: bitstring));
+  if verify(sigm, (a, (tMsg, a, ct)), ka) then
+  let text = aeadOpen(ct, msgKey(ck), a) in
+  event Received(b, a, text);
+  new bbNext: bskey;
+  phase 1;
+  out(c, (skb, bbNext, nextKey(ck))).
+
+(* A reader takes as members only keys in the creator's admits, and chain
+   keys only in deliveries they signed. *)
+let Read(b: bitstring, skb: skey, bb: bskey, pk0: pkey) =
+  in(c, (=s0, (=tAdmit, a: bitstring, ka: pkey, sro: bitstring), sigad: bitstring));
+  if verify(sigad, (s0, (tAdmit, a, ka, sro)), pk0) then
+  event AcceptMember(b, a, ka);
+  in(c, (=a, (=tKeys, =a, x1: bitstring, e1: bitstring, x2: bitstring, e2: bitstring, commit: bitstring), sigk: bitstring));
+  if verify(sigk, (a, (tKeys, a, x1, e1, x2, e2, commit)), ka) then
+  if x1 = b then ReadOn(b, skb, bb, a, ka, e1, commit)
+  else if x2 = b then ReadOn(b, skb, bb, a, ka, e2, commit).
+
+(* An honest joiner for place j: new keys, a join proving it holds the
+   invite secret, then it reads, and sends on fresh chains to anyone the
+   creator admitted. Alice also sends the secret message, to place 2 only. *)
+let Member(j: bitstring, is: bitstring, pk0: pkey) =
+  new skj: skey;
+  new bj: bskey;
+  let prf = keyhash((j, spk(skj), bpk(bj)), is) in
+  event Joining(j, spk(skj), bpk(bj));
+  out(c, (j, tJoin, spk(skj), bpk(bj), prf, sign((j, tJoin, spk(skj), bpk(bj), prf), skj)));
+  (
+    (! Read(j, skj, bj, pk0))
+  | (! in(c, (b1: bitstring, b2: bitstring)); new text: bitstring; Deliver(j, skj, pk0, b1, b2, text))
+  | (if j = s1 then Deliver(j, skj, pk0, s2, s2, secretMsg))
+  ).
+
+(* Who was admitted, and who reads what, are checked in member.pv and
+   outsider.pv. *)

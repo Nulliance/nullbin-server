@@ -1247,6 +1247,15 @@ npm run test:browser
 NB_TEST_SPLIT=1 npm run test:browser
 ```
 
+`npm test` includes a fuzzer for burner rooms: a malicious member who also
+runs the server tampers with every room, and each tab must still show only
+admitted members, only what people said, keys that only move forward and
+every warning it raised. Run it longer with
+`NB_ROOM_FUZZ_ROUNDS=2000 node --test web/test/room-fuzz.test.ts`.
+The room protocol is specified in [ROOM_PROTOCOL.md](ROOM_PROTOCOL.md),
+with a [ProVerif](https://bblanche.gitlabpages.inria.fr/proverif/) model of
+its core in `formal/` (section 10 there says how to run it).
+
 Browser tests need Chrome (set `CHROME_PATH` to choose one). They cover
 every feature under the real security policy, in both layouts. CI also
 tests both Compose deployments over HTTPS. See

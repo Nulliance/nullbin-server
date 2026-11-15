@@ -1,0 +1,33 @@
+(* The attacker runs the server and holds the room key (any invite link
+   carries it) but no invite secret: place 3's invite was never used. Run with
+     proverif -lib formal/room formal/outsider.pv *)
+
+(* G3: nobody but the honest joiners is admitted, for any place. *)
+query k: pkey, b: bpkey; event(Admitted(s1, k, b)) ==> event(Joining(s1, k, b)).
+query k: pkey, b: bpkey; event(Admitted(s2, k, b)) ==> event(Joining(s2, k, b)).
+query k: pkey, b: bpkey; event(Admitted(s3, k, b)) ==> event(Joining(s3, k, b)).
+
+(* G2 *)
+query r: bitstring, t: bitstring; event(Received(r, s1, t)) ==> event(Sent(s1, r, t)).
+query r: bitstring, t: bitstring; event(Received(r, s2, t)) ==> event(Sent(s2, r, t)).
+
+(* G1, G4 and G6: messages and the roster key (which hides every name) stay
+   secret. *)
+query attacker(secretMsg).
+query attacker(roster).
+
+(* Sanity: the honest run happens. ProVerif must answer "false" here, with
+   a trace: Bob reads Alice's message, and both are admitted. A "true"
+   would mean the model never gets that far, and the results above prove
+   nothing. *)
+query event(Received(s2, s1, secretMsg)).
+query k: pkey, b: bpkey; event(Admitted(s2, k, b)).
+
+process
+  new sk0: skey;
+  new is1: bitstring;
+  new is2: bitstring;
+  new is3: bitstring;
+  out(c, spk(sk0));
+  ( Admit(sk0, s1, is1) | Admit(sk0, s2, is2) | Admit(sk0, s3, is3)
+  | Member(s1, is1, spk(sk0)) | Member(s2, is2, spk(sk0)) )

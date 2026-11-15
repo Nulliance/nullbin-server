@@ -119,7 +119,24 @@ a { text-underline-offset: 2px; }
 input, textarea { caret-color: var(--nb-ink); }
 .nb-sprite { position: absolute; width: 0; height: 0; overflow: hidden; }
 .nb-i { width: 1em; height: 1em; flex: none; fill: none; stroke: currentColor; stroke-width: 1.75; stroke-linecap: round; stroke-linejoin: round; vertical-align: -.15em; }
-.nb-shell { width: 100%; max-width: 1400px; margin-inline: auto; padding-inline: 20px; }
+.nb-shell { width: 100%; max-width: var(--nb-shell-max, 1400px); margin-inline: auto; padding-inline: 20px; }
+/* Burner rooms use a narrower column, the top bar included, so it lines up
+   with the chat. Switching to it, or back, eases the width instead of
+   jumping (only after a click: pages never animate as they load). */
+body.nb-room-mode, body.nb-in-room { --nb-shell-max: 900px; }
+html.nb-animate .nb-shell { transition: max-width .35s cubic-bezier(.2, .7, .2, 1); }
+@media (prefers-reduced-motion: reduce) { html.nb-animate .nb-shell { transition: none; } }
+/* What appears (reveal() in dom.ts) fades in quickly; what a tab replaces
+   fades out first. */
+.nb-enter { animation: nb-enter .2s cubic-bezier(.2, .7, .2, 1) both; }
+.nb-leave { animation: nb-leave .12s ease-in both; pointer-events: none; }
+/* More options shows its fields in the form's own grid (display: contents),
+   so they fade in one by one instead of as a box. */
+.nb-more-options.nb-enter { animation: none; }
+.nb-more-options.nb-enter > * { animation: nb-enter .2s cubic-bezier(.2, .7, .2, 1) both; }
+@keyframes nb-enter { from { opacity: 0; } to { opacity: 1; } }
+@keyframes nb-leave { from { opacity: 1; } to { opacity: 0; } }
+@media (prefers-reduced-motion: reduce) { .nb-enter, .nb-leave, .nb-more-options.nb-enter > * { animation: none; } }
 .nb-main { flex: 1; padding-top: 16px; padding-bottom: 24px; }
 .nb-main:focus, .nb-display:focus, .nb-gate-title:focus { outline: none; }
 .nb-muted, .nb-meta { color: var(--nb-muted); }
@@ -349,10 +366,9 @@ input.form-control, select.form-select { height: var(--nb-control-height); }
 body.nb-in-room .nb-foot { display: none; }
 body.nb-in-room .nb-main { display: flex; flex-direction: column; padding-top: 0; padding-bottom: 0; }
 body.nb-in-room #room { display: flex; flex: 1; flex-direction: column; }
-/* One centred column of reading width, as in messaging apps on a desktop:
-   on a wide screen, your messages (on the right) and everyone else's (on
-   the left) stay close enough to read as one conversation. */
-#room { width: 100%; max-width: 860px; margin-inline: auto; }
+/* The room fills the shell, which is one centred column of reading width
+   in a room (body.nb-in-room), as in messaging apps on a desktop. */
+#room { width: 100%; max-width: none; }
 .nb-chat { --nb-top-h: 53px; --nb-head-h: 69px; display: flex; flex: 1; flex-direction: column; min-height: calc(100dvh - var(--nb-top-h)); }
 .nb-chat[hidden] { display: none; }
 

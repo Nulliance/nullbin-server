@@ -15,9 +15,48 @@ export function show(e: HTMLElement, visible = true): void {
 /** Shows an element with a short entrance animation (skipped for reduced motion in CSS). */
 export function reveal(e: HTMLElement): void {
   e.hidden = false;
-  e.classList.remove('nb-enter');
+  e.classList.remove('nb-enter', 'nb-leave');
   void e.offsetWidth; // restart the animation
   e.classList.add('nb-enter');
+}
+
+/** Shows or hides an element; one that appears fades in (reveal). */
+export function fade(e: HTMLElement, visible: boolean): void {
+  if (visible && e.hidden) reveal(e);
+  else show(e, visible);
+}
+
+/** True when the reader asked for less motion. */
+export function reducedMotion(): boolean {
+  return window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+}
+
+/**
+ * Swaps one element for another: the old one fades out quickly, then the
+ * new one fades in. `token` is a counter the caller bumps on every swap, so
+ * a quick second swap wins over one still fading out.
+ */
+export function swap(from: HTMLElement | null, to: HTMLElement, token: () => number): void {
+  if (!from || from === to || from.hidden || reducedMotion()) {
+    if (from && from !== to) show(from, false);
+    reveal(to);
+    return;
+  }
+  const mine = token();
+  from.classList.remove('nb-enter');
+  from.classList.add('nb-leave');
+  let finished = false;
+  const done = () => {
+    if (finished) return;
+    finished = true;
+    if (mine !== token()) return; // a newer swap owns these elements now
+    from.classList.remove('nb-leave');
+    show(from, false);
+    reveal(to);
+  };
+  from.addEventListener('animationend', done, { once: true });
+  // In case the animation never runs (a background tab), finish anyway.
+  setTimeout(done, 200);
 }
 
 const SECTIONS = ['create', 'result', 'view', 'room', 'delete', 'problem'];

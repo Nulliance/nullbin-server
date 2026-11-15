@@ -41,6 +41,8 @@ const path = window.location.pathname;
 const view = /^\/p\/([0-9a-f]{32})$/.exec(path);
 const del = /^\/d\/([0-9a-f]{32})$/.exec(path);
 const room = /^\/r\/([0-9a-f]{32})$/.exec(path);
+// A room's page starts in its narrower column, so nothing jumps once it opens.
+if (room) document.body.classList.add('nb-room-mode');
 
 if (misconfigured) {
   showProblem('This copy of Nullbin is set up wrongly', 'The website is missing security headers it needs, or is shown inside another page, so it will not open or create anything. If you run this site, serve it with the headers from its build (see the README).');

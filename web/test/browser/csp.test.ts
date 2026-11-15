@@ -1197,7 +1197,8 @@ test('burner room: create, invite once, chat, reply, react, edit, unsend, remove
   const a = await open();
   await goto(a, `${origin}/`);
   await a.page.click('#tab-room');
-  assert.ok(await a.page.isVisible('#room-create-form'));
+  // The paste form fades out, then the room form fades in.
+  await a.page.waitForSelector('#room-create-form', { state: 'visible' });
   assert.equal(await a.page.isVisible('#create-form'), false);
   await a.page.click('#room-create-submit');
   await a.page.waitForSelector('#room-create-error:not([hidden])');

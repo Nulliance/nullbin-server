@@ -26,7 +26,7 @@ import {
   type SlotState,
 } from './api.ts';
 import { cleanName } from './comments.ts';
-import { announce, bindCopy, busy, copyText, el, formatCountdown, reveal, show, showProblem, showSection } from './dom.ts';
+import { announce, bindCopy, busy, copyText, el, formatCountdown, reveal, show, showProblem, showSection, swap } from './dom.ts';
 import { encodeInviteFragment, parseInviteFragment } from './link.ts';
 import {
   MAX_BOX_N,
@@ -253,12 +253,27 @@ async function postControl(sodium: Sodium, key: Uint8Array, id: string, slot: nu
 export function initRoomCreate(): void {
   const tabs = [el<HTMLButtonElement>('tab-paste'), el<HTMLButtonElement>('tab-room')];
   const panels = [el('create-form'), el('room-create-form')];
+  let selected = 0;
+  let swaps = 0;
   const select = (i: number, focus: boolean) => {
+    if (i === selected) {
+      if (focus) tabs[i]!.focus();
+      return;
+    }
+    const from = panels[selected]!;
+    selected = i;
     tabs.forEach((t, j) => {
       t.setAttribute('aria-selected', String(i === j));
       t.tabIndex = i === j ? 0 : -1;
-      show(panels[j]!, i === j);
     });
+    // The old panel fades out, then the new one fades in. Switching back
+    // while that runs wins at once.
+    swaps++;
+    const mine = swaps;
+    swap(from, panels[i]!, () => (mine === swaps ? mine : -1));
+    // The page narrows to the room's column, or widens back, smoothly.
+    document.documentElement.classList.add('nb-animate');
+    document.body.classList.toggle('nb-room-mode', i === 1);
     if (focus) tabs[i]!.focus();
   };
   tabs.forEach((t, i) => {

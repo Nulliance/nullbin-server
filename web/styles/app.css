@@ -107,9 +107,10 @@
   }
 }
 
-/* The scrollbar's space is always kept, so pages of different lengths
-   have exactly the same width. */
-html { scrollbar-gutter: stable; }
+/* On wider screens the scrollbar's space is always kept, so pages of
+   different lengths have exactly the same width. Narrow screens need every
+   pixel for their content (and phones draw scrollbars over the page). */
+@media (min-width: 768px) { html { scrollbar-gutter: stable; } }
 body { display: flex; flex-direction: column; min-height: 100vh; }
 [hidden] { display: none !important; }
 a { text-underline-offset: 2px; }

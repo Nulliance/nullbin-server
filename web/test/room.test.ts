@@ -1220,6 +1220,8 @@ test('private-use characters, digits and suffixes do not get round the name rule
   assert.equal(cleanName(`Adm${cp(0xe000)}in`), 'Admin');
   assert.equal(cleanName(`Y${cp(0xe000)}ou`), 'You');
   assert.equal(cleanName(`Bo${cp(0xf0000)}b`), 'Bob');
+  // Recent emoji stay, whatever Unicode version a member's browser has.
+  assert.equal(cleanName(`Ada ${cp(0x1face)}`), `Ada ${cp(0x1face)}`);
   for (const bad of [`Adm${cp(0xe000)}in`, 'Admin2', 'Owner2', 'Moderator2', '0wner', 'The creator2', 'The creator (real)', 'Member 3x', 'Member3b']) {
     assert.ok(!nameAllowed(cleanName(bad)), JSON.stringify(bad));
   }

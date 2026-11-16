@@ -473,7 +473,8 @@ jobs:
           sudo systemctl disable --now nullbin-update-check.timer
           sudo ./nullbin start
           test "$(systemctl is-enabled nullbin-update-check.timer)" = disabled
-          test "$(wc -l < /var/lib/nullbin-update-check/calls)" -eq 1
+          # The service writes with umask 077, so only it (and root) can read this.
+          test "$(sudo cat /var/lib/nullbin-update-check/calls | wc -l)" -eq 1
       - name: IPv6 visitors keep their own address
         run: |
           set -x

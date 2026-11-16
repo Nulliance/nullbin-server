@@ -1490,7 +1490,8 @@ test('the menu: one link per service, the current one marked; phones get a full-
   assert.equal(await h.page.getAttribute('#nav-overlay [data-nav="chat"]', 'aria-current'), 'page');
   await h.page.keyboard.press('Escape');
   await h.page.waitForSelector('#nav-overlay:not([open])', { state: 'attached' });
-  assert.equal(await h.page.getAttribute('#nav-menu', 'aria-expanded'), 'false');
+  // (The dialog's close event, which resets this, comes just after.)
+  await h.page.waitForSelector('#nav-menu[aria-expanded="false"]');
   // From a page of another kind the links simply lead to each service.
   await h.page.setViewportSize({ width: 1280, height: 800 });
   await goto(h, `${origin}/p/${'0'.repeat(32)}`);

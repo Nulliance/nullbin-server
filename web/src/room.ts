@@ -8,7 +8,9 @@
 // keeps it; closing the tab ends it (unless the browser restores the tab).
 // Message keys are deleted once used, and receiving keys soon after they are
 // replaced, so after a reload only new messages can be read. Invites are
-// single use and work for an hour; the creator's tab lets each joiner in
+// single use, work for the chat's invite lifetime (5 to 60 minutes) and
+// can be revoked; a chat may also need a password and has a member limit.
+// The creator's tab lets each joiner in
 // (THREAT_MODEL.md R25 says what a leaked link can and cannot do).
 // The room opens in one tab at a time: a duplicated tab would send with the
 // same keys.

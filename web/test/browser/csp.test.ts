@@ -263,6 +263,17 @@ async function unlock(page: Page, password: string) {
 const ID = '[0-9a-f]{32}';
 const KEY = '[A-Za-z0-9_-]{43}';
 
+test('the page carries its Content-Security-Policy as a meta tag too, equal to the header', async () => {
+  // A proxy that strips the header must leave the policy enforced.
+  const resp = await fetch(`${origin}/`);
+  const header = resp.headers.get('content-security-policy') ?? '';
+  const html = await resp.text();
+  const metas = [...html.matchAll(/<meta http-equiv="Content-Security-Policy" content="([^"]*)">/g)].map((m) => m[1]);
+  assert.equal(metas.length, 1);
+  assert.equal(metas[0], header.replace("frame-ancestors 'none'; ", ''));
+  assert.ok(html.indexOf('http-equiv="Content-Security-Policy"') < html.indexOf('<link'), 'before any stylesheet');
+});
+
 test('negative control: the harness detects CSP violations', async () => {
   const h = await open();
   await goto(h, `${origin}/`);

@@ -3,6 +3,8 @@
 package server
 
 import (
+	"errors"
+	"io/fs"
 	"strings"
 	"testing"
 
@@ -15,6 +17,11 @@ import (
 // browsers ignore in a meta tag), and come before any script or stylesheet.
 func TestEmbeddedPageCarriesTheContentSecurityPolicy(t *testing.T) {
 	b, err := assets.Load()
+	if errors.Is(err, fs.ErrNotExist) {
+		// Go tests may run before the website is built; the browser tests,
+		// which always use a built server, check the same thing.
+		t.Skip("the website is not built (npm run build)")
+	}
 	if err != nil {
 		t.Fatal(err)
 	}

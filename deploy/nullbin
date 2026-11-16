@@ -316,6 +316,9 @@ $changes" >&2
     echo "Building and starting Nullbin $version. The first build takes a few minutes."
     VERSION=$version "${compose[@]}" up -d --build --remove-orphans --wait --wait-timeout 600
     echo "Nullbin $version is running."
+    if ! install_update_notices "$version"; then
+      echo "Warning: could not set up hourly update notices. Check the systemd logs; you can still update with sudo ./nullbin update." >&2
+    fi
     if [[ ${settings[CLOUDFLARE]:-false} != false && $cmd != cloudflare ]]; then
       echo "Cloudflare mode is on. For its certificate and Cloudflare's SSL setting, run: sudo ./nullbin cloudflare"
     fi
@@ -344,6 +347,65 @@ $changes" >&2
     slug=$(repo_slug) || return 1
     curl -fsSL "https://api.github.com/repos/$slug/releases/latest" |
       grep -o '"tag_name": *"[^"]*"' | head -n 1 | cut -d '"' -f 4
+  }
+
+  # Publish root-owned copies, never run code from a user's checkout on a
+  # root-owned schedule. Read checkout files as their owner, like setup.
+  install_host_file() {
+    local source=$1 target=$2 mode=$3 tmp
+    tmp=$(mktemp "${target}.XXXXXX") || return 1
+    if ! as_owner cat -- "$deploy/$source" > "$tmp" || ! chmod "$mode" "$tmp" || ! mv -fT -- "$tmp" "$target"; then
+      rm -f -- "$tmp"
+      return 1
+    fi
+  }
+
+  install_update_notices() {
+    local version=$1 slug first=false tmp
+    if [[ ! -d /run/systemd/system ]] || ! command -v systemd-sysusers >/dev/null; then
+      echo "Hourly update notices need systemd; skipped on this host." >&2
+      return 0
+    fi
+    slug=$(repo_slug) || { echo "Hourly update notices need a GitHub origin; skipped." >&2; return 0; }
+    # Only official stable versions participate. Development builds must not
+    # be mistaken for an old release or insert arbitrary tag text in config.
+    [[ ${#version} -le 64 && $version =~ ^v(0|[1-9][0-9]*)[.](0|[1-9][0-9]*)[.](0|[1-9][0-9]*)$ ]] || version=development
+    [[ -e /etc/systemd/system/nullbin-update-check.timer ]] || first=true
+    install -d -m 0755 /usr/local/libexec /etc/sysusers.d || return 1
+    install_host_file check-update /usr/local/libexec/nullbin-check-update 0755 || return 1
+    install_host_file update-notice /usr/local/libexec/nullbin-update-notice 0755 || return 1
+    install_host_file nullbin-update-check.sysusers /etc/sysusers.d/nullbin-update-check.conf 0644 || return 1
+    systemd-sysusers /etc/sysusers.d/nullbin-update-check.conf || return 1
+    install_host_file nullbin-update-check.service /etc/systemd/system/nullbin-update-check.service 0644 || return 1
+    install_host_file nullbin-update-check.timer /etc/systemd/system/nullbin-update-check.timer 0644 || return 1
+    tmp=$(mktemp /etc/nullbin-update-check.conf.XXXXXX) || return 1
+    if ! printf '%s\n%s\n' "$slug" "$version" > "$tmp" || ! chmod 0644 "$tmp" || ! mv -fT -- "$tmp" /etc/nullbin-update-check.conf; then
+      rm -f -- "$tmp"
+      return 1
+    fi
+    # Ubuntu/Debian PAM shows the notice for SSH and console logins,
+    # regardless of the user's shell. Other hosts use interactive profiles.
+    if [[ -d /etc/update-motd.d ]]; then
+      tmp=$(mktemp /etc/update-motd.d/90-nullbin-update.XXXXXX) || return 1
+      printf '#!/bin/sh\n/usr/local/libexec/nullbin-update-notice || :\n' > "$tmp" || return 1
+      chmod 0755 "$tmp" && mv -fT -- "$tmp" /etc/update-motd.d/90-nullbin-update || return 1
+    else
+      install -d -m 0755 /etc/profile.d || return 1
+      tmp=$(mktemp /etc/profile.d/nullbin-update.sh.XXXXXX) || return 1
+      printf 'case $- in *i*) /usr/local/libexec/nullbin-update-notice || : ;; esac\n' > "$tmp" || return 1
+      chmod 0644 "$tmp" && mv -fT -- "$tmp" /etc/profile.d/nullbin-update.sh || return 1
+    fi
+    systemctl daemon-reload || return 1
+    if [[ $first == true ]]; then
+      systemctl enable --now nullbin-update-check.timer || return 1
+    elif systemctl is-enabled --quiet nullbin-update-check.timer; then
+      systemctl start nullbin-update-check.timer || return 1
+    fi
+    # Also check after a successful start/update, without delaying startup.
+    # A disabled timer stays disabled across starts and version upgrades.
+    if systemctl is-active --quiet nullbin-update-check.timer; then
+      systemctl start --no-block nullbin-update-check.service || return 1
+    fi
   }
 
   # The HTTP status GitHub gives for a release with this tag: 200 if it is

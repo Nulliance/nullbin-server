@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+# Reads cached data only. Called by PAM's MOTD hook (or a login profile).
+# Never source the cache or show arbitrary API response text in a terminal.
+set -euo pipefail
+export LC_ALL=C
+
+config=${1:-/etc/nullbin-update-check.conf}
+cache=${2:-/var/lib/nullbin-update-check}
+[[ -r $config && -r $cache/latest ]] || exit 0
+{
+  IFS= read -r _repository
+  IFS= read -r installed
+} < "$config" || exit 0
+IFS= read -r latest < "$cache/latest" || exit 0
+stable='^v(0|[1-9][0-9]*)[.](0|[1-9][0-9]*)[.](0|[1-9][0-9]*)$'
+[[ ${#installed} -le 64 && ${#latest} -le 64 && $installed =~ $stable && $latest =~ $stable ]] || exit 0
+[[ $latest != "$installed" ]] || exit 0
+[[ $(printf '%s\n' "$installed" "$latest" | sort -V | tail -n 1) == "$latest" ]] || exit 0
+
+printf '\nNullbin update available: %s (installed: %s).\n' "$latest" "$installed"
+printf 'Run sudo ./nullbin update from your Nullbin deploy directory.\n\n'

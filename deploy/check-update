@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+# Runs outside the API container, as the unprivileged systemd service user.
+# The cache contains only a validated stable version, never executable text.
+set -euo pipefail
+export LC_ALL=C
+umask 077
+
+config=${1:-/etc/nullbin-update-check.conf}
+cache=${2:-/var/lib/nullbin-update-check}
+IFS= read -r repository < "$config"
+[[ $repository =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || exit 1
+
+response=$(mktemp "$cache/.response.XXXXXX")
+latest_file=
+trap 'rm -f -- "$response" "$latest_file"' EXIT
+latest_file=$(mktemp "$cache/.latest.XXXXXX")
+# No credentials, paste data or local version are sent to GitHub. A failed
+# check keeps the last successful result; login never waits on the network.
+curl --fail --silent --show-error --location --max-redirs 3 \
+  --proto '=https' --proto-redir '=https' --connect-timeout 5 --max-time 20 \
+  --max-filesize 65536 --output "$response" \
+  "https://api.github.com/repos/$repository/releases/latest"
+latest=$(grep -o '"tag_name":[[:space:]]*"[^"]*"' "$response" | sed 's/^[^:]*:[[:space:]]*"//; s/"$//')
+[[ ${#latest} -le 64 && $latest =~ ^v(0|[1-9][0-9]*)[.](0|[1-9][0-9]*)[.](0|[1-9][0-9]*)$ ]] || exit 1
+printf '%s\n' "$latest" > "$latest_file"
+chmod 0644 "$latest_file"
+mv -f -- "$latest_file" "$cache/latest"

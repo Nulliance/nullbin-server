@@ -219,7 +219,7 @@ jobs:
           NULLBIN_IPV6=false VERSION=v0.0.0-ci docker compose up -d --build --wait --wait-timeout 300
           test "$(docker network inspect nullbin_frontend --format '{{.EnableIPv6}}')" = false
       - name: Lint the nullbin helper script
-        run: shellcheck deploy/nullbin
+        run: shellcheck deploy/nullbin deploy/check-update deploy/update-notice
       - name: Operators can remove a reported paste by ID
         working-directory: deploy
         run: |
@@ -429,6 +429,49 @@ jobs:
           grep -qx 'MAX_PENDING=1024' .env
           test "$(stat -c '%U %a' .env)" = "$(id -un) 600"
           test "$(docker network inspect nullbin_frontend --format '{{.EnableIPv6}}')" = true
+      - name: Hourly release checks and cached login notices
+        working-directory: deploy
+        run: |
+          # start/update installs and enables the timer by default.
+          systemctl is-enabled --quiet nullbin-update-check.timer
+          systemctl is-active --quiet nullbin-update-check.timer
+          test "$(stat -c '%U %a' /usr/local/libexec/nullbin-check-update)" = 'root 755'
+          test "$(stat -c '%U %a' /etc/nullbin-update-check.conf)" = 'root 644'
+          grep -qx v9.9.9 /etc/nullbin-update-check.conf
+          sudo systemd-analyze verify /etc/systemd/system/nullbin-update-check.service /etc/systemd/system/nullbin-update-check.timer
+          sudo systemctl stop nullbin-update-check.service
+          # Exercise the real service sandbox with a fake GitHub response,
+          # so this test needs neither a published release nor network access.
+          sudo install -d -m 0755 /run/nullbin-update-test /etc/systemd/system/nullbin-update-check.service.d
+          trap 'sudo rm -rf /run/nullbin-update-test /etc/systemd/system/nullbin-update-check.service.d; sudo systemctl daemon-reload' EXIT
+          sudo tee /run/nullbin-update-test/curl >/dev/null <<'SH'
+          #!/bin/sh
+          while [ "$#" -gt 0 ]; do
+            if [ "$1" = --output ]; then
+              printf '{"tag_name":"v10.0.0"}\n' > "$2"
+              printf 'request\n' >> /var/lib/nullbin-update-check/calls
+              exit 0
+            fi
+            shift
+          done
+          exit 1
+          SH
+          sudo chmod 0755 /run/nullbin-update-test/curl
+          sudo tee /etc/systemd/system/nullbin-update-check.service.d/test.conf >/dev/null <<'UNIT'
+          [Service]
+          Environment=PATH=/run/nullbin-update-test:/usr/bin:/bin
+          UNIT
+          sudo systemctl daemon-reload
+          sudo systemctl start nullbin-update-check.service
+          test "$(stat -c '%U %a' /var/lib/nullbin-update-check/latest)" = 'nullbin-update-check 644'
+          /usr/local/libexec/nullbin-update-notice | grep -q 'Nullbin update available: v10.0.0 (installed: v9.9.9)'
+          sudo /etc/update-motd.d/90-nullbin-update | grep -q 'sudo ./nullbin update'
+          # Login only reads the cache. Explicitly disabling the timer
+          # must survive another successful start, without another request.
+          sudo systemctl disable --now nullbin-update-check.timer
+          sudo ./nullbin start
+          test "$(systemctl is-enabled nullbin-update-check.timer)" = disabled
+          test "$(wc -l < /var/lib/nullbin-update-check/calls)" -eq 1
       - name: IPv6 visitors keep their own address
         run: |
           set -x

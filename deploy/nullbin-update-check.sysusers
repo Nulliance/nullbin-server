@@ -1,0 +1,2 @@
+# A dedicated account: no login, home directory, Docker or paste-data access.
+u nullbin-update-check - "Nullbin release checker" /nonexistent /usr/sbin/nologin

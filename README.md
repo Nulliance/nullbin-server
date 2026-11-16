@@ -369,9 +369,31 @@ None of these delete pastes, except `delete` for the one paste you name.
 
 ### Update
 
-**To hear about new releases**, open the
-[repository](https://github.com/jacobzymet/nullbin-go) on GitHub and choose
-**Watch → Custom → Releases**. Install security fixes promptly.
+**Update notices are on by default** on systemd Linux servers. After a
+successful `sudo ./nullbin start` or update, the server checks GitHub's
+latest stable release every hour (spread over the first five minutes of
+the hour). If it is newer than the installed version, a notice appears
+when you next log in by SSH or at the console. Updates are never installed
+automatically. Install security fixes promptly.
+
+The checker runs as a dedicated unprivileged user, outside the containers,
+and sends no paste data or local version to GitHub. Login reads a cached
+result, so an unavailable GitHub never delays login; a failed check keeps
+the last successful result. The installed version is refreshed after each
+successful start. Development builds do not show release notices.
+
+Ubuntu/Debian use the login MOTD; on other hosts the notice uses
+`/etc/profile.d` and needs a shell that reads it. Hosts without systemd
+skip these notices. You can also choose **Watch → Custom → Releases** on
+the [repository](https://github.com/jacobzymet/nullbin-go).
+
+To check immediately, run
+`sudo systemctl start nullbin-update-check.service`. To turn off hourly
+checks, run `sudo systemctl disable --now nullbin-update-check.timer`;
+restarts and upgrades respect this choice. Turn them back on with
+`sudo systemctl enable --now nullbin-update-check.timer`. Diagnostics are
+in `journalctl -u nullbin-update-check.service`. Disabling checks leaves
+the last cached result available at login.
 
 1. Read the release's notes on the
    [Releases page](https://github.com/jacobzymet/nullbin-go/releases). They

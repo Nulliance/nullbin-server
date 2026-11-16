@@ -1,4 +1,4 @@
-// Burner room cryptography. Everything here runs in the browser.
+// Null Chat cryptography. Everything here runs in the browser.
 //
 // Two layers:
 //
@@ -63,6 +63,12 @@ export const MESSAGE_MIN_PADDED = 2048;
 /** Must match the server's limit. */
 export const MAX_RECORD_BYTES = 16 * 1024;
 export const MAX_SLOTS = 20;
+/** The smallest member limit a room may set: its creator and one other. */
+export const MIN_MEMBERS = 2;
+/** How long an unused invite may work, in seconds: a room picks one. */
+export const INVITE_TTLS: readonly number[] = [300, 900, 3600];
+/** Longest password accepted (UTF-8 bytes after NFC). */
+export const MAX_ROOM_PASSWORD_BYTES = 1024;
 export const MAX_MESSAGE_LENGTH = 2000;
 export const MAX_NAME_LENGTH = 40;
 export const MAX_ROOM_NAME_LENGTH = 40; // names are cleaned like comment names (40 at most)
@@ -94,13 +100,16 @@ const B64URL_16 = /^[A-Za-z0-9_-]{22}$/;
 
 /** Control records: encrypted with the room key. */
 export type ControlRecord =
-  // name: boxName(roster key, "room"); ends: when the room ends (ms).
-  | { t: 'room'; id: string; time: number; name: string; ends: number }
+  // name: boxName(roster key, "room"); ends: when the room ends (ms); pw:
+  // joins must also prove the room's password; max: the most members at
+  // once, the creator included; ttl: how long an invite works (seconds).
+  | { t: 'room'; id: string; time: number; name: string; ends: number; pw: boolean; max: number; ttl: number }
   // name: the creator's own, boxName(roster key, "member", 0), with namekey,
   // the X25519 key joiners seal their names to; anyone else's, sealName(namekey).
   | { t: 'join'; id: string; time: number; name: string; key: string; box: string; proof?: string; namekey?: string }
   // label: boxName(roster key, "label", slot).
-  | { t: 'invite'; id: string; time: number; slot: number; label: string; check: string }
+  // exp: when the invite stops working (ms, the creator's clock).
+  | { t: 'invite'; id: string; time: number; slot: number; label: string; check: string; exp: number }
   | { t: 'remove'; id: string; time: number; slot: number }
   // roster: the roster key sealed to the member's join key; name: boxName(roster key, "member", slot).
   | { t: 'admit'; id: string; time: number; slot: number; key: string; roster: string; name: string }
@@ -605,8 +614,47 @@ export function encodeKey(sodium: Sodium, key: Uint8Array): string {
  * place and the joiner's keys. The creator admits only joins with a valid
  * proof, so the room key alone cannot take an invited place.
  */
-export function joinProof(sodium: Sodium, secret: Uint8Array, roomId: string, slot: number, key: string, box: string): string {
-  return encodeKey(sodium, sodium.crypto_generichash(32, enc.encode(`nullbin room join v1 ${roomId} ${slot} ${key} ${box}`), secret));
+export function joinProof(sodium: Sodium, secret: Uint8Array, roomId: string, slot: number, key: string, box: string, password: Uint8Array | null = null): string {
+  return encodeKey(sodium, proofHash(sodium, secret, roomId, slot, key, box, password));
+}
+
+/**
+ * The proof's hash. In a room with a password, it is keyed by the invite's
+ * secret and the password key together, under its own label: the link
+ * alone (or the password alone) proves nothing.
+ */
+function proofHash(sodium: Sodium, secret: Uint8Array, roomId: string, slot: number, key: string, box: string, password: Uint8Array | null): Uint8Array {
+  if (password === null) return sodium.crypto_generichash(32, enc.encode(`nullbin room join v1 ${roomId} ${slot} ${key} ${box}`), secret);
+  if (secret.length !== 32 || password.length !== 32) throw new Error('bad proof key');
+  const both = new Uint8Array(64);
+  both.set(secret, 0);
+  both.set(password, 32);
+  try {
+    return sodium.crypto_generichash(32, enc.encode(`nullbin room join v2 ${roomId} ${slot} ${key} ${box}`), both);
+  } finally {
+    sodium.memzero(both);
+  }
+}
+
+/**
+ * The room's password key: Argon2id (the paste passwords' parameters) of
+ * the password, salted by the room. Only the creator's tab and joiners hold
+ * it, never the server or a link. It enters only join proofs, which are
+ * sealed to nobody: an offline guess needs a proof, the link it was made
+ * with, and Argon2id per guess (THREAT_MODEL.md R25).
+ */
+export function roomPasswordKey(sodium: Sodium, password: string, roomId: string): Uint8Array {
+  const pw = sodium.from_string(password.normalize('NFC'));
+  if (pw.length === 0 || pw.length > MAX_ROOM_PASSWORD_BYTES) {
+    sodium.memzero(pw);
+    throw new Error('bad password length');
+  }
+  const salt = sodium.crypto_generichash(sodium.crypto_pwhash_SALTBYTES, enc.encode(`nullbin room password salt v1 ${roomId}`), null);
+  try {
+    return sodium.crypto_pwhash(32, pw, salt, sodium.crypto_pwhash_OPSLIMIT_MODERATE, sodium.crypto_pwhash_MEMLIMIT_MODERATE, sodium.crypto_pwhash_ALG_ARGON2ID13);
+  } finally {
+    sodium.memzero(pw);
+  }
 }
 
 /**
@@ -620,11 +668,15 @@ export function inviteCheck(sodium: Sodium, secret: Uint8Array, roomId: string, 
 }
 
 /** Checks a join's proof in constant time. */
-export function checkJoinProof(sodium: Sodium, secret: Uint8Array, roomId: string, slot: number, key: string, box: string, proof: string): boolean {
+export function checkJoinProof(sodium: Sodium, secret: Uint8Array, roomId: string, slot: number, key: string, box: string, proof: string, password: Uint8Array | null = null): boolean {
   const got = decodeKey(sodium, proof);
   if (!got) return false;
-  const want = sodium.crypto_generichash(32, enc.encode(`nullbin room join v1 ${roomId} ${slot} ${key} ${box}`), secret);
-  return sodium.memcmp(got, want);
+  const want = proofHash(sodium, secret, roomId, slot, key, box, password);
+  try {
+    return sodium.memcmp(got, want);
+  } finally {
+    sodium.memzero(want);
+  }
 }
 
 /**
@@ -730,8 +782,10 @@ export function validControl(v: unknown): v is ControlRecord {
   if (!plainObject(v)) return false;
   switch (v['t']) {
     case 'room':
-      return common(v, 'ends,id,name,t,time') && typeof v['name'] === 'string' && BOXED_NAME.test(v['name']) &&
-        typeof v['ends'] === 'number' && Number.isSafeInteger(v['ends']) && v['ends'] > 0 && v['ends'] <= MAX_TIME;
+      return common(v, 'ends,id,max,name,pw,t,time,ttl') && typeof v['name'] === 'string' && BOXED_NAME.test(v['name']) &&
+        typeof v['ends'] === 'number' && Number.isSafeInteger(v['ends']) && v['ends'] > 0 && v['ends'] <= MAX_TIME &&
+        typeof v['pw'] === 'boolean' && typeof v['max'] === 'number' && Number.isInteger(v['max']) && v['max'] >= MIN_MEMBERS && v['max'] <= MAX_SLOTS &&
+        typeof v['ttl'] === 'number' && INVITE_TTLS.includes(v['ttl']);
     case 'join':
       // The creator's join carries its name boxed and its name key; any
       // other, its name sealed to that key and (for invited places) a proof.
@@ -741,8 +795,8 @@ export function validControl(v: unknown): v is ControlRecord {
           typeof v['name'] === 'string' && SEALED_NAME.test(v['name']))) &&
         typeof v['key'] === 'string' && B64URL_32.test(v['key']) && typeof v['box'] === 'string' && B64URL_32.test(v['box']);
     case 'invite':
-      return common(v, 'check,id,label,slot,t,time') && validSlot(v['slot'], 1) && typeof v['label'] === 'string' && BOXED_NAME.test(v['label']) &&
-        typeof v['check'] === 'string' && B64URL_32.test(v['check']);
+      return common(v, 'check,exp,id,label,slot,t,time') && validSlot(v['slot'], 1) && typeof v['label'] === 'string' && BOXED_NAME.test(v['label']) &&
+        typeof v['check'] === 'string' && B64URL_32.test(v['check']) && typeof v['exp'] === 'number' && Number.isSafeInteger(v['exp']) && v['exp'] > 0 && v['exp'] <= MAX_TIME;
     case 'remove':
       return common(v, 'id,slot,t,time') && validSlot(v['slot'], 1);
     case 'admit':

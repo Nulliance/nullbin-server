@@ -1,4 +1,4 @@
-// Randomized adversarial tests for the rules a burner room's tab uses to
+// Randomized adversarial tests for the rules a Null Chat's tab uses to
 // trust records (web/src/room-state.ts). Honest members chat; a malicious
 // member, who also controls the server, mixes in forged, altered, replayed,
 // re-stamped and out-of-order records, and drops some. After every record,
@@ -98,9 +98,9 @@ function scenario(seed: number, hostile: boolean) {
 
   // The creator makes the room and invites everyone; they join; it admits them.
   ctl(ada, { t: 'join', id: newRecordId(sodium), time: time(), name: boxName(sodium, roster, ada.name, ROOM, 'member', 0), ...enc(ada), namekey: encodeKey(sodium, names.publicKey) });
-  ctl(ada, { t: 'room', id: newRecordId(sodium), time: time(), name: boxName(sodium, roster, 'Plans', ROOM, 'room', 0), ends: clock + 3_600_000 });
+  ctl(ada, { t: 'room', id: newRecordId(sodium), time: time(), name: boxName(sodium, roster, 'Plans', ROOM, 'room', 0), ends: clock + 3_600_000, pw: false, max: 20, ttl: 3600 });
   for (const p of people.slice(1)) {
-    ctl(ada, { t: 'invite', id: newRecordId(sodium), time: time(), slot: p.slot, label: boxName(sodium, roster, p.name, ROOM, 'label', p.slot), check: inviteCheck(sodium, secrets.get(p.slot)!, ROOM, p.slot) });
+    ctl(ada, { t: 'invite', id: newRecordId(sodium), time: time(), slot: p.slot, label: boxName(sodium, roster, p.name, ROOM, 'label', p.slot), check: inviteCheck(sodium, secrets.get(p.slot)!, ROOM, p.slot), exp: clock + 3_600_000 });
   }
   for (const p of people.slice(1)) {
     const { key: k, box } = enc(p);
@@ -195,8 +195,8 @@ function forge(s: Scenario): Posted | null {
     case 3: return { from: honest.from, bytes: honest.bytes.slice(0, r.int(honest.bytes.length)) }; // cut
     case 4: return malCtl({ t: 'admit', id: id(), time: s.time(), slot: 5 + r.int(15), key: k, roster: sealRoster(sodium, s.roster, mal.box.publicKey, ROOM, 5), name: boxName(sodium, s.roster, 'Ada', ROOM, 'member', 5) });
     case 5: return malCtl({ t: 'remove', id: id(), time: s.time(), slot: 1 + r.int(3) });
-    case 6: return malCtl({ t: 'invite', id: id(), time: s.time(), slot: 3, label: boxName(sodium, s.roster, 'Vic', ROOM, 'label', 3), check: encodeKey(sodium, r.bytes(32)) });
-    case 7: return malCtl({ t: 'room', id: id(), time: s.time(), name: boxName(sodium, s.roster, 'Other', ROOM, 'room', 0), ends: 1 });
+    case 6: return malCtl({ t: 'invite', id: id(), time: s.time(), slot: 3, label: boxName(sodium, s.roster, 'Vic', ROOM, 'label', 3), check: encodeKey(sodium, r.bytes(32)), exp: s.time() + 60_000 });
+    case 7: return malCtl({ t: 'room', id: id(), time: s.time(), name: boxName(sodium, s.roster, 'Other', ROOM, 'room', 0), ends: 1, pw: true, max: 2, ttl: 300 });
     case 8: return malCtl({ t: 'box', id: id(), time: s.time(), n: r.pick([1, 2, 65, 1000, MAX_BOX_N]), box: encodeKey(sodium, sodium.crypto_box_keypair().publicKey) });
     case 9: { // keys for the victim sealed to a key it never had, or a commitment that does not match
       const place = { roomId: ROOM, slot: mal.slot, gen: malChain.gen, index: malChain.index };

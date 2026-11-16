@@ -86,7 +86,7 @@ func FuzzHandler(f *testing.F) {
 		{"POST", "/api/v1/pastes", "application/json", "", `{"expires_in":300,"burn_after_reading":false,"total_size":100,"comment_token":"` + strings.Repeat("A", 43) + `"}`},
 		{"POST", "/api/v1/pastes/" + id + "/comments", "application/octet-stream", "tok", strings.Repeat("c", 64)},
 		{"GET", "/api/v1/pastes/" + id + "/comments", "", "tok", ""},
-		// Burner rooms.
+		// Null Chats.
 		{"POST", "/api/v1/rooms", "application/json", "", `{"expires_in":3600}`},
 		{"POST", "/api/v1/rooms/" + id + "/invites", "", "tok", ""},
 		{"POST", "/api/v1/rooms/" + id + "/join", "", "tok", ""},

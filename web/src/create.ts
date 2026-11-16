@@ -206,21 +206,20 @@ export function initCreate(draft?: { text: string; file: File | null }): void {
     show(el('burn-reads-field'), burn.checked);
     burnReads.disabled = !burn.checked;
     burnReads.required = burn.checked;
-    el('burn-label').textContent = burn.checked ? 'Burn after' : 'Burn after opening';
     updateReadUnit();
     burnReads.parentElement?.setAttribute('title', el('burn-reads-help').textContent ?? '');
     setOptionHint(burn, 'burn-help', discussion.checked
       ? 'Turn off Discussion to enable burn after reading.'
       : recipients.checked
-        ? 'Each separate link stops working after the configured number of authorized opens.'
-        : 'Deleted from the server after the configured number of authorized opens.');
+        ? 'Each link stops working after a set number of opens.'
+        : 'Deleted from the server after a set number of opens.');
     setOptionHint(recipients, 'recipients-help', discussion.checked
       ? 'Turn off Discussion to make separate links.'
-      : 'Give each person their own link, with its own open count. The delete link can revoke each one.');
+      : 'One link per person, each with its own open count. Revoke any of them later.');
     setOptionHint(discussion, 'discussion-help', burn.checked || recipients.checked
       ? `Disable ${burn.checked ? 'burning' : 'separate links'} to enable a discussion.`
-      : 'Allow encrypted comments from everyone who can open the paste.');
-    setOptionHint(pwSwitch, 'password-help', 'Readers need the password as well as the link. Send it separately.');
+      : 'Everyone who can open it can leave encrypted comments.');
+    setOptionHint(pwSwitch, 'password-help', 'Readers need it as well as the link. Send it separately.');
     show(pwRow, pwSwitch.checked);
     password.required = pwSwitch.checked;
     if (!pwSwitch.checked) {
@@ -230,24 +229,6 @@ export function initCreate(draft?: { text: string; file: File | null }): void {
   };
   for (const s of [burn, recipients, pwSwitch, discussion]) s.addEventListener('change', sync);
 
-  // Separate links and Discussion wait behind "More options". The toggle
-  // says how many of them are on, so nothing switched on is ever hidden
-  // without a sign.
-  const more = el<HTMLButtonElement>('more-toggle');
-  const moreBox = el('more-options');
-  const moreLabel = more.querySelector('span')!;
-  const syncMore = () => {
-    const on = [recipients, discussion].filter((c) => c.checked).length;
-    moreLabel.textContent = on > 0 ? `More options (${on} on)` : 'More options';
-  };
-  const setMore = (open: boolean) => {
-    more.setAttribute('aria-expanded', String(open));
-    show(moreBox, open);
-  };
-  more.addEventListener('click', () => setMore(more.getAttribute('aria-expanded') !== 'true'));
-  for (const s of [recipients, discussion]) s.addEventListener('change', syncMore);
-  if (recipients.checked || discussion.checked) setMore(true);
-  syncMore();
   const focusPasswordIfNew = () => {
     if (pwSwitch.checked && password.value === '') password.focus();
   };

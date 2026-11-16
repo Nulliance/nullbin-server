@@ -95,16 +95,18 @@ export function parseDeleteFragment(fragment: string): { token: string; recipien
   return B64URL_32_BYTES.test(token) ? { token, recipients } : null;
 }
 
-//   room invite: /r/<id>#<room key>.i<invite token>.c<creator key>.s<invite secret>.n<place>
+//   room invite: /r/<id>#<room key>.i<invite token>.c<creator key>.s<invite secret>.n<place>[.p]
 // The room key, the creator's key and the invite secret never reach the
-// server; the invite token is sent once, to join.
+// server; the invite token is sent once, to join. ".p" says the chat has a
+// password, so the page asks for it at once. It is only a hint: what the
+// creator signed in the chat decides, and a link without it still asks.
 
 /** The fragment of a room invite, without the "#". */
-export function encodeInviteFragment(sodium: Sodium, roomKey: Uint8Array, inviteToken: string, creatorKey: Uint8Array, secret: Uint8Array, slot: number): string {
+export function encodeInviteFragment(sodium: Sodium, roomKey: Uint8Array, inviteToken: string, creatorKey: Uint8Array, secret: Uint8Array, slot: number, password = false): string {
   if (roomKey.length !== KEY_BYTES || creatorKey.length !== KEY_BYTES || secret.length !== KEY_BYTES || !B64URL_32_BYTES.test(inviteToken) ||
     !Number.isInteger(slot) || slot < 1 || slot > 19) throw new Error('bad invite');
   const b = (x: Uint8Array) => sodium.to_base64(x, sodium.base64_variants.URLSAFE_NO_PADDING);
-  return `${b(roomKey)}.i${inviteToken}.c${b(creatorKey)}.s${b(secret)}.n${slot}`;
+  return `${b(roomKey)}.i${inviteToken}.c${b(creatorKey)}.s${b(secret)}.n${slot}${password ? '.p' : ''}`;
 }
 
 /**
@@ -114,12 +116,12 @@ export function encodeInviteFragment(sodium: Sodium, roomKey: Uint8Array, invite
  * this link; the place lets the joiner check that the server put them where
  * the invite was made for. Returns null for anything else.
  */
-export function parseInviteFragment(sodium: Sodium, fragment: string): { key: Uint8Array; invite: string; creator: Uint8Array; secret: Uint8Array; slot: number } | null {
+export function parseInviteFragment(sodium: Sodium, fragment: string): { key: Uint8Array; invite: string; creator: Uint8Array; secret: Uint8Array; slot: number; password: boolean } | null {
   const f = fragment.startsWith('#') ? fragment.slice(1) : fragment;
-  const m = /^([A-Za-z0-9_-]{43})\.i([A-Za-z0-9_-]{43})\.c([A-Za-z0-9_-]{43})\.s([A-Za-z0-9_-]{43})\.n([1-9]|1[0-9])$/.exec(f);
+  const m = /^([A-Za-z0-9_-]{43})\.i([A-Za-z0-9_-]{43})\.c([A-Za-z0-9_-]{43})\.s([A-Za-z0-9_-]{43})\.n([1-9]|1[0-9])(\.p)?$/.exec(f);
   if (!m) return null;
   const key = decodeExact(sodium, m[1]!, KEY_BYTES);
   const creator = decodeExact(sodium, m[3]!, KEY_BYTES);
   const secret = decodeExact(sodium, m[4]!, KEY_BYTES);
-  return key && creator && secret ? { key, invite: m[2]!, creator, secret, slot: Number(m[5]) } : null;
+  return key && creator && secret ? { key, invite: m[2]!, creator, secret, slot: Number(m[5]), password: m[6] !== undefined } : null;
 }

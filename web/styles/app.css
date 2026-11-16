@@ -36,6 +36,8 @@
   --nb-control-padding-y: 7px;
   --nb-control-icon-size: 16px;
   --nb-content-font-size: 13px;
+  --nb-action-font-size: 14px;
+  --nb-pad: 16px;
   --bs-body-bg: var(--nb-canvas);
   --bs-body-color: var(--nb-text);
   /* The platform's own interface and code faces: native, and nothing to load. */
@@ -119,8 +121,8 @@ a { text-underline-offset: 2px; }
 input, textarea { caret-color: var(--nb-ink); }
 .nb-sprite { position: absolute; width: 0; height: 0; overflow: hidden; }
 .nb-i { width: 1em; height: 1em; flex: none; fill: none; stroke: currentColor; stroke-width: 1.75; stroke-linecap: round; stroke-linejoin: round; vertical-align: -.15em; }
-.nb-shell { width: 100%; max-width: var(--nb-shell-max, 1400px); margin-inline: auto; padding-inline: 20px; }
-/* Burner rooms use a narrower column, the top bar included, so it lines up
+.nb-shell { --nb-gutter: 20px; width: 100%; max-width: var(--nb-shell-max, 1400px); margin-inline: auto; padding-inline: var(--nb-gutter); }
+/* Null Chats use a narrower column, the top bar included, so it lines up
    with the chat. Switching to it, or back, eases the width instead of
    jumping (only after a click: pages never animate as they load). */
 body.nb-room-mode, body.nb-in-room { --nb-shell-max: 900px; }
@@ -130,13 +132,9 @@ html.nb-animate .nb-shell { transition: max-width .35s cubic-bezier(.2, .7, .2, 
    fades out first. */
 .nb-enter { animation: nb-enter .2s cubic-bezier(.2, .7, .2, 1) both; }
 .nb-leave { animation: nb-leave .12s ease-in both; pointer-events: none; }
-/* More options shows its fields in the form's own grid (display: contents),
-   so they fade in one by one instead of as a box. */
-.nb-more-options.nb-enter { animation: none; }
-.nb-more-options.nb-enter > * { animation: nb-enter .2s cubic-bezier(.2, .7, .2, 1) both; }
 @keyframes nb-enter { from { opacity: 0; } to { opacity: 1; } }
 @keyframes nb-leave { from { opacity: 1; } to { opacity: 0; } }
-@media (prefers-reduced-motion: reduce) { .nb-enter, .nb-leave, .nb-more-options.nb-enter > * { animation: none; } }
+@media (prefers-reduced-motion: reduce) { .nb-enter, .nb-leave { animation: none; } }
 .nb-main { flex: 1; padding-top: 16px; padding-bottom: 24px; }
 .nb-main:focus, .nb-display:focus, .nb-gate-title:focus { outline: none; }
 .nb-muted, .nb-meta { color: var(--nb-muted); }
@@ -150,17 +148,17 @@ html.nb-animate .nb-shell { transition: max-width .35s cubic-bezier(.2, .7, .2, 
 .nb-top-row { display: flex; align-items: center; gap: 12px; min-height: calc(var(--nb-control-height) + 16px); }
 .nb-brand { display: inline-block; color: var(--nb-ink); text-decoration: none; font-family: "Damion", cursive; font-size: 30px; font-weight: 400; line-height: 1.2; }
 .nb-top-actions { display: flex; align-items: center; gap: 8px; margin-left: auto; }
-.nb-foot { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px 16px; padding-block: 12px 16px; color: var(--nb-muted); font-size: 12px; border-top: 1px solid var(--nb-line); }
+.nb-foot { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px 16px; padding-block: 12px 16px; color: var(--nb-muted); font-size: 12px; background: linear-gradient(var(--nb-line), var(--nb-line)) center top / calc(100% - 2 * var(--nb-gutter)) 1px no-repeat; }
 .nb-foot-links { display: flex; flex-wrap: wrap; gap: 8px 16px; }
 .nb-foot-link { color: var(--nb-muted); }
 .nb-loading { display: flex; align-items: center; gap: 8px; margin-block: 16px; }
 
 /* Forms, buttons, and shared surfaces */
 .btn {
-  --bs-btn-font-size: var(--nb-control-font-size);
-  --bs-btn-font-weight: 400;
+  --bs-btn-font-size: var(--nb-action-font-size);
+  --bs-btn-font-weight: 500;
   --bs-btn-line-height: var(--nb-control-line-height);
-  --bs-btn-padding-x: 12px;
+  --bs-btn-padding-x: 14px;
   --bs-btn-padding-y: var(--nb-control-padding-y);
   --bs-btn-border-radius: var(--nb-radius);
   --bs-btn-focus-shadow-rgb: var(--nb-accent-rgb);
@@ -209,96 +207,6 @@ input.form-control, select.form-select { height: var(--nb-control-height); }
 .nb-progress { margin-top: 12px; }
 .nb-progress .nb-meta { margin: 6px 0 0; }
 
-/* Creation. The editor comes first in the page (reading and keyboard order:
-   text, then its settings, then Create). Wide screens show the settings
-   toolbar above it; phones keep the page order. */
-#create-form { display: flex; flex-direction: column; gap: 12px; }
-#create-form > .nb-note, #create-form > .nb-progress { margin: 0; }
-#create-form > .nb-toolbar { order: 1; }
-#create-form > #composer { order: 2; }
-#create-form > #create-progress { order: 3; }
-.nb-toolbar { display: grid; grid-template-areas: "settings attachment submit"; grid-template-columns: minmax(0, 1fr) auto auto; align-items: end; gap: 12px 16px; }
-.nb-toolbar-settings { grid-area: settings; display: flex; min-width: 0; align-items: flex-start; flex-wrap: wrap; gap: 8px 16px; font-size: var(--nb-control-font-size); line-height: var(--nb-control-line-height); }
-.nb-toolbar-settings > * { flex: none; }
-#create-submit { grid-area: submit; margin-left: auto; }
-.nb-toolbar-field { display: flex; align-items: center; gap: 8px; }
-.nb-toolbar-field label { white-space: nowrap; }
-.nb-toolbar-field .form-select { width: 128px; }
-.nb-read-limit .form-control { width: 84px; }
-.nb-burn-setting, .nb-recipients-setting { display: inline-flex; align-items: center; gap: 8px; }
-/* Options are pills: outlined when off, filled with the accent when on. */
-.nb-check { display: inline-flex; min-height: var(--nb-control-height); align-items: center; gap: 8px; padding-inline: 13px 16px; border: 1px solid var(--nb-line-strong); border-radius: var(--nb-pill); background: var(--nb-surface); white-space: nowrap; cursor: pointer; transition: background-color .12s, border-color .12s, color .12s; }
-.nb-check:hover { background: var(--nb-raised); }
-.nb-check:has(input:checked) { border-color: var(--nb-accent); background: var(--nb-accent-tint); color: var(--nb-ink); }
-.nb-check:has(input:focus-visible) { outline: 2px solid var(--nb-accent); outline-offset: 2px; }
-.nb-check input:focus-visible { box-shadow: none; }
-.nb-check:has(input:disabled) { color: var(--nb-muted); border-style: dashed; background: transparent; cursor: help; }
-@media (prefers-reduced-motion: reduce) { .nb-check { transition: none; } }
-.nb-check input:disabled { pointer-events: none; }
-.nb-password-setting { display: flex; align-items: flex-start; gap: 8px; max-width: 100%; min-width: 0; }
-.nb-toolbar-password { width: 320px; max-width: 100%; }
-.nb-toolbar-password .invalid-feedback { flex-basis: 100%; font-size: 12px; }
-
-/* Expires is a pill too: its label, with the choice inset inside. The pill's
-   outline is an inset shadow, so it is exactly the shared control height. */
-.nb-expiry { gap: 2px; padding-left: 14px; border-radius: var(--nb-pill); background: var(--nb-surface); box-shadow: inset 0 0 0 1px var(--nb-line-strong); transition: background-color .12s; }
-.nb-expiry:hover { background: var(--nb-raised); }
-.nb-expiry > label { color: var(--nb-muted); cursor: pointer; }
-.nb-expiry #expiry { width: 144px; border: 6px solid transparent; border-radius: var(--nb-pill); background-color: var(--nb-raised); background-clip: padding-box; padding-block: 0; padding-left: 10px; box-shadow: none; cursor: pointer; }
-.nb-expiry:hover #expiry { background-color: var(--nb-surface); }
-.nb-expiry:has(#expiry:focus-visible) { box-shadow: inset 0 0 0 1px var(--nb-accent), 0 0 0 3px var(--bs-focus-ring-color); }
-.nb-expiry #expiry:focus { box-shadow: none; }
-@media (prefers-reduced-motion: reduce) { .nb-expiry { transition: none; } }
-
-/* An option that reveals a field grows into one pill that holds it: the
-   outline moves from the toggle to the whole group, and the field sits
-   inside as an inset rounded box. The 6px transparent borders keep every
-   control at the shared height while drawing it smaller than the pill. */
-.nb-burn-setting, .nb-recipients-setting, .nb-password-setting { transition: background-color .12s, box-shadow .12s; }
-@media (prefers-reduced-motion: reduce) { .nb-burn-setting, .nb-recipients-setting, .nb-password-setting { transition: none; } }
-.nb-burn-setting:has(#burn:checked),
-.nb-recipients-setting:has(#recipients:checked),
-.nb-password-setting:has(#password-switch:checked) { gap: 0; border-radius: var(--nb-pill); background: var(--nb-accent-tint); box-shadow: inset 0 0 0 1px var(--nb-accent); }
-.nb-burn-setting:has(#burn:checked), .nb-recipients-setting:has(#recipients:checked) { padding-right: 16px; }
-.nb-burn-setting:has(#burn:checked) > .nb-check,
-.nb-recipients-setting:has(#recipients:checked) > .nb-check,
-.nb-password-setting:has(#password-switch:checked) > .nb-check { border-color: transparent; background: transparent; padding-right: 6px; }
-.nb-burn-setting:has(#burn:checked) .nb-read-limit,
-.nb-recipients-setting:has(#recipients:checked) .nb-read-limit { gap: 6px; color: var(--nb-ink); }
-.nb-burn-setting:has(#burn:checked) #burn-reads,
-.nb-recipients-setting:has(#recipients:checked) #recipients-count,
-.nb-password-setting:has(#password-switch:checked) #password,
-.nb-password-setting:has(#password-switch:checked) .btn { border: 6px solid transparent; border-radius: var(--nb-pill); background-clip: padding-box; padding-block: 0; box-shadow: none; }
-.nb-burn-setting:has(#burn:checked) #burn-reads,
-.nb-recipients-setting:has(#recipients:checked) #recipients-count,
-.nb-password-setting:has(#password-switch:checked) #password { background-color: var(--nb-surface); }
-.nb-burn-setting:has(#burn:checked) #burn-reads,
-.nb-recipients-setting:has(#recipients:checked) #recipients-count { width: 88px; padding-inline: 12px 6px; }
-/* The arrows that change the number stay visible, not only on hover, so
-   the count reads as editable. (Phones show a number keyboard instead.) */
-#burn-reads::-webkit-inner-spin-button, #burn-reads::-webkit-outer-spin-button,
-#recipients-count::-webkit-inner-spin-button, #recipients-count::-webkit-outer-spin-button { opacity: 1; }
-/* Its inset border must not add to the button's height: the minimum height sets it. */
-.nb-password-setting:has(#password-switch:checked) .btn { padding-block: 0; --bs-btn-bg: transparent; --bs-btn-hover-bg: var(--nb-surface); --bs-btn-active-bg: var(--nb-surface); }
-/* With an error message under the field, the pill becomes a rounded box. */
-.nb-password-setting:has(#password.is-invalid) { border-radius: calc(var(--nb-control-height) / 2); }
-.nb-burn-setting:has(#burn:checked) #burn-reads:focus,
-.nb-recipients-setting:has(#recipients:checked) #recipients-count:focus,
-.nb-password-setting:has(#password-switch:checked) #password:focus,
-.nb-password-setting:has(#password-switch:checked) .btn:focus-visible { outline: 2px solid var(--nb-accent); outline-offset: -6px; }
-.nb-password-setting:has(#password-switch:checked) #password.is-invalid { outline: 2px solid var(--nb-danger); outline-offset: -6px; background-image: none; }
-.nb-password-setting:has(#password-switch:checked) .invalid-feedback { padding: 0 16px 8px; }
-.nb-toolbar-attachment { grid-area: attachment; position: relative; }
-.nb-composer { position: relative; overflow: hidden; border: 1px solid var(--nb-line-strong); border-radius: var(--nb-radius-card); background: var(--nb-surface); }
-.nb-composer:focus-within { border-color: var(--nb-accent); box-shadow: 0 0 0 3px var(--bs-focus-ring-color); }
-.nb-editor-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 7px 10px; border-bottom: 1px solid var(--nb-line); background: var(--nb-raised); }
-.nb-editor-heading label { color: var(--nb-muted); font-size: 12px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; }
-.nb-editor { display: block; width: 100%; min-height: max(360px, calc(100dvh - 235px)); padding: 12px; border: 0; border-radius: 0; outline: 0; resize: vertical; color: var(--nb-text); background: var(--nb-surface); font-family: var(--bs-font-monospace); font-size: var(--nb-content-font-size); line-height: 1.5; tab-size: 4; }
-.nb-editor:focus { outline: 0; } /* the editor box shows the focus ring (.nb-composer:focus-within) */
-.nb-editor::placeholder { color: var(--nb-muted); opacity: 1; }
-.nb-composer-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; min-height: 31px; padding: 5px 10px; border-top: 1px solid var(--nb-line); background: var(--nb-raised); }
-.nb-file-input { position: absolute; width: 1px; height: 1px; opacity: 0; overflow: hidden; }
-.nb-file-input:focus-visible + label { outline: 2px solid var(--nb-accent); outline-offset: 2px; }
 .nb-file-list { display: flex; flex-wrap: wrap; gap: 4px 12px; min-width: 0; max-width: 100%; margin: 0; padding: 0; list-style: none; }
 .nb-file-list:not([hidden]) ~ .nb-drop-label { display: none; }
 .nb-file-chip { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; padding-left: 12px; border: 1px solid var(--nb-line); border-radius: var(--nb-pill); background: var(--nb-surface); font-size: 12px; }
@@ -309,6 +217,132 @@ input.form-control, select.form-select { height: var(--nb-control-height); }
 .nb-chip-x:hover { background: var(--nb-raised); color: var(--nb-ink); }
 .nb-drop-hint { position: absolute; inset: 0; display: none; align-items: center; justify-content: center; gap: 8px; border: 2px dashed var(--nb-accent); border-radius: var(--nb-radius-card); background: var(--nb-accent-tint); color: var(--nb-ink); }
 .nb-dragging .nb-drop-hint { display: flex; }
+
+/* The create studio: a switch for what to make, then one frame for both,
+   the work on the left and a settings panel on the right. The panel keeps
+   its place when switching, so Paste and Null Chat read as one tool. */
+:root {
+  --nb-seg-track: color-mix(in srgb, var(--nb-ink) 6%, var(--nb-canvas));
+  --nb-seg-thumb: var(--nb-surface);
+  --nb-side-w: 336px;
+}
+[data-bs-theme="dark"] { --nb-seg-track: color-mix(in srgb, #000 30%, var(--nb-canvas)); --nb-seg-thumb: var(--nb-raised); }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-bs-theme="light"]) { --nb-seg-track: color-mix(in srgb, #000 30%, var(--nb-canvas)); --nb-seg-thumb: var(--nb-raised); }
+}
+.nb-studio-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 16px; margin: 4px 0 16px; }
+
+/* Paste / Null Chat: a segmented switch whose thumb slides between them. */
+.nb-mode-tabs { position: relative; display: inline-grid; grid-template-columns: 1fr 1fr; padding: 3px; border: 1px solid var(--nb-line); border-radius: var(--nb-pill); background: var(--nb-seg-track); isolation: isolate; }
+.nb-mode-tabs::before { content: ""; position: absolute; z-index: -1; inset: 3px auto 3px 3px; width: calc(50% - 3px); border-radius: var(--nb-pill); background: var(--nb-seg-thumb); box-shadow: 0 0 0 1px var(--nb-line-strong), 0 1px 3px rgb(0 0 0 / .12); transition: transform .32s cubic-bezier(.3, .8, .25, 1); }
+.nb-mode-tabs:has(#tab-room[aria-selected="true"])::before { transform: translateX(100%); }
+.nb-tab { display: inline-flex; align-items: center; justify-content: center; gap: 8px; height: calc(var(--nb-control-height) - 8px); padding: 0 16px; border: 0; border-radius: var(--nb-pill); background: transparent; color: var(--nb-muted); font: inherit; font-size: var(--nb-action-font-size); font-weight: 500; white-space: nowrap; cursor: pointer; transition: color .2s; }
+.nb-tab > .nb-i { width: var(--nb-control-icon-size); height: var(--nb-control-icon-size); }
+.nb-tab:hover, .nb-tab[aria-selected="true"] { color: var(--nb-ink); }
+.nb-tab[aria-selected="true"] .nb-i { color: var(--nb-accent); }
+.nb-tab:focus-visible { outline: 2px solid var(--nb-accent); outline-offset: 1px; }
+@media (prefers-reduced-motion: reduce) { .nb-mode-tabs::before, .nb-tab { transition: none; } }
+
+/* The work and the panel share one row and always end level with each
+   other: whichever is taller sets the height of both. */
+.nb-studio { display: grid; grid-template-columns: minmax(0, 1fr) var(--nb-side-w); grid-template-areas: "note note" "main side" "progress progress"; column-gap: 20px; align-items: stretch; }
+.nb-studio-note { grid-area: note; margin: 0 0 12px; }
+.nb-studio-main { grid-area: main; min-width: 0; }
+.nb-studio-side { grid-area: side; }
+.nb-studio-progress { grid-area: progress; margin: 12px 0 0; }
+.nb-studio-progress .nb-meta { margin: 6px 0 0; }
+
+/* The editor. */
+.nb-composer { position: relative; display: flex; flex-direction: column; overflow: hidden; border: 1px solid var(--nb-line-strong); border-radius: var(--nb-radius-card); background: var(--nb-surface); transition: border-color .15s, box-shadow .15s; }
+.nb-composer:focus-within { border-color: rgba(var(--nb-accent-rgb), .7); box-shadow: 0 0 0 3px var(--bs-focus-ring-color); }
+@media (prefers-reduced-motion: reduce) { .nb-composer { transition: none; } }
+.nb-editor { display: block; flex: 1; width: 100%; min-height: max(380px, calc(100dvh - 250px)); padding: 14px var(--nb-pad); border: 0; border-radius: 0; outline: 0; resize: vertical; color: var(--nb-text); background: var(--nb-surface); font-family: var(--bs-font-monospace); font-size: var(--nb-content-font-size); line-height: 1.6; tab-size: 4; }
+.nb-editor:focus { outline: 0; } /* the editor box shows the focus ring (.nb-composer:focus-within) */
+.nb-editor::placeholder { color: var(--nb-muted); opacity: 1; }
+.nb-composer-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; min-height: 36px; padding: 6px var(--nb-pad); border-top: 1px solid var(--nb-line); background: var(--nb-raised); }
+.nb-composer-end { display: inline-flex; align-items: center; gap: 14px; margin-left: auto; }
+.nb-file-input { position: absolute; width: 1px; height: 1px; opacity: 0; overflow: hidden; }
+.nb-file-input:focus-visible + label { outline: 2px solid var(--nb-accent); outline-offset: 2px; }
+
+/* The panel: when it expires, options as rows, then the actions. */
+.nb-panel { display: flex; flex-direction: column; border: 1px solid var(--nb-line); border-radius: var(--nb-radius-card); background: var(--nb-surface); }
+.nb-panel-field { display: grid; gap: 8px; padding: var(--nb-pad); }
+.nb-panel-field > label { display: flex; align-items: center; gap: 8px; color: var(--nb-muted); font-size: calc(var(--nb-action-font-size) - 1.5px); font-weight: 500; }
+.nb-panel-field .form-select { width: 100%; }
+/* Settings stacked in one panel share its padding once, not twice. */
+.nb-panel-field + .nb-panel-field { padding-top: 0; }
+.nb-opts { border-block: 1px solid var(--nb-line); }
+.nb-opt { padding: 12px var(--nb-pad); transition: background-color .15s; }
+.nb-opt + .nb-opt { border-top: 1px solid var(--nb-line); }
+.nb-opt:has(.nb-switch:checked) { background: color-mix(in srgb, var(--nb-accent) 5%, var(--nb-surface)); }
+.nb-opt-row { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 12px; cursor: pointer; }
+.nb-opt-icon { display: grid; place-items: center; flex: none; width: 32px; height: 32px; border-radius: 9px; background: var(--nb-raised); color: var(--nb-muted); transition: background-color .15s, color .15s; }
+.nb-opt-icon .nb-i { width: 17px; height: 17px; }
+.nb-opt:has(.nb-switch:checked) .nb-opt-icon { background: var(--nb-accent-tint); color: var(--nb-accent); }
+.nb-opt-text { display: grid; gap: 1px; min-width: 0; }
+.nb-opt-title { color: var(--nb-ink); font-size: var(--nb-action-font-size); font-weight: 500; line-height: 1.35; }
+.nb-opt-desc { color: var(--nb-muted); font-size: calc(var(--nb-action-font-size) - 1.5px); line-height: 1.4; }
+.nb-opt:has(.nb-switch:disabled) .nb-opt-row { cursor: help; }
+.nb-opt:has(.nb-switch:disabled) :is(.nb-opt-title, .nb-opt-icon) { opacity: .5; }
+.nb-opt-field { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 12px 0 2px 44px; color: var(--nb-text); }
+.nb-opt-field input[type="number"] { width: 84px; }
+.nb-opt-field.nb-toolbar-password { display: block; margin-left: 0; }
+.nb-toolbar-password .nb-copy-btn { min-width: 0; }
+.nb-opt-field .invalid-feedback { font-size: 12px; }
+#burn-reads::-webkit-inner-spin-button, #burn-reads::-webkit-outer-spin-button,
+#recipients-count::-webkit-inner-spin-button, #recipients-count::-webkit-outer-spin-button { opacity: 1; }
+@media (prefers-reduced-motion: reduce) { .nb-opt, .nb-opt-icon { transition: none; } }
+
+/* A switch: a checkbox drawn as a track and a knob. */
+.nb-switch { position: relative; flex: none; width: 36px; height: 20px; margin: 0; border: 0; border-radius: var(--nb-pill); background: var(--nb-line-strong); appearance: none; -webkit-appearance: none; cursor: pointer; transition: background-color .2s; }
+.nb-switch::before { content: ""; position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; border-radius: 50%; background: #fff; box-shadow: 0 1px 2px rgb(0 0 0 / .25); transition: transform .2s cubic-bezier(.3, .8, .25, 1); }
+.nb-switch:checked { background: var(--nb-accent); }
+.nb-switch:checked::before { transform: translateX(16px); }
+[data-bs-theme="dark"] .nb-switch:checked::before { background: var(--nb-on-accent); }
+@media (prefers-color-scheme: dark) { :root:not([data-bs-theme="light"]) .nb-switch:checked::before { background: var(--nb-on-accent); } }
+.nb-switch:disabled { cursor: help; opacity: .45; }
+.nb-switch:focus-visible { outline: 2px solid var(--nb-accent); outline-offset: 2px; }
+@media (prefers-reduced-motion: reduce) { .nb-switch, .nb-switch::before { transition: none; } }
+
+/* Pinned to the bottom, level with the editor's own bottom bar. */
+.nb-panel-actions { display: grid; gap: 8px; margin-top: auto; padding: var(--nb-pad); }
+.nb-panel-actions .btn { width: 100%; }
+.nb-toolbar-attachment { position: relative; }
+
+/* The Null Chat's side of the studio. */
+.nb-room-intro { padding: 28px 28px 24px; }
+.nb-room-title { margin: 0 0 6px; color: var(--nb-ink); font-size: 22px; font-weight: 600; letter-spacing: -.015em; line-height: 1.25; }
+.nb-room-lede { max-width: 52ch; margin: 0; color: var(--nb-muted); font-size: 14.5px; line-height: 1.5; }
+.nb-room-intro > .nb-note { margin: 16px 0 0; }
+.nb-room-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px 16px; margin: 22px 0 0; }
+.nb-field .form-label { display: block; }
+.nb-room-facts { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px 24px; margin: 26px 0 0; padding: 22px 0 0; border-top: 1px solid var(--nb-line); list-style: none; color: var(--nb-muted); font-size: 13px; line-height: 1.45; }
+.nb-room-facts > li { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: start; gap: 12px; }
+.nb-room-facts strong { color: var(--nb-ink); font-weight: 600; }
+
+@media (max-width: 991.98px) {
+  /* One column: the work, then the panel, then upload progress. */
+  .nb-studio { grid-template-columns: minmax(0, 1fr); grid-template-areas: "note" "main" "side" "progress"; grid-template-rows: none; }
+  .nb-studio-side { margin-top: 12px; }
+  .nb-editor { height: max(240px, 46dvh); min-height: 160px; }
+  /* There is room for the options side by side. */
+  .nb-opts { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .nb-opt + .nb-opt { border-top: 0; }
+  .nb-opt:nth-child(n + 3) { border-top: 1px solid var(--nb-line); }
+  .nb-opt:nth-child(even) { border-left: 1px solid var(--nb-line); }
+  .nb-panel-actions { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+}
+@media (max-width: 767.98px) {
+  .nb-studio-head { margin-top: 0; margin-bottom: 12px; }
+  .nb-mode-tabs { display: grid; width: 100%; }
+  .nb-editor { flex: none; }
+  .nb-opts { display: block; }
+  .nb-opt:nth-child(even) { border-left: 0; }
+  .nb-opt + .nb-opt { border-top: 1px solid var(--nb-line); }
+  .nb-panel-actions { grid-template-columns: minmax(0, 1fr); }
+  .nb-room-intro { padding: 20px var(--nb-pad); }
+  .nb-room-fields, .nb-room-facts { grid-template-columns: minmax(0, 1fr); }
+}
 
 /* Links and paste metadata */
 #result { max-width: 1000px; }
@@ -335,27 +369,8 @@ input.form-control, select.form-select { height: var(--nb-control-height); }
 .nb-recipient-state { flex: 1 1 200px; padding-block: var(--nb-control-padding-y); color: var(--nb-muted); }
 .nb-recipients-manage { max-width: 720px; margin: 24px auto 0; }
 .nb-countdown { display: flex; align-items: center; gap: 6px; margin: 8px 0 0; font-variant-numeric: tabular-nums; }
-/* Paste / Burner room switch on the home page: plain tabs, not options. */
-.nb-mode-tabs { display: flex; gap: 24px; margin: 0 0 16px; border-bottom: 1px solid var(--nb-line); }
-.nb-tab { display: inline-flex; align-items: center; gap: 8px; min-height: var(--nb-control-height); margin-bottom: -1px; padding: 0 2px; border: 0; border-bottom: 2px solid transparent; background: transparent; color: var(--nb-muted); font: inherit; font-size: 15px; font-weight: 600; cursor: pointer; }
-.nb-tab:hover { color: var(--nb-ink); }
-.nb-tab[aria-selected="true"] { color: var(--nb-ink); border-bottom-color: var(--nb-accent); }
-.nb-tab:focus-visible { outline: 2px solid var(--nb-accent); outline-offset: 2px; border-radius: 4px; }
-/* Less common paste options wait behind "More options". */
-.nb-more-toggle { display: inline-flex; align-items: center; gap: 6px; min-height: var(--nb-control-height); padding: 0 6px; border: 0; background: transparent; color: var(--nb-muted); font: inherit; cursor: pointer; }
-.nb-more-toggle:hover { color: var(--nb-ink); }
-.nb-more-toggle:focus-visible { outline: 2px solid var(--nb-accent); outline-offset: 2px; border-radius: var(--nb-pill); }
-.nb-more-toggle .nb-i { transition: transform .15s; }
-.nb-more-toggle[aria-expanded="true"] .nb-i { transform: rotate(180deg); }
-@media (prefers-reduced-motion: reduce) { .nb-more-toggle .nb-i { transition: none; } }
-.nb-more-options:not([hidden]) { display: contents; }
-.nb-room-create { max-width: 560px; }
-.nb-room-create > .nb-h2 { align-items: center; margin-bottom: 8px; }
-.nb-room-fields { display: grid; gap: 6px; margin: 12px 0 16px; }
-.nb-room-fields .form-label { margin: 8px 0 0; }
-.nb-room-fineprint { margin: 12px 0 0; }
 
-/* A burner room: a chat that fills the page, like a messaging app. */
+/* A Null Chat: a chat that fills the page, like a messaging app. */
 :root {
   --nb-in-bubble: color-mix(in srgb, var(--nb-ink) 7%, var(--nb-canvas));
   --nb-out-bubble: color-mix(in srgb, var(--nb-accent) 20%, var(--nb-canvas));
@@ -645,44 +660,23 @@ body.nb-in-room #room { display: flex; flex: 1; flex-direction: column; }
 .nb-toast.nb-tone-danger { --bs-toast-color: var(--nb-danger); --bs-toast-bg: var(--nb-danger-tint); }
 
 @media (max-width: 767.98px), (pointer: coarse) {
-  :root { --nb-control-height: 44px; --nb-control-font-size: 16px; --nb-control-line-height: 24px; --nb-control-padding-y: 9px; --nb-control-icon-size: 18px; --nb-content-font-size: 16px; }
+  :root { --nb-control-height: 44px; --nb-control-font-size: 16px; --nb-control-line-height: 24px; --nb-control-padding-y: 9px; --nb-control-icon-size: 18px; --nb-content-font-size: 16px; --nb-action-font-size: 15px; }
 }
 @media (max-width: 1199.98px) {
-  .nb-toolbar { grid-template-areas: "settings settings" "attachment submit"; grid-template-columns: minmax(0, 1fr) auto; }
-  .nb-toolbar-settings { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .nb-password-setting { display: grid; grid-template-columns: max-content minmax(0, 1fr); }
-  .nb-toolbar-password { width: 100%; }
   .nb-paste-actions { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .nb-paste-actions > .btn { min-width: 0; }
 }
 @media (max-width: 767.98px) {
-  .nb-shell { padding-inline: 12px; }
+  .nb-shell { --nb-gutter: 12px; }
+  :root { --nb-pad: 14px; }
   .nb-main { padding-top: 12px; }
   .nb-top-row { gap: 8px; }
-  .nb-top-actions .btn { --bs-btn-padding-x: 8px; }
-  .nb-toolbar { grid-template-areas: "settings" "attachment" "submit"; grid-template-columns: minmax(0, 1fr); gap: 12px; }
-  .nb-toolbar-settings, .nb-password-setting { grid-template-columns: minmax(0, 1fr); gap: 8px; }
-  .nb-toolbar-settings > .nb-check, .nb-password-setting > .nb-check { width: 100%; }
-  .nb-toolbar-attachment > .btn { width: 100%; }
   /* Header: scrolls away on phones, where the editor and keyboard need the
      height. The theme button is an icon (it keeps its accessible name). */
   .nb-top { position: static; }
   #theme-toggle { width: var(--nb-control-height); padding-inline: 0; }
   #theme-toggle > span { display: none; }
 
-  /* Create: editor first, then the settings (full-width option pills), then
-     Attach and Create. The editor stays 16px: smaller text makes iOS zoom. */
-  #create-form > #composer { order: 1; }
-  #create-form > .nb-toolbar { order: 2; }
-  .nb-editor { min-height: max(220px, 42dvh); }
-  .nb-toolbar-settings > .nb-toolbar-field .form-select, .nb-expiry #expiry { flex: 1; width: auto; }
-  /* The password field sits under its toggle here: a rounded box, not a pill.
-     The open count wraps under Burn too when the row is too narrow; at one
-     row the same radius still draws a pill. */
-  .nb-password-setting:has(#password-switch:checked) { border-radius: calc(var(--nb-control-height) / 2); gap: 8px; }
-  .nb-burn-setting, .nb-recipients-setting { flex-wrap: wrap; }
-  .nb-burn-setting:has(#burn:checked), .nb-recipients-setting:has(#recipients:checked) { border-radius: calc(var(--nb-control-height) / 2); padding-right: 12px; }
-  .nb-toolbar-settings > .nb-toolbar-field > label { min-width: 72px; }
 
   /* Attached files: one pill each, the name using the space it has. */
   .nb-file-list { flex: 1 1 100%; flex-direction: column; gap: 6px; padding-block: 2px; }
@@ -706,7 +700,7 @@ body.nb-in-room #room { display: flex; flex: 1; flex-direction: column; }
   .nb-share-actions > #copy-share { grid-column: 1 / -1; }
   .nb-paste-actions { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .nb-paste-actions > .btn { --bs-btn-padding-x: 4px; gap: 4px; }
-  .nb-share-row .btn, #create-submit, .nb-file > .btn, #result > .btn, .nb-gate > .btn, #delete-done > .btn { width: 100%; margin-left: 0; }
+  .nb-share-row .btn, .nb-file > .btn, #result > .btn, .nb-gate > .btn, #delete-done > .btn { width: 100%; margin-left: 0; }
   .nb-actions { flex-direction: column; align-items: stretch; }
   .nb-actions > .nb-meta { flex-basis: auto; }
   .nb-actions > .btn:last-child { margin-left: 0; }

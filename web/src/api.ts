@@ -321,7 +321,7 @@ export async function fetchComments(id: string, commentToken: string): Promise<U
   return out;
 }
 
-// --- Burner rooms ---
+// --- Null Chats ---
 
 export interface RoomCreated {
   id: string;
@@ -330,12 +330,12 @@ export interface RoomCreated {
 }
 
 /** Starts a room that lasts expiresIn seconds: one of 300, 1800, 3600, 10800, 43200, 86400, 259200 or 604800. */
-export async function createRoom(expiresIn: number): Promise<RoomCreated> {
+export async function createRoom(expiresIn: number, maxMembers: number, inviteTtl: number): Promise<RoomCreated> {
   const resp = await fetch(apiURL('/api/v1/rooms'), {
     ...base, signal: AbortSignal.timeout(REQUEST_MS),
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ expires_in: expiresIn }),
+    body: JSON.stringify({ expires_in: expiresIn, max_members: maxMembers, invite_ttl: inviteTtl }),
   });
   if (resp.status !== 201) throw await errorFrom(resp);
   const v = (await resp.json()) as Record<string, unknown>;

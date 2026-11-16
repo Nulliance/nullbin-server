@@ -1,4 +1,4 @@
-// Burner rooms: the home page tab that creates one, the invite page that
+// Null Chats: the home page tab that creates one, the invite page that
 // joins one, and the chat itself. The cryptography is in room-crypto.ts and
 // the rules for trusting records in room-state.ts.
 //
@@ -26,7 +26,8 @@ import {
   type SlotState,
 } from './api.ts';
 import { cleanName } from './comments.ts';
-import { announce, bindCopy, busy, copyText, el, formatCountdown, reveal, show, showProblem, showSection, swap } from './dom.ts';
+import { announce, bindCopy, bindReveal, busy, copyText, el, formatCountdown, nextFrame, reveal, show, showProblem, showSection, swap } from './dom.ts';
+import { generatePassword, MIN_PASSWORD_LENGTH } from './create.ts';
 import { encodeInviteFragment, parseInviteFragment } from './link.ts';
 import {
   MAX_BOX_N,
@@ -56,6 +57,10 @@ import {
   joinProof,
   inviteCheck,
   checkJoinProof,
+  roomPasswordKey,
+  INVITE_TTLS,
+  MAX_SLOTS,
+  MIN_MEMBERS,
   REACTIONS,
   type Chain,
   type ControlRecord,
@@ -101,7 +106,9 @@ interface Session {
   rotate: boolean; // replace our chain before the next message
   peers: (StoredChain & { slot: number })[];
   known: { slot: number; key: string }[]; // signing keys we trust by slot: the creator's (from the invite) and admitted members'
-  invites: { slot: number; secret: string }[]; // the creator's invite secrets, to check joins' proofs
+  invites: { slot: number; secret: string; exp: number }[]; // the creator's invite secrets, to check joins' proofs, and when each stops working (ms)
+  password: string | null; // the creator's: the chat's password key (never the password), to check joins' proofs
+  settings: { max: number; ttl: number } | null; // the creator's own choices, kept here: never taken back from the server
   joinProof: string | null; // our join's proof, to post the same join again if it was lost
   inviteCheck: string | null; // for a joiner: what the creator's invite record should say about our link's secret
   roster: string | null; // the roster key (names, labels, the room's name): the creator's from the start, others' once admitted
@@ -186,8 +193,11 @@ function loadSession(sodium: Sodium, id: string): Session | null {
     Array.isArray(o['removedSlots']) && o['removedSlots'].length <= 20 && o['removedSlots'].every(slotOk) &&
     Array.isArray(o['invites']) && o['invites'].length <= 20 && o['invites'].every((k: unknown) => {
       const x = (typeof k === 'object' && k !== null ? k : {}) as Record<string, unknown>;
-      return slotOk(x['slot']) && bytesOf(sodium, x['secret'], 32);
+      return slotOk(x['slot']) && bytesOf(sodium, x['secret'], 32) && typeof x['exp'] === 'number' && Number.isSafeInteger(x['exp']) && x['exp'] > 0;
     }) &&
+    (o['password'] === null || (o['owner'] !== null && bytesOf(sodium, o['password'], 32))) &&
+    // The creator always holds its settings; nobody else does.
+    (o['owner'] === null ? o['settings'] === null : settingsOk(o['settings'])) &&
     (o['joinProof'] === null || bytesOf(sodium, o['joinProof'], 32)) &&
     (o['inviteCheck'] === null || bytesOf(sodium, o['inviteCheck'], 32)) &&
     (o['roster'] === null || bytesOf(sodium, o['roster'], 32)) &&
@@ -206,13 +216,20 @@ function loadSession(sodium: Sodium, id: string): Session | null {
   return ok ? (o as unknown as Session) : null;
 }
 
+function settingsOk(v: unknown): boolean {
+  if (typeof v !== 'object' || v === null) return false;
+  const o = v as Record<string, unknown>;
+  return Object.keys(o).sort().join(',') === 'max,ttl' && typeof o['max'] === 'number' && Number.isInteger(o['max']) &&
+    o['max'] >= MIN_MEMBERS && o['max'] <= MAX_SLOTS && typeof o['ttl'] === 'number' && INVITE_TTLS.includes(o['ttl']);
+}
+
 function roomError(e: unknown, fallback: string): string {
   if (e instanceof ApiError) {
-    if (e.status === 404) return 'Burner rooms are turned off on this server, or the room no longer exists.';
-    if (e.status === 409) return 'This room is full.';
-    if (e.status === 429 && e.message.includes('live burner rooms')) return 'Your network already has 10 burner rooms open. Delete one, or wait for one to expire.';
+    if (e.status === 404) return 'Null Chats are turned off on this server, or the chat no longer exists.';
+    if (e.status === 409) return 'This chat is full: every place it allows is taken or invited. Revoke an invite, or remove someone, to make room.';
+    if (e.status === 429 && e.message.includes('live burner rooms')) return 'Your network already has 10 Null Chats open. Delete one, or wait for one to expire.';
     if (e.status === 429) return 'Too many requests in a short time. Wait a minute, then try again.';
-    if (e.status === 507) return 'This server has no room for more burner rooms right now. Try again later.';
+    if (e.status === 507) return 'This server can’t hold any more Null Chats right now. Try again later.';
   }
   return fallback;
 }
@@ -224,7 +241,7 @@ function roomError(e: unknown, fallback: string): string {
  * to that key, so only the creator reads it before letting them in.
  */
 function newIdentity(sodium: Sodium, name: string, names: { creator: { roster: Uint8Array; nameKey: Uint8Array; roomId: string } } | { sealTo: Uint8Array },
-  invite?: { roomId: string; slot: number; secret: Uint8Array }): { sign: Uint8Array; box: Uint8Array; join: ControlRecord & { t: 'join' } } {
+  invite?: { roomId: string; slot: number; secret: Uint8Array; password: Uint8Array | null }): { sign: Uint8Array; box: Uint8Array; join: ControlRecord & { t: 'join' } } {
   const sign = sodium.crypto_sign_keypair();
   const box = sodium.crypto_box_keypair();
   const key = encodeKey(sodium, sign.publicKey);
@@ -232,7 +249,7 @@ function newIdentity(sodium: Sodium, name: string, names: { creator: { roster: U
   const join: ControlRecord & { t: 'join' } = 'creator' in names
     ? { t: 'join', id: newRecordId(sodium), time: Date.now(), name: boxName(sodium, names.creator.roster, name, names.creator.roomId, 'member', 0), key, box: boxKey, namekey: encodeKey(sodium, names.creator.nameKey) }
     : { t: 'join', id: newRecordId(sodium), time: Date.now(), name: sealName(sodium, name, names.sealTo, { roomId: invite!.roomId, slot: invite!.slot, key, box: boxKey }), key, box: boxKey };
-  if (invite) join.proof = joinProof(sodium, invite.secret, invite.roomId, invite.slot, key, boxKey);
+  if (invite) join.proof = joinProof(sodium, invite.secret, invite.roomId, invite.slot, key, boxKey, invite.password);
   return { sign: sign.privateKey, box: box.privateKey, join };
 }
 
@@ -240,7 +257,7 @@ function newSession(sodium: Sodium, roomKey: Uint8Array, slot: number, member: s
   return {
     key: b64(sodium, roomKey), slot, member, name, sign: b64(sodium, sign), boxes: [{ n: 0, secret: b64(sodium, box), retired: null }],
     boxRotate: false, boxRotated: Date.now(), pendingBox: null, owner, known: [{ slot: 0, key: b64(sodium, creator) }], removedSlots: [],
-    invites: [], joinProof: null, inviteCheck: null, chain: null, sentTo: [], sent: 0, rotate: false, peers: [], posted: [], peerBoxes: [], verified: [], roster: null, nameSecret: null,
+    invites: [], password: null, settings: null, joinProof: null, inviteCheck: null, chain: null, sentTo: [], sent: 0, rotate: false, peers: [], posted: [], peerBoxes: [], verified: [], roster: null, nameSecret: null,
   };
 }
 
@@ -271,9 +288,6 @@ export function initRoomCreate(): void {
     swaps++;
     const mine = swaps;
     swap(from, panels[i]!, () => (mine === swaps ? mine : -1));
-    // The page narrows to the room's column, or widens back, smoothly.
-    document.documentElement.classList.add('nb-animate');
-    document.body.classList.toggle('nb-room-mode', i === 1);
     if (focus) tabs[i]!.focus();
   };
   tabs.forEach((t, i) => {
@@ -289,6 +303,44 @@ export function initRoomCreate(): void {
   const form = el<HTMLFormElement>('room-create-form');
   const you = el<HTMLInputElement>('room-you');
   const error = el('room-create-error');
+  // The password: like a paste's, generated or typed, shown only on request.
+  const pwSwitch = el<HTMLInputElement>('room-password-switch');
+  const pwRow = el('room-password-row');
+  const pw = el<HTMLInputElement>('room-password');
+  const pwReveal = el<HTMLButtonElement>('room-password-reveal');
+  const pwCopy = el<HTMLButtonElement>('room-password-copy');
+  const clearPwError = () => {
+    pw.classList.remove('is-invalid');
+    pw.setAttribute('aria-invalid', 'false');
+  };
+  const syncPw = () => {
+    show(pwRow, pwSwitch.checked);
+    pw.required = pwSwitch.checked;
+    pwCopy.disabled = pw.value === '';
+    if (!pwSwitch.checked) clearPwError();
+  };
+  pwSwitch.addEventListener('change', () => {
+    syncPw();
+    if (pwSwitch.checked && pw.value === '') pw.focus();
+  });
+  pw.addEventListener('input', () => {
+    clearPwError();
+    pwCopy.disabled = pw.value === '';
+  });
+  bindReveal(pwReveal, pw);
+  bindCopy(pwCopy, () => pw.value, 'Password copied', pw, 'The password is selected');
+  el<HTMLButtonElement>('room-password-generate').addEventListener('click', () => {
+    pw.value = generatePassword();
+    pw.dispatchEvent(new Event('input'));
+    if (pw.type !== 'text') pwReveal.click();
+    announce('Generated a 20-character password. Copy it and send it separately from invites.');
+  });
+  syncPw();
+  const maxInput = el<HTMLInputElement>('room-max');
+  maxInput.addEventListener('input', () => {
+    maxInput.classList.remove('is-invalid');
+    maxInput.setAttribute('aria-invalid', 'false');
+  });
   form.addEventListener('submit', async (ev) => {
     ev.preventDefault();
     if (form.getAttribute('aria-busy') === 'true') return;
@@ -304,19 +356,43 @@ export function initRoomCreate(): void {
     you.setAttribute('aria-invalid', 'false');
     const roomName = cleanName(el<HTMLInputElement>('room-name').value);
     if (!nameAllowed(roomName, true)) {
-      error.textContent = 'Leave out stacks of accent marks in the room’s name.';
+      error.textContent = 'Leave out stacks of accent marks in the chat’s name.';
       show(error);
       el('room-name').focus();
       return;
     }
+    const password = pwSwitch.checked ? pw.value : '';
+    if (pwSwitch.checked && password.length < MIN_PASSWORD_LENGTH) {
+      pw.classList.add('is-invalid');
+      pw.setAttribute('aria-invalid', 'true');
+      pw.focus();
+      return;
+    }
     const expiresIn = Number(el<HTMLSelectElement>('room-expiry').value);
+    const maxMembers = maxInput.value.trim() === '' ? NaN : Number(maxInput.value);
+    const inviteTtl = Number(el<HTMLSelectElement>('room-invite-ttl').value);
+    if (!Number.isInteger(maxMembers) || maxMembers < MIN_MEMBERS || maxMembers > MAX_SLOTS) {
+      maxInput.classList.add('is-invalid');
+      maxInput.setAttribute('aria-invalid', 'true');
+      maxInput.focus();
+      return;
+    }
+    if (!INVITE_TTLS.includes(inviteTtl)) return;
     const done = busy(el<HTMLButtonElement>('room-create-submit'), 'Creating…');
     form.setAttribute('aria-busy', 'true');
     // Every secret made here is wiped at the end, whatever fails on the way.
     const secrets: Uint8Array[] = [];
     try {
       const sodium = await loadSodium();
-      const created = await createRoom(expiresIn);
+      const created = await createRoom(expiresIn, maxMembers, inviteTtl);
+      // The password never leaves this tab: only its Argon2id key is kept,
+      // to check joins. (Argon2id blocks the page for a moment.)
+      let pwKey: Uint8Array | null = null;
+      if (password !== '') {
+        await nextFrame();
+        pwKey = roomPasswordKey(sodium, password, created.id);
+        secrets.push(pwKey);
+      }
       const roomKey = sodium.randombytes_buf(ROOM_KEY_BYTES);
       secrets.push(roomKey);
       // The roster key hides names, labels and the room's name from anyone
@@ -329,13 +405,17 @@ export function initRoomCreate(): void {
       const session = newSession(sodium, roomKey, 0, created.memberToken, created.ownerToken, name, me.sign, me.box, me.sign.subarray(32));
       session.roster = b64(sodium, roster);
       session.nameSecret = b64(sodium, nameKeys.privateKey);
+      session.password = pwKey ? b64(sodium, pwKey) : null;
+      session.settings = { max: maxMembers, ttl: inviteTtl };
+      if (pwKey) sodium.memzero(pwKey);
       const key = controlKey(sodium, roomKey);
       secrets.push(key);
       sodium.memzero(roomKey);
       // The room's name and when it ends, signed: members then check the
       // server's countdown against it.
       const named = sealControl(sodium, key, created.id, 0, me.sign,
-        { t: 'room', id: newRecordId(sodium), time: Date.now(), name: boxName(sodium, roster, roomName, created.id, 'room', 0), ends: Date.now() + expiresIn * 1000 });
+        { t: 'room', id: newRecordId(sodium), time: Date.now(), name: boxName(sodium, roster, roomName, created.id, 'room', 0), ends: Date.now() + expiresIn * 1000,
+          pw: password !== '', max: maxMembers, ttl: inviteTtl });
       sodium.memzero(roster);
       sodium.memzero(nameKeys.privateKey);
       session.posted.push(signatureHash(sodium, openControl(sodium, key, created.id, 0, named)!.signature));
@@ -349,10 +429,11 @@ export function initRoomCreate(): void {
         sodium.memzero(me.box);
       }
       saveSession(created.id, session);
+      pw.value = '';
       window.location.assign(`/r/${created.id}`);
     } catch (e) {
       for (const s of secrets) s.fill(0);
-      error.textContent = roomError(e, 'The burner room could not be created. Check your connection and try again.');
+      error.textContent = roomError(e, 'The Null Chat could not be created. Check your connection and try again.');
       show(error);
       error.focus();
     } finally {
@@ -374,23 +455,30 @@ export async function initRoom(id: string, fragment: string): Promise<void> {
       showProblem('This invite link is incomplete', 'The part after the # is missing or damaged. Ask the person who invited you to send the whole link again.');
       return;
     }
-    joinFlow(sodium, id, invite.key, invite.invite, invite.creator, invite.secret, invite.slot);
+    joinFlow(sodium, id, invite.key, invite.invite, invite.creator, invite.secret, invite.slot, invite.password);
     return;
   }
   if (!existing) {
-    showProblem('This burner room isn’t open in this tab', 'Your access to a burner room stays in the browser tab where you joined it. To get back in, ask someone in the room for a new invite.');
+    showProblem('This Null Chat isn’t open in this tab', 'Your access to a Null Chat stays in the browser tab where you joined it. To get back in, ask someone in the chat for a new invite.');
     return;
   }
   openChat(sodium, id, existing);
 }
 
-function joinFlow(sodium: Sodium, id: string, roomKey: Uint8Array, inviteToken: string, creatorKey: Uint8Array, inviteSecret: Uint8Array, inviteSlot: number): void {
+function joinFlow(sodium: Sodium, id: string, roomKey: Uint8Array, inviteToken: string, creatorKey: Uint8Array, inviteSecret: Uint8Array, inviteSlot: number, passwordHint: boolean): void {
   const gate = el('room-join');
   reveal(gate);
   el('room-join-title').focus();
   const form = el<HTMLFormElement>('room-join-form');
   const nameInput = el<HTMLInputElement>('room-join-name');
   const error = el('room-join-error');
+  // The chat's password, if it has one. The link only hints at it; the
+  // creator's signed settings, read once the invite is used, decide.
+  const pwField = el('room-join-password-field');
+  const pwInput = el<HTMLInputElement>('room-join-password');
+  bindReveal(el<HTMLButtonElement>('room-join-password-reveal'), pwInput);
+  show(pwField, passwordHint);
+  pwInput.addEventListener('input', () => pwInput.setAttribute('aria-invalid', 'false'));
   // The invite, once used: pressing Join again only repeats the check.
   let used: { memberToken: string; slot: number } | null = null;
   form.addEventListener('submit', async (ev) => {
@@ -416,11 +504,11 @@ function joinFlow(sodium: Sodium, id: string, roomKey: Uint8Array, inviteToken: 
       done();
       form.removeAttribute('aria-busy');
       if (e instanceof ApiError && e.status === 410 && e.message.includes('expired')) {
-        showProblem('This invite has expired', 'An invite works for an hour after it is made. Ask the person who invited you for a new one.');
+        showProblem('This invite has expired', 'Invites work for a short time after they’re made, from 5 minutes to an hour as the chat’s creator chose. Ask the person who invited you for a new one.');
       } else if (e instanceof ApiError && e.status === 410) {
-        showProblem('This invite was already used', 'Each invite works once. Ask the person who invited you for a new one.');
+        showProblem('This invite was already used or revoked', 'Each invite works once, and the person who made it can revoke it. Ask them for a new one.');
       } else if (e instanceof ApiError && e.status === 404) {
-        showProblem('This burner room doesn’t exist', 'It may have expired or been deleted, or burner rooms are turned off on this server.');
+        showProblem('This Null Chat doesn’t exist', 'It may have expired or been deleted, or Null Chats are turned off on this server.');
       } else {
         error.textContent = roomError(e, 'Could not join. Check your connection and try again.');
         show(error);
@@ -433,7 +521,7 @@ function joinFlow(sodium: Sodium, id: string, roomKey: Uint8Array, inviteToken: 
       done();
       form.removeAttribute('aria-busy');
       sodium.memzero(roomKey);
-      showProblem('This invite was sent to the wrong place', 'The server put you in a different place in the room from the one this invite was made for, so you can’t be let in. The server may have been tampered with. Tell the person who invited you.');
+      showProblem('This invite was sent to the wrong place', 'The server put you in a different place in the chat from the one this invite was made for, so you can’t be let in. The server may have been tampered with. Tell the person who invited you.');
       return;
     }
     // The invite is used now. Check that its key really opens this room
@@ -446,6 +534,10 @@ function joinFlow(sodium: Sodium, id: string, roomKey: Uint8Array, inviteToken: 
     let opens: boolean | null = null;
     let gone = false;
     let nameKey: Uint8Array | null = null;
+    // Whether the creator's signed settings ask for a password. Without
+    // them (a server hiding them), a join without one is refused by the
+    // creator, which fails safe.
+    let needsPassword = false;
     try {
       for (let attempt = 0; opens === null && attempt < 3; attempt++) {
         if (attempt > 0) await new Promise((r) => setTimeout(r, 1500 * attempt));
@@ -461,6 +553,14 @@ function joinFlow(sodium: Sodium, id: string, roomKey: Uint8Array, inviteToken: 
             nameKey = decodeKey(sodium, o.record.namekey);
             return nameKey !== null;
           });
+          // The first room record the creator signed holds its settings.
+          for (const r of first.records) {
+            if (r.from !== 0) continue;
+            const o = openControl(sodium, key0, id, 0, r.data);
+            if (o === null || o.record.t !== 'room' || !verifySignature(sodium, o, creatorKey)) continue;
+            needsPassword = o.record.pw;
+            break;
+          }
         } catch (e) {
           if (e instanceof ApiError && e.status === 404) gone = true;
           if (gone) break;
@@ -474,13 +574,13 @@ function joinFlow(sodium: Sodium, id: string, roomKey: Uint8Array, inviteToken: 
       form.removeAttribute('aria-busy');
       sodium.memzero(roomKey);
       sodium.memzero(inviteSecret);
-      showProblem('This burner room has ended', 'It self-destructed or expired just as you joined.');
+      showProblem('This Null Chat has ended', 'It self-destructed or expired just as you joined.');
       return;
     }
     if (opens === null) {
       done();
       form.removeAttribute('aria-busy');
-      error.textContent = 'You’re in, but the room could not be reached to check the invite. Press Join to try again, and keep this tab open: the invite is used up.';
+      error.textContent = 'You’re in, but the chat could not be reached to check the invite. Press Join to try again, and keep this tab open: the invite is used up.';
       show(error);
       return;
     }
@@ -489,15 +589,44 @@ function joinFlow(sodium: Sodium, id: string, roomKey: Uint8Array, inviteToken: 
       form.removeAttribute('aria-busy');
       sodium.memzero(roomKey);
       sodium.memzero(inviteSecret);
-      showProblem('This invite link was damaged', 'The part after the # was changed on the way, so it cannot open the room, and the invite is now used up. Ask the person who invited you for a new invite, and send it a different way if you can.');
+      showProblem('This invite link was damaged', 'The part after the # was changed on the way, so it cannot open the chat, and the invite is now used up. Ask the person who invited you for a new invite, and send it a different way if you can.');
       return;
     }
+    // A chat with a password: ask for it now if it was not given. The
+    // invite is used, so Join only repeats the check after this.
+    if (needsPassword && pwInput.value === '') {
+      done();
+      form.removeAttribute('aria-busy');
+      show(pwField);
+      pwInput.setAttribute('aria-invalid', 'true');
+      error.textContent = 'This chat has a password. Enter it to be let in: the person who invited you should have sent it separately from the link.';
+      show(error);
+      pwInput.focus();
+      return;
+    }
+    // The password key goes into our join's proof; the creator's tab
+    // checks it. A wrong one closes this invite (one try per invite).
+    let pwKey: Uint8Array | null = null;
+    if (needsPassword) {
+      await nextFrame(); // Argon2id blocks the page for a moment
+      try {
+        pwKey = roomPasswordKey(sodium, pwInput.value, id);
+      } catch {
+        done();
+        form.removeAttribute('aria-busy');
+        pwInput.setAttribute('aria-invalid', 'true');
+        error.textContent = 'That password is too long.';
+        show(error);
+        return;
+      }
+    }
+    pwInput.value = '';
     // From here on, this tab's session is the way in.
     let me: ReturnType<typeof newIdentity>;
     let session: Session;
     let key: Uint8Array;
     try {
-      me = newIdentity(sodium, name, { sealTo: nameKey }, { roomId: id, slot: joined.slot, secret: inviteSecret });
+      me = newIdentity(sodium, name, { sealTo: nameKey }, { roomId: id, slot: joined.slot, secret: inviteSecret, password: pwKey });
       session = newSession(sodium, roomKey, joined.slot, joined.memberToken, null, name, me.sign, me.box, creatorKey);
       session.joinProof = me.join.proof ?? null;
       session.inviteCheck = inviteCheck(sodium, inviteSecret, id, joined.slot);
@@ -506,12 +635,13 @@ function joinFlow(sodium: Sodium, id: string, roomKey: Uint8Array, inviteToken: 
     } catch {
       done();
       form.removeAttribute('aria-busy');
-      showProblem('This burner room can’t be opened', 'Something went wrong while joining. Ask the person who invited you for a new invite.');
+      showProblem('This Null Chat can’t be opened', 'Something went wrong while joining. Ask the person who invited you for a new invite.');
       return;
     } finally {
-      // Whatever happened, the link's keys leave memory here.
+      // Whatever happened, the link's keys (and the password's) leave memory here.
       sodium.memzero(inviteSecret);
       sodium.memzero(roomKey);
+      if (pwKey) sodium.memzero(pwKey);
     }
     try {
       await postControl(sodium, key, id, joined.slot, joined.memberToken, me.sign, me.join);
@@ -550,6 +680,8 @@ const SKIPPED_MS = 2 * 60_000;
 const ENDS_SLACK_MS = 10 * 60_000;
 /** After waiting this long to be let in, the page explains what may be wrong. */
 const WAIT_HINT_MS = 2 * 60_000;
+/** How long past an invite's signed expiry the creator's tab still lets its join in (clocks differ; a background tab polls slowly). */
+const INVITE_SLACK_MS = 10 * 60_000;
 
 const NAME_RULE = 'Use a letter, digit or emoji, at most four digits (none in brackets), no check marks or stacks of accent marks, and no role such as admin or owner: names can’t look like the codes, marks or roles the app shows.';
 
@@ -586,6 +718,23 @@ const DIALOGS = ['room-invite-dialog', 'room-members-dialog', 'room-destroy-dial
 
 function openChat(sodium: Sodium, id: string, session: Session): void {
   document.body.classList.add('nb-in-room');
+  /**
+   * For the creator: whether a join proves it came from the invite link for
+   * its place (and, in a chat with a password, that it knew the password),
+   * or null when this tab made no invite for the place.
+   */
+  const proofOk = (slot: number, join: { key: string; box: string; proof: string | null }): boolean | null => {
+    const invite = session.invites.find((i) => i.slot === slot);
+    if (!invite) return null;
+    if (join.proof === null) return false;
+    const secret = unb64(sodium, invite.secret);
+    const pwKey = session.password ? unb64(sodium, session.password) : null;
+    try { return checkJoinProof(sodium, secret, id, slot, join.key, join.box, join.proof, pwKey); }
+    finally {
+      sodium.memzero(secret);
+      if (pwKey) sodium.memzero(pwKey);
+    }
+  };
   reveal(el('room-chat'));
   const roomKey = unb64(sodium, session.key);
   const key = controlKey(sodium, roomKey);
@@ -615,14 +764,7 @@ function openChat(sodium: Sodium, id: string, session: Session): void {
     roster: session.roster ? unb64(sodium, session.roster) : null,
     nameSecret: session.nameSecret ? unb64(sodium, session.nameSecret) : null,
     inviteCheck: session.inviteCheck,
-    checkProof: session.slot !== 0 ? undefined : (slot, join) => {
-      const invite = session.invites.find((i) => i.slot === slot);
-      if (!invite) return null;
-      if (join.proof === null) return false;
-      const secret = unb64(sodium, invite.secret);
-      try { return checkJoinProof(sodium, secret, id, slot, join.key, join.box, join.proof); }
-      finally { sodium.memzero(secret); }
-    },
+    checkProof: session.slot !== 0 ? undefined : (slot, join) => proofOk(slot, join),
   }, peers, {
     known: new Map(session.known.map((k) => [k.slot, unb64(sodium, k.key)])),
     removed: session.removedSlots,
@@ -657,6 +799,8 @@ function openChat(sodium: Sodium, id: string, session: Session): void {
   const contested = new Set<number>();
   /** Places whose damaged-invite notice was shown. */
   const badProofShown = new Set<number>();
+  /** Places closed because their invite expired before its join reached this tab, or the chat was full. */
+  const lateShown = new Set<number>();
   /** Messages we could not read, counted after the first full fetch; more later may mean hidden key deliveries. */
   let unreadableBase: number | null = null;
   /** When we started waiting to be let in. */
@@ -707,7 +851,7 @@ function openChat(sodium: Sodium, id: string, session: Session): void {
     mode = null;
     show(context, false);
     for (const e of ['room-context-title', 'room-context-quote', 'room-member-list', 'room-member-count', 'room-invite-link', 'room-expires']) el(e).replaceChildren();
-    title.textContent = 'Burner room';
+    title.textContent = 'Null Chat';
     avatar.textContent = 'B';
     document.title = baseTitle;
     document.body.classList.remove('nb-in-room');
@@ -718,7 +862,14 @@ function openChat(sodium: Sodium, id: string, session: Session): void {
     clearSession(id);
     showProblem(heading, body);
   };
-  const gone = () => end('This burner room has ended', 'It self-destructed, expired, or the server restarted, or you were removed. Nothing in it can be read any more.');
+  // The server stops answering once our place is closed. Someone never let
+  // in most likely had their place closed by the creator (a wrong
+  // password, an expired or revoked invite); the chat may also have ended.
+  const gone = () => (session.slot !== 0 && !state.members.has(session.slot)
+    ? end('You weren’t let in', state.passwordRequired
+      ? 'The person who invited you closed your place without letting you in: the password may have been wrong, or the invite expired or was revoked. The chat may also have ended. Ask them for a new invite, and check the password with them.'
+      : 'The person who invited you closed your place without letting you in, perhaps because the invite expired or was revoked, or the chat ended. Ask them for a new invite, sent another way.')
+    : end('This Null Chat has ended', 'It self-destructed, expired, or the server restarted, or you were removed. Nothing in it can be read any more.'));
 
   // One tab at a time: a duplicated tab carries a copy of this session and
   // would send with the same keys. The first tab holds a lock on this place
@@ -732,7 +883,7 @@ function openChat(sodium: Sodium, id: string, session: Session): void {
     if (ended) return;
     shutdown();
     clearSession(id);
-    showProblem('This burner room is open in another tab', 'A room works in one tab at a time. Use the tab where you joined it. This tab’s copy of the room’s keys has been deleted.');
+    showProblem('This Null Chat is open in another tab', 'A chat works in one tab at a time. Use the tab where you joined it. This tab’s copy of the chat’s keys has been deleted.');
   };
   const start = () => {
     if (!ended) timer = window.setTimeout(() => void poll(), 0);
@@ -952,7 +1103,15 @@ function openChat(sodium: Sodium, id: string, session: Session): void {
     for (const slot of state.badProof) {
       if (badProofShown.has(slot) || state.removed.has(slot) || state.admitSeen.has(slot)) continue;
       badProofShown.add(slot);
-      add(system('Someone used the invite for ', nameNode(slot), ', but their link didn’t match the invite: it may have been changed on the way. They can’t be let in. Cancel that invite in Members and send a new one another way.'), false, false);
+      // With a password, a failed proof may be a guess: close the place at
+      // once, so each invite allows one try (also against a server that
+      // posts joins for it).
+      if (session.password) {
+        add(system('Someone used the invite for ', nameNode(slot), ' with the wrong password, or a link that was changed on the way. Its place was closed, so nobody can try it again. If it was them, send a new invite.'), false, false);
+        void closePlace(slot);
+        continue;
+      }
+      add(system('Someone used the invite for ', nameNode(slot), ', but their link didn’t match the invite: it may have been changed on the way. They can’t be let in. Revoke that invite in Members and send a new one another way.'), false, false);
     }
     for (const k of session.known) {
       if (k.slot === 0 || state.admitSeen.has(k.slot) || state.removed.has(k.slot)) continue;
@@ -960,15 +1119,38 @@ function openChat(sodium: Sodium, id: string, session: Session): void {
       if (j && j.join.key === k.key) await postAdmit(k.slot, j);
     }
     for (const [slot, joins] of state.joinsToAdmit()) {
-      if (session.known.some((k) => k.slot === slot)) continue;
+      if (session.known.some((k) => k.slot === slot) || state.removed.has(slot)) continue;
       const invite = session.invites.find((i) => i.slot === slot);
       if (!invite) continue;
-      const secret = unb64(sodium, invite.secret);
-      let valid: Member[];
-      try { valid = joins.filter((j) => j.join.proof !== null && checkJoinProof(sodium, secret, id, slot, j.join.key, j.join.box, j.join.proof)); }
-      finally { sodium.memzero(secret); }
+      const valid = joins.filter((j) => proofOk(slot, j.join) === true);
       const m = valid[0];
       if (!m) continue;
+      // The server stops an invite at its signed lifetime; this tab does
+      // too, whatever the server does: a join it first sees well after the
+      // invite expired is nobody it lets in (clocks and a sleeping tab get
+      // ten minutes).
+      if (Date.now() > invite.exp + INVITE_SLACK_MS) {
+        if (!lateShown.has(slot)) {
+          lateShown.add(slot);
+          add(system('Someone used the invite for ', nameNode(slot), ' after it expired, so they weren’t let in and its place was closed. If it was them, send a new invite.'), false, false);
+          void closePlace(slot);
+        }
+        continue;
+      }
+      // Never past the chat's own member limit. Counted from this tab's own
+      // admits, which it pins before posting them: one pass may admit
+      // several places before the history shows any of them.
+      const pinned = new Set<number>([0, ...session.known.map((k) => k.slot)]);
+      for (const r of state.removed) pinned.delete(r);
+      const limit = session.settings?.max ?? MAX_SLOTS;
+      if (Math.max(pinned.size, state.activeCount()) >= limit) {
+        if (!lateShown.has(slot)) {
+          lateShown.add(slot);
+          add(system('The invite for ', nameNode(slot), ' was used, but the chat is full, so they weren’t let in and its place was closed.'), false, false);
+          void closePlace(slot);
+        }
+        continue;
+      }
       // Two different people with the link for one place: the link leaked,
       // and we cannot tell who is who. Let nobody in through it. (Every
       // join with a valid proof counts, also one whose name does not open.)
@@ -1092,7 +1274,7 @@ function openChat(sodium: Sodium, id: string, session: Session): void {
     const tag = state.tagOf(slot);
     if (tag) {
       const badge = make('span', 'nb-tag', tag);
-      badge.title = 'The start of their safety code: this name looks like another one in the room.';
+      badge.title = 'The start of their safety code: this name looks like another one in the chat.';
       n.append(' ', make('span', 'visually-hidden', 'safety code '), badge);
     }
     return n;
@@ -1101,8 +1283,8 @@ function openChat(sodium: Sodium, id: string, session: Session): void {
   const empty = make('li', 'nb-chat-empty');
   empty.append(make('strong', '', 'No messages yet'),
     document.createTextNode(owner !== null
-      ? 'Invite people with a link, then say hello. Only people in this room can read it, not even the server.'
-      : 'Say hello. Only people in this room can read it, not even the server.'));
+      ? 'Invite people with a link, then say hello. Only people in this chat can read it, not even the server.'
+      : 'Say hello. Only people in this chat can read it, not even the server.'));
   if (owner !== null) {
     const invite = make('button', 'btn nb-btn-primary');
     invite.type = 'button';
@@ -1194,8 +1376,8 @@ function openChat(sodium: Sodium, id: string, session: Session): void {
     for (const n of live) noticeParts(n.li, n.build());
     log.removeAttribute('aria-busy');
     redrawNameNodes();
-    title.textContent = state.name || 'Burner room';
-    avatar.textContent = initial(state.name || 'Burner room');
+    title.textContent = state.name || 'Null Chat';
+    avatar.textContent = initial(state.name || 'Null Chat');
     updateMembers();
   };
 
@@ -1535,12 +1717,12 @@ function openChat(sodium: Sodium, id: string, session: Session): void {
       }
       case 'joined':
         if (e.member.slot === session.slot) {
-          add(system(session.slot === 0 ? 'You created this room. Messages in it are end-to-end encrypted.' : 'You joined. Messages from now on are end-to-end encrypted.'), mine, false);
+          add(system(session.slot === 0 ? 'You created this chat. Messages in it are end-to-end encrypted.' : 'You joined. Messages from now on are end-to-end encrypted.'), mine, false);
         } else {
           const slot = e.member.slot;
           add(systemLive(() => {
             const as = state.invitedAs(slot);
-            return slot === 0 ? [nameNode(0), ' created this room.']
+            return slot === 0 ? [nameNode(0), ' created this chat.']
               : as ? [nameNode(slot), ' joined, with the invite made for ', make('span', '', as), '.'] : [nameNode(slot), ' joined.'];
           }), mine, false);
         }
@@ -1553,8 +1735,8 @@ function openChat(sodium: Sodium, id: string, session: Session): void {
         return;
       }
       case 'renamed':
-        title.textContent = e.name || 'Burner room';
-        avatar.textContent = initial(e.name || 'Burner room');
+        title.textContent = e.name || 'Null Chat';
+        avatar.textContent = initial(e.name || 'Null Chat');
         return;
       default:
         return;
@@ -1575,7 +1757,7 @@ function openChat(sodium: Sodium, id: string, session: Session): void {
     const left = deadline - Date.now();
     expiresLabel.textContent = left > 0 ? 'Self-destructs in ' : 'Self-destructing ';
     expiresLeft.textContent = left > 0 ? formatCountdown(left) : 'now';
-    expires.title = left > 0 ? `This room self-destructs in ${formatCountdown(left)}` : '';
+    expires.title = left > 0 ? `This chat self-destructs in ${formatCountdown(left)}` : '';
   };
   const countdown = window.setInterval(updateCountdown, 1000);
 
@@ -1615,7 +1797,7 @@ function openChat(sodium: Sodium, id: string, session: Session): void {
         if (state.ends !== null && deadline > state.ends) {
           if (deadline > state.ends + ENDS_SLACK_MS && !warnedEnds) {
             warnedEnds = true;
-            add(system('The server and the room’s creator disagree on when this room ends, by more than clocks usually do. The countdown shows the earlier time.'), false, false);
+            add(system('The server and the chat’s creator disagree on when this chat ends, by more than clocks usually do. The countdown shows the earlier time.'), false, false);
           }
           deadline = state.ends;
         }
@@ -1642,14 +1824,14 @@ function openChat(sodium: Sodium, id: string, session: Session): void {
         unreadableBase = state.unreadable;
       }
       if (state.conflict) {
-        end('This room’s history was changed', 'The server showed this tab a different history of the room than before (other keys for someone, or a removal undone). Someone may be trying to listen in. Leave this room and tell the others.');
+        end('This chat’s history was changed', 'The server showed this tab a different history of the chat than before (other keys for someone, or a removal undone). Someone may be trying to listen in. Leave this chat and tell the others.');
         return;
       }
       for (const [slot, kind] of state.forks) {
         if (warnedForks.has(`${kind}:${slot}`)) continue;
         warnedForks.add(`${kind}:${slot}`);
         add(kind === 'keys'
-          ? system(nameNode(slot), ' gave different people different keys, so they can show each of you different messages. Remove them, or leave the room.')
+          ? system(nameNode(slot), ' gave different people different keys, so they can show each of you different messages. Remove them, or leave the chat.')
           : system(nameNode(slot), '’s messages and keys arrived out of order: they, or the server, may be showing people different conversations. Compare with the others another way, and leave if in doubt.'), false, false);
       }
       for (const slot of state.skipped(SKIPPED_MS)) {
@@ -1669,7 +1851,7 @@ function openChat(sodium: Sodium, id: string, session: Session): void {
       // the creator's join: a history without it was cut.
       if (state.members.has(0) && state.ends === null && !warnedNoRoom && after > 1) {
         warnedNoRoom = true;
-        add(system('This room’s signed settings are missing from what the server sent. The server may be hiding records; the countdown is only its word.'), false, false);
+        add(system('This chat’s signed settings are missing from what the server sent. The server may be hiding records; the countdown is only its word.'), false, false);
       }
       for (const slot of state.staleFrom) {
         if (warnedForks.has(`stale:${slot}`)) continue;
@@ -1677,7 +1859,7 @@ function openChat(sodium: Sodium, id: string, session: Session): void {
         add(system(nameNode(slot), ' sent you keys locked to an old receiving key of yours, one you had replaced well before. Either the server hid your newer key from them, or they did this on purpose. Compare safety codes in Members, and leave if in doubt.'), false, false);
       }
       if (state.cloned) {
-        end('This room is open somewhere else', 'A copy of this tab’s keys posted in this room: a copied tab, an older copy of this tab that the browser restored, or someone who copied your browser data. This tab’s copy of the keys has been deleted. If you didn’t do this, tell the others to leave the room.');
+        end('This chat is open somewhere else', 'A copy of this tab’s keys posted in this chat: a copied tab, an older copy of this tab that the browser restored, or someone who copied your browser data. This tab’s copy of the keys has been deleted. If you didn’t do this, tell the others to leave the chat.');
         return;
       }
       persist();
@@ -1685,30 +1867,32 @@ function openChat(sodium: Sodium, id: string, session: Session): void {
       show(status, false);
       if (state.removed.has(session.slot)) {
         if (!state.members.has(session.slot)) {
-          end('Your invite was closed', 'The person who invited you closed your place before letting you in, perhaps because someone else used your invite too. Ask them for a new invite, sent another way.');
+          end('You weren’t let in', state.passwordRequired
+            ? 'The person who invited you closed your place without letting you in: the password may have been wrong, the invite may have expired or been revoked, or someone else used it too. Ask them for a new invite, and check the password with them.'
+            : 'The person who invited you closed your place before letting you in: the invite may have expired or been revoked, or someone else used it too. Ask them for a new invite, sent another way.');
           return;
         }
-        end('You were removed from this burner room', 'The person who created it removed you. You can no longer read or post in it.');
+        end('You were removed from this Null Chat', 'The person who created it removed you. You can no longer read or post in it.');
         return;
       }
       if (state.inviteMismatch) {
-        end('This invite link was damaged', 'The link you used is not the one the room’s creator made: part of it was changed on the way, so they can’t let you in. Ask them for a new invite, and send it a different way if you can.');
+        end('This invite link was damaged', 'The link you used is not the one the chat’s creator made: part of it was changed on the way, so they can’t let you in. Ask them for a new invite, and send it a different way if you can.');
         return;
       }
       if (state.impostor()) {
-        end('Someone else took your place in this room', 'The room shows keys for your place that are not yours, so someone who has the room’s key, working with the server, may be posing as you. Leave this room and tell the person who invited you.');
+        end('Someone else took your place in this chat', 'The chat shows keys for your place that are not yours, so someone who has the chat’s key, working with the server, may be posing as you. Leave this chat and tell the person who invited you.');
         return;
       }
       if (session.slot === 0) await admitWaiting();
       if (!state.members.has(session.slot)) {
         if (state.waitingForAdmit()) {
-          const creator = state.members.get(0)?.name || 'the room’s creator';
+          const creator = state.members.get(0)?.name || 'the chat’s creator';
           text.placeholder = `Waiting for ${creator} to let you in…`;
           waitingSince ??= Date.now();
           const code = safetyCode(sodium, signPublic);
           status.textContent = Date.now() - waitingSince < WAIT_HINT_MS
-            ? `Waiting for ${creator} to let you in. Their tab does it while the room is open. Your safety code is ${code}.`
-            : `Still waiting. The creator’s tab lets people in while the room is open there. If they say you’re in already, someone else may have used your invite: ask them to check Members for your safety code, ${code}.`;
+            ? `Waiting for ${creator} to let you in. Their tab does it while the chat is open. Your safety code is ${code}.`
+            : `Still waiting. The creator’s tab lets people in while the chat is open there. If they say you’re in already, someone else may have used your invite: ask them to check Members for your safety code, ${code}.`;
           show(status);
         } else {
           await exclusive(rejoin); // our join announcement was lost: send it again
@@ -1733,7 +1917,7 @@ function openChat(sodium: Sodium, id: string, session: Session): void {
         status.textContent = 'Lots of activity from your network. Checking for messages a little less often…';
         delay = 10_000;
       } else if (e instanceof ApiError && e.status === 409) {
-        status.textContent = 'This room is full, so nothing more can be posted in it. Self-destruct it and start a new one.';
+        status.textContent = 'This chat is full, so nothing more can be posted in it. Self-destruct it and start a new one.';
       } else {
         status.textContent = 'Can’t reach the server right now. Retrying…';
       }
@@ -1922,7 +2106,14 @@ function openChat(sodium: Sodium, id: string, session: Session): void {
     persist();
   };
   initMembers(sodium, id, session, state, control, gone, isEnded, removeHere, nameNode, poll, isVerified, setVerified, listening.signal);
-  if (owner !== null) initOwner(sodium, id, session, owner, control, gone, signPublic, isEnded, state, listening.signal);
+  // Revoking an invite closes its place like a removal: on the server
+  // first (the link stops working), then for everyone, signed.
+  const revokePlace = async (slot: number) => {
+    removeHere(slot);
+    await removeMember(id, owner!, slot);
+    if (!state.removalSeen.has(slot)) await control({ t: 'remove', id: newRecordId(sodium), time: Date.now(), slot });
+  };
+  if (owner !== null) initOwner(sodium, id, session, owner, control, gone, signPublic, isEnded, state, listening.signal, revokePlace);
   // (Invites made in this tab add their secrets to the session; persist()
   // saves them with everything else.)
   initDestroy(id, session, end, listening.signal);
@@ -1945,14 +2136,14 @@ function initDestroy(id: string, session: Session, end: (heading: string, text: 
     try {
       await destroyRoom(id, session.member);
       done();
-      end('Burner room destroyed', 'It’s gone for everyone, with all its messages.');
+      end('Null Chat destroyed', 'It’s gone for everyone, with all its messages.');
     } catch (e) {
       done();
       if (e instanceof ApiError && e.status === 404) {
-        end('This burner room has ended', 'It self-destructed, expired, or the server restarted, or you were removed.');
+        end('This Null Chat has ended', 'It self-destructed, expired, or the server restarted, or you were removed.');
         return;
       }
-      error.textContent = roomError(e, 'The room could not be self-destructed. Check your connection and try again.');
+      error.textContent = roomError(e, 'The chat could not be self-destructed. Check your connection and try again.');
       show(error);
     }
   }, { signal });
@@ -1997,8 +2188,8 @@ function initMembers(sodium: Sodium, id: string, session: Session, state: RoomSt
       // must not hide it.
       const code = m ? ` · Code ${m.code}` : '';
       const detail = make('span', 'nb-member-detail',
-        announced ? `Removed${code}` : started ? `Removal not finished: they may still get messages${code}` :
-          m ? `${verified ? 'Verified · ' : ''}${slot === 0 ? 'Created the room · ' : ''}${as ? `Used the invite made for ${as} · ` : ''}Code ${m.code}` :
+        announced ? (m ? `Removed${code}` : 'Invite revoked') : started ? `Removal not finished: they may still get messages${code}` :
+          m ? `${verified ? 'Verified · ' : ''}${slot === 0 ? 'Created the chat · ' : ''}${as ? `Used the invite made for ${as} · ` : ''}Code ${m.code}` :
             states?.get(slot) === 'expired' ? 'Invite expired unused' :
               state.badProof.has(slot) ? 'Joined with a link that didn’t match the invite: can’t be let in' :
                 states?.get(slot) === 'joined' ? 'Joined, not let in yet' : 'Invited, hasn’t joined yet');
@@ -2020,7 +2211,7 @@ function initMembers(sodium: Sodium, id: string, session: Session, state: RoomSt
           check.classList.toggle('nb-on', on);
           text.textContent = on ? 'Unmark verified' : 'Mark verified';
           check.title = on ? '' : 'Only after comparing this code with the one they see';
-          if (!started) detail.textContent = `${on ? 'Verified · ' : ''}${slot === 0 ? 'Created the room · ' : ''}${as ? `Used the invite made for ${as} · ` : ''}Code ${m.code}`;
+          if (!started) detail.textContent = `${on ? 'Verified · ' : ''}${slot === 0 ? 'Created the chat · ' : ''}${as ? `Used the invite made for ${as} · ` : ''}Code ${m.code}`;
         };
         show1(verified);
         check.addEventListener('click', () => {
@@ -2035,12 +2226,12 @@ function initMembers(sodium: Sodium, id: string, session: Session, state: RoomSt
         actions.append(check);
       }
       if (session.owner !== null && slot !== 0 && !(announced && closed)) {
-        const label = started ? 'Finish removing' : m ? 'Remove' : 'Cancel invite';
+        const label = started ? 'Finish removing' : m ? 'Remove' : 'Revoke invite';
         const remove = make('button', 'btn nb-btn-secondary nb-btn-remove');
         remove.type = 'button';
         const span = make('span', '', label);
         remove.append(span);
-        remove.setAttribute('aria-label', `${m ? 'Remove' : 'Cancel the invite for'} ${state.nameOf(slot)}`);
+        remove.setAttribute('aria-label', `${m ? 'Remove' : 'Revoke the invite for'} ${state.nameOf(slot)}`);
         let armed = 0;
         let armedAt = 0;
         noRepeat(remove);
@@ -2097,7 +2288,8 @@ function initMembers(sodium: Sodium, id: string, session: Session, state: RoomSt
   el('room-members-close').addEventListener('click', () => dialog.close(), { signal });
 }
 
-function initOwner(sodium: Sodium, id: string, session: Session, owner: string, control: (r: ControlRecord) => Promise<void>, gone: () => void, creatorKey: Uint8Array, isEnded: () => boolean, state: RoomState, signal: AbortSignal): void {
+function initOwner(sodium: Sodium, id: string, session: Session, owner: string, control: (r: ControlRecord) => Promise<void>, gone: () => void, creatorKey: Uint8Array, isEnded: () => boolean, state: RoomState, signal: AbortSignal,
+  revokePlace: (slot: number) => Promise<void>): void {
   // Invites.
   const dialog = el<HTMLDialogElement>('room-invite-dialog');
   const form = el<HTMLFormElement>('room-invite-form');
@@ -2105,13 +2297,68 @@ function initOwner(sodium: Sodium, id: string, session: Session, owner: string, 
   const result = el('room-invite-result');
   const linkBox = el('room-invite-link');
   const error = el('room-invite-error');
+  // This tab's own choices from when it made the chat: the server relays
+  // the signed copy, and could hide it from us.
+  const settings = session.settings!;
+  const revoke = el<HTMLButtonElement>('room-invite-revoke');
+  /** The place of the link shown, so Revoke closes that invite. */
+  let shown: number | null = null;
   const reset = () => {
     label.value = '';
     linkBox.textContent = '';
+    shown = null;
     show(result, false);
     show(form);
     show(error, false);
   };
+  /** Places that count against the member limit: members, and invites that can still be used. */
+  const placesTaken = () => {
+    const taken = new Set<number>([0]);
+    for (const [slot, m] of state.members) if (!m.removed && !state.removed.has(slot)) taken.add(slot);
+    for (const inv of session.invites) {
+      if (!state.removed.has(inv.slot) && !session.removedSlots.includes(inv.slot) && Date.now() < inv.exp) taken.add(inv.slot);
+    }
+    return taken.size;
+  };
+  const ttlText = (seconds: number) => (seconds >= 3600 ? 'hour' : `${seconds / 60} minutes`);
+  // Revoking: the place closes on the server (the link stops working at
+  // once), then for everyone, by a signed removal. Two steps, like Remove.
+  let armed = 0;
+  let armedAt = 0;
+  noRepeat(revoke);
+  revoke.addEventListener('click', async () => {
+    const slot = shown;
+    if (slot === null) return;
+    if (!armed) {
+      revoke.classList.add('nb-armed');
+      revoke.textContent = 'Sure? Revoke it';
+      armedAt = Date.now();
+      armed = window.setTimeout(() => {
+        armed = 0;
+        revoke.classList.remove('nb-armed');
+        revoke.textContent = 'Revoke this invite';
+      }, 4000);
+      return;
+    }
+    if (Date.now() - armedAt < CONFIRM_GAP_MS) return;
+    clearTimeout(armed);
+    armed = 0;
+    revoke.classList.remove('nb-armed');
+    const done = busy(revoke, 'Revoking…');
+    try {
+      await revokePlace(slot);
+      done();
+      revoke.textContent = 'Revoke this invite';
+      dialog.close();
+      announce('The invite was revoked. Its link no longer works.');
+    } catch (e) {
+      done();
+      revoke.textContent = 'Revoke this invite';
+      if (e instanceof ApiError && e.status === 404) return gone();
+      error.textContent = roomError(e, 'The invite could not be revoked. Try again, or revoke it in Members.');
+      show(error);
+    }
+  }, { signal });
   el('room-invite-open').addEventListener('click', () => {
     reset();
     dialog.showModal();
@@ -2139,11 +2386,17 @@ function initOwner(sodium: Sodium, id: string, session: Session, owner: string, 
       label.focus();
       return;
     }
+    // The chat's own limit, checked here too: the server's word is not needed for it.
+    if (!unfinished && placesTaken() >= settings.max) {
+      error.textContent = `This chat allows ${settings.max} people, and every place is taken or invited. Revoke an invite, or remove someone, to make room.`;
+      show(error);
+      return;
+    }
     const done = busy(el<HTMLButtonElement>('room-invite-create'), 'Creating…');
     form.setAttribute('aria-busy', 'true');
     try {
-      // Invites work for an hour; an unfinished one near that is let go.
-      if (unfinished && Date.now() - unfinished.at > 50 * 60_000) {
+      // An unfinished invite near the end of its lifetime is let go.
+      if (unfinished && Date.now() - unfinished.at > settings.ttl * 1000 * 5 / 6) {
         sodium.memzero(unfinished.secret);
         unfinished = null;
       }
@@ -2164,7 +2417,10 @@ function initOwner(sodium: Sodium, id: string, session: Session, owner: string, 
           sodium.memzero(secret);
           return;
         }
-        session.invites.push({ slot, secret: b64(sodium, secret) });
+        // It stops working at the chat's signed invite lifetime: the server
+        // enforces it, and this tab refuses joins that come much later.
+        const exp = Date.now() + settings.ttl * 1000;
+        session.invites.push({ slot, secret: b64(sodium, secret), exp });
         saveSession(id, session);
         // The label shows later whom each invite was for. It is encrypted.
         const rk = unb64(sodium, session.roster!);
@@ -2172,7 +2428,7 @@ function initOwner(sodium: Sodium, id: string, session: Session, owner: string, 
         try { boxed = boxName(sodium, rk, who, id, 'label', slot); }
         catch (e) { sodium.memzero(secret); throw e; }
         finally { sodium.memzero(rk); }
-        unfinished = { slot, token: invite.token, secret, who, record: { t: 'invite', id: newRecordId(sodium), time: Date.now(), slot, label: boxed, check: inviteCheck(sodium, secret, id, slot) }, at: Date.now() };
+        unfinished = { slot, token: invite.token, secret, who, record: { t: 'invite', id: newRecordId(sodium), time: Date.now(), slot, label: boxed, check: inviteCheck(sodium, secret, id, slot), exp }, at: Date.now() };
       }
       const u = unfinished;
       await control(u.record);
@@ -2182,19 +2438,22 @@ function initOwner(sodium: Sodium, id: string, session: Session, owner: string, 
         return;
       }
       const roomKey = unb64(sodium, session.key);
-      try { linkBox.textContent = `${window.location.origin}/r/${id}#${encodeInviteFragment(sodium, roomKey, u.token, creatorKey, u.secret, u.slot)}`; }
+      try { linkBox.textContent = `${window.location.origin}/r/${id}#${encodeInviteFragment(sodium, roomKey, u.token, creatorKey, u.secret, u.slot, session.password !== null)}`; }
       finally {
         sodium.memzero(roomKey);
         sodium.memzero(u.secret);
       }
       el('room-invite-who').textContent = u.who || 'one person';
+      el('room-invite-ttl-text').textContent = ttlText(settings.ttl);
+      show(el('room-invite-password-note'), session.password !== null);
+      shown = u.slot;
       show(form, false);
       reveal(result);
       linkBox.focus();
     } catch (e) {
       if (e instanceof ApiError && e.status === 404) return gone();
       error.textContent = e instanceof Error && e.message === 'reused place'
-        ? 'The server gave this invite a place that was already used, so no link was made. The server may have been tampered with: be careful with this room.'
+        ? 'The server gave this invite a place that was already used, so no link was made. The server may have been tampered with: be careful with this chat.'
         : unfinished
           ? roomError(e, `The invite${unfinished.who ? ` for ${unfinished.who}` : ''} could not be finished. Press Create invite link to try again; it keeps the same place.`)
           : roomError(e, 'The invite could not be created. Try again.');

@@ -1,4 +1,4 @@
-// Tests for burner room cryptography (web/src/room-crypto.ts) and the rules
+// Tests for Null Chat cryptography (web/src/room-crypto.ts) and the rules
 // for trusting records (web/src/room-state.ts).
 
 import { test } from 'node:test';
@@ -50,7 +50,7 @@ import {
   type MessageRecord,
 } from '../src/room-crypto.ts';
 import { RoomState, nameSkeleton, resembles } from '../src/room-state.ts';
-import { MAX_BOX_N, checkJoinProof, inviteCheck, joinProof } from '../src/room-crypto.ts';
+import { MAX_BOX_N, checkJoinProof, inviteCheck, joinProof, roomPasswordKey } from '../src/room-crypto.ts';
 
 const sodium = await loadSodium();
 const ROOM = '0123456789abcdef0123456789abcdef';
@@ -71,8 +71,8 @@ const join = (p: Person, name: string): ControlRecord => (p.slot === 0
     t: 'join', id: id(), time: 1, key: encodeKey(sodium, p.sign.publicKey), box: encodeKey(sodium, p.box.publicKey),
     name: sealName(sodium, name, NAMES.publicKey, { roomId: ROOM, slot: p.slot, key: encodeKey(sodium, p.sign.publicKey), box: encodeKey(sodium, p.box.publicKey) }),
   });
-const roomRec = (name: string, ends = 9): ControlRecord => ({ t: 'room', id: id(), time: 1, name: boxName(sodium, ROSTER, name, ROOM, 'room', 0), ends });
-const inviteRec = (slot: number, label: string, secret = sodium.randombytes_buf(32)): ControlRecord => ({ t: 'invite', id: id(), time: 1, slot, label: boxName(sodium, ROSTER, label, ROOM, 'label', slot), check: inviteCheck(sodium, secret, ROOM, slot) });
+const roomRec = (name: string, ends = 9, max = 20): ControlRecord => ({ t: 'room', id: id(), time: 1, name: boxName(sodium, ROSTER, name, ROOM, 'room', 0), ends, pw: false, max, ttl: 3600 });
+const inviteRec = (slot: number, label: string, secret = sodium.randombytes_buf(32)): ControlRecord => ({ t: 'invite', id: id(), time: 1, slot, label: boxName(sodium, ROSTER, label, ROOM, 'label', slot), check: inviteCheck(sodium, secret, ROOM, slot), exp: 9 });
 /** Receipts for every place: nothing read, except where given. */
 const receipts = (...read: Ack[]): Ack[] => Array.from({ length: 20 }, (_, slot) => read.find((r) => r.slot === slot) ?? { slot, gen: 0, index: 0, h: NO_ACK });
 const msg = (text: string): MessageRecord => ({ t: 'msg', id: id(), time: 2, text, reply: null, seen: receipts() });
@@ -233,7 +233,11 @@ test('every record type has an exact schema', () => {
   for (const bad of [
     null, [], 'x', { ...j, extra: 1 }, { ...j, t: 'other' }, { ...j, id: 'xyz' }, { ...j, time: 0 }, { ...j, name: '' }, { ...j, name: ' Ada ' },
     { ...j, name: 'A\u202Eda' }, { ...j, key: 'short' }, { ...j, box: undefined }, inviteRec(0, ''),
-    { t: 'remove', id: id(), time: 1, slot: 20 }, { t: 'room', id: id(), time: 1, name: 'Plain', ends: 9 }, { t: 'room', id: id(), time: 1, name: boxName(sodium, ROSTER, 'no end', ROOM, 'room', 0) },
+    { t: 'remove', id: id(), time: 1, slot: 20 }, { t: 'room', id: id(), time: 1, name: 'Plain', ends: 9, pw: false, max: 20, ttl: 3600 }, { t: 'room', id: id(), time: 1, name: boxName(sodium, ROSTER, 'no end', ROOM, 'room', 0), pw: false, max: 20, ttl: 3600 },
+    // Settings out of range, or missing.
+    { ...roomRec('x'), max: 1 }, { ...roomRec('x'), max: 21 }, { ...roomRec('x'), max: 2.5 }, { ...roomRec('x'), ttl: 60 }, { ...roomRec('x'), pw: 1 },
+    { t: 'room', id: id(), time: 1, name: boxName(sodium, ROSTER, 'no settings', ROOM, 'room', 0), ends: 9 },
+    { ...inviteRec(1, 'Bo'), exp: 0 }, { ...inviteRec(1, 'Bo'), exp: 'soon' }, (({ exp: _, ...rest }) => rest)(inviteRec(1, 'Bo') as ControlRecord & { exp: number }),
     { ...k, gen: 0 }, { ...k, index: -1 }, { ...k, to: [] }, { ...k, to: [k.t === 'keys' ? k.to[0] : null, k.t === 'keys' ? k.to[0] : null] },
     { ...k, to: [{ slot: 1, n: 0, box: 'short' }] }, { ...k, to: [{ slot: 20, n: 0, box: k.t === 'keys' ? k.to[0]!.box : '' }] },
     { ...k, to: [{ slot: 1, box: k.t === 'keys' ? k.to[0]!.box : '' }] }, { ...k, to: [{ slot: 1, n: -1, box: k.t === 'keys' ? k.to[0]!.box : '' }] },
@@ -458,6 +462,64 @@ test('joins prove they come from the place’s invite link', () => {
   assert.deepEqual(pick?.signKey, b.sign.publicKey);
 });
 
+test('in a chat with a password, a join must prove the link and the password together', () => {
+  const b = person(1);
+  const secret = sodium.randombytes_buf(32);
+  const right = roomPasswordKey(sodium, 'correct horse battery', ROOM);
+  assert.equal(right.length, 32);
+  assert.deepEqual(roomPasswordKey(sodium, 'correct horse battery', ROOM), right, 'the same password gives the same key in one room');
+  assert.notDeepEqual(roomPasswordKey(sodium, 'correct horse battery', ROOM.replace('0', 'f')), right, 'salted by the room');
+  assert.deepEqual(roomPasswordKey(sodium, 'café password', ROOM), roomPasswordKey(sodium, 'café password', ROOM), 'NFC first');
+  const wrong = roomPasswordKey(sodium, 'correct horse batterz', ROOM);
+  assert.throws(() => roomPasswordKey(sodium, '', ROOM));
+  assert.throws(() => roomPasswordKey(sodium, 'x'.repeat(1025), ROOM));
+  const k = encodeKey(sodium, b.sign.publicKey);
+  const box = encodeKey(sodium, b.box.publicKey);
+  const withPw = joinProof(sodium, secret, ROOM, 1, k, box, right);
+  const without = joinProof(sodium, secret, ROOM, 1, k, box);
+  assert.ok(checkJoinProof(sodium, secret, ROOM, 1, k, box, withPw, right));
+  assert.ok(!checkJoinProof(sodium, secret, ROOM, 1, k, box, withPw, wrong), 'a wrong password');
+  assert.ok(!checkJoinProof(sodium, secret, ROOM, 1, k, box, without, right), 'the link alone');
+  assert.ok(!checkJoinProof(sodium, secret, ROOM, 1, k, box, withPw), 'a password proof is not a link-only proof');
+  assert.ok(!checkJoinProof(sodium, sodium.randombytes_buf(32), ROOM, 1, k, box, withPw, right), 'the password alone');
+  assert.ok(!checkJoinProof(sodium, secret, ROOM, 2, k, box, withPw, right), 'another place');
+  assert.throws(() => joinProof(sodium, secret, ROOM, 1, k, box, right.subarray(1)));
+});
+
+test('members refuse admits past the chat’s signed member limit', () => {
+  const a = person(0);
+  const b = person(1);
+  const c = person(2);
+  const d = person(3);
+  const s = stateOf(person(4));
+  s.apply(0, ctl(a, join(a, 'Ada')));
+  s.apply(0, ctl(a, roomRec('Pair', 9, 2)));
+  assert.equal(s.maxMembers, 2);
+  assert.equal(enter(s, a, b, 'Bo')?.kind, 'joined');
+  assert.equal(s.activeCount(), 2);
+  // A third person in a chat for two: refused, whoever signed it.
+  assert.equal(enter(s, a, c, 'Cy'), null);
+  assert.ok(s.overLimit.has(2));
+  assert.ok(!s.members.has(2));
+  // A removal frees the place.
+  s.apply(0, ctl(a, { t: 'remove', id: id(), time: 1, slot: 1 }));
+  assert.equal(s.activeCount(), 1);
+  assert.equal(enter(s, a, d, 'Di')?.kind, 'joined');
+});
+
+test('the creator’s signed settings and invite expiry are read', () => {
+  const a = person(0);
+  const s = stateOf(person(4));
+  s.apply(0, ctl(a, join(a, 'Ada')));
+  s.apply(0, ctl(a, { t: 'room', id: id(), time: 1, name: boxName(sodium, ROSTER, 'Set', ROOM, 'room', 0), ends: 9, pw: true, max: 5, ttl: 300 }));
+  assert.deepEqual([s.passwordRequired, s.maxMembers, s.inviteTtl], [true, 5, 300]);
+  // Only the first room record counts.
+  s.apply(0, ctl(a, { t: 'room', id: id(), time: 1, name: boxName(sodium, ROSTER, 'Set', ROOM, 'room', 0), ends: 9, pw: false, max: 20, ttl: 3600 }));
+  assert.deepEqual([s.passwordRequired, s.maxMembers, s.inviteTtl], [true, 5, 300]);
+  s.apply(0, ctl(a, { ...inviteRec(1, 'Bo'), exp: 1234 } as ControlRecord));
+  assert.equal(s.inviteExpires.get(1), 1234);
+});
+
 test('a reload cannot be shown a different history than before', () => {
   const a = person(0);
   const b = person(1);
@@ -530,7 +592,12 @@ test('invite links: the room key stays in the fragment and the format is strict'
   const secret = sodium.randombytes_buf(32);
   const f = encodeInviteFragment(sodium, roomKey, token, creator, secret, 3);
   assert.ok(f.endsWith('.n3'));
-  assert.deepEqual(parseInviteFragment(sodium, `#${f}`), { key: roomKey, invite: token, creator, secret, slot: 3 });
+  assert.deepEqual(parseInviteFragment(sodium, `#${f}`), { key: roomKey, invite: token, creator, secret, slot: 3, password: false });
+  // A chat with a password: the link says so, as a hint for the page.
+  const fp = encodeInviteFragment(sodium, roomKey, token, creator, secret, 3, true);
+  assert.ok(fp.endsWith('.n3.p'));
+  assert.deepEqual(parseInviteFragment(sodium, `#${fp}`), { key: roomKey, invite: token, creator, secret, slot: 3, password: true });
+  for (const bad of [`${fp}.p`, `${fp}x`, fp.replace('.p', '.P'), fp.replace('.p', '.'), `${f}.q`]) assert.equal(parseInviteFragment(sodium, bad), null, bad);
   for (const bad of ['', '#', f.slice(1), `${f}A`, f.replace('.i', '.x'), f.replace('.c', '.d'), f.replace('.s', '.t'), `${f}.i${token}`, f.replace(/^./, '+'), f.slice(0, f.indexOf('.c')), f.slice(0, f.indexOf('.s')),
     f.slice(0, f.indexOf('.n')), f.replace('.n3', '.n0'), f.replace('.n3', '.n20'), f.replace('.n3', '.n03'), f.replace('.n3', '.n')]) {
     assert.equal(parseInviteFragment(sodium, bad), null, bad);

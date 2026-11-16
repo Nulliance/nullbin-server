@@ -487,3 +487,111 @@ func TestInvitesExpireUnused(t *testing.T) {
 		t.Fatalf("a cancelled invite: %v", err)
 	}
 }
+
+func TestMemberLimitCountsMembersAndLiveInvites(t *testing.T) {
+	s, clk := newStore(t)
+	c, err := s.CreateWith(Options{Expires: 24 * time.Hour, MaxMembers: 3, InviteTTL: 5 * time.Minute}, someone)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a, na, err := s.Invite(c.ID, c.OwnerToken)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := s.Invite(c.ID, c.OwnerToken); err != nil {
+		t.Fatal(err)
+	}
+	// The creator and two places: the limit of three is reached, by an
+	// unused invite as much as by a member.
+	if _, _, err := s.Invite(c.ID, c.OwnerToken); !errors.Is(err, ErrRoomFull) {
+		t.Fatalf("a fourth place: %v", err)
+	}
+	if _, _, err := s.Join(c.ID, a); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := s.Invite(c.ID, c.OwnerToken); !errors.Is(err, ErrRoomFull) {
+		t.Fatalf("still full once one joined: %v", err)
+	}
+	// A removed member frees a place; so does an invite that expired unused.
+	if err := s.Remove(c.ID, c.OwnerToken, na); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := s.Invite(c.ID, c.OwnerToken); err != nil {
+		t.Fatalf("after a removal: %v", err)
+	}
+	if _, _, err := s.Invite(c.ID, c.OwnerToken); !errors.Is(err, ErrRoomFull) {
+		t.Fatalf("full again: %v", err)
+	}
+	clk.t = clk.t.Add(5 * time.Minute)
+	if _, _, err := s.Invite(c.ID, c.OwnerToken); err != nil {
+		t.Fatalf("after invites expired: %v", err)
+	}
+}
+
+func TestOneToOneRoomTakesOneInvite(t *testing.T) {
+	s, _ := newStore(t)
+	c, err := s.CreateWith(Options{Expires: time.Hour, MaxMembers: MinMembers, InviteTTL: InviteTTL}, someone)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := s.Invite(c.ID, c.OwnerToken); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := s.Invite(c.ID, c.OwnerToken); !errors.Is(err, ErrRoomFull) {
+		t.Fatalf("a second invite in a one-to-one room: %v", err)
+	}
+}
+
+func TestShortInviteLifetime(t *testing.T) {
+	s, clk := newStore(t)
+	c, err := s.CreateWith(Options{Expires: time.Hour, MaxMembers: MaxSlots, InviteTTL: 5 * time.Minute}, someone)
+	if err != nil {
+		t.Fatal(err)
+	}
+	old, n, _ := s.Invite(c.ID, c.OwnerToken)
+	clk.t = clk.t.Add(5*time.Minute - time.Second)
+	fresh, _, _ := s.Invite(c.ID, c.OwnerToken)
+	clk.t = clk.t.Add(time.Second)
+	if _, _, err := s.Join(c.ID, old); !errors.Is(err, ErrInviteExpired) {
+		t.Fatalf("a five-minute-old invite: %v", err)
+	}
+	if st, _ := s.Members(c.ID, c.OwnerToken); st[n] != StateExpired {
+		t.Fatalf("members: %v", st)
+	}
+	if _, _, err := s.Join(c.ID, fresh); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRevokedInviteNeverWorks(t *testing.T) {
+	s, _ := newStore(t)
+	c, _ := s.Create(time.Hour, someone)
+	inv, n, err := s.Invite(c.ID, c.OwnerToken)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Remove(c.ID, c.OwnerToken, n); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := s.Join(c.ID, inv); !errors.Is(err, ErrInviteUsed) {
+		t.Fatalf("a revoked invite: %v", err)
+	}
+	if st, _ := s.Members(c.ID, c.OwnerToken); st[n] != StateRemoved {
+		t.Fatalf("members: %v", st)
+	}
+}
+
+func TestCreateWithRejectsBadOptions(t *testing.T) {
+	s, _ := newStore(t)
+	for _, o := range []Options{
+		{Expires: time.Hour, MaxMembers: 1, InviteTTL: InviteTTL},
+		{Expires: time.Hour, MaxMembers: MaxSlots + 1, InviteTTL: InviteTTL},
+		{Expires: time.Hour, MaxMembers: MaxSlots, InviteTTL: 0},
+		{Expires: time.Hour, MaxMembers: MaxSlots, InviteTTL: InviteTTL + time.Second},
+		{Expires: 0, MaxMembers: MaxSlots, InviteTTL: InviteTTL},
+	} {
+		if _, err := s.CreateWith(o, someone); !errors.Is(err, ErrInvalid) {
+			t.Fatalf("%+v: %v", o, err)
+		}
+	}
+}

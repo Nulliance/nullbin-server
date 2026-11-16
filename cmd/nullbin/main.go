@@ -250,7 +250,7 @@ func run() int {
 	logger.Printf("nullbin %s listening on %s (max paste size %d bytes, %d trusted proxies, https headers %v)",
 		version, cfg.ListenAddr, cfg.MaxSize, len(cfg.TrustedProxies), cfg.BehindHTTPS)
 	if roomStore == nil {
-		logger.Printf("burner rooms are turned off")
+		logger.Printf("Null Chats are turned off")
 	}
 	if cfg.APIOnly {
 		logger.Printf("API-only mode; frontend files are served separately")

@@ -1,4 +1,4 @@
-(* A ProVerif model of the burner room protocol's core (ROOM_PROTOCOL.md):
+(* A ProVerif model of the Null Chat protocol's core (ROOM_PROTOCOL.md):
    the creator's invites and admits, joining with an invite proof, chain key
    deliveries and messages. Shared by member.pv and outsider.pv; run with
      proverif -lib formal/room formal/member.pv

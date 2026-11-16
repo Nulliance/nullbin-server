@@ -1,6 +1,6 @@
-# Burner room protocol
+# Null Chat protocol
 
-This document specifies how burner rooms work, for anyone reviewing their
+This document specifies how Null Chats work, for anyone reviewing their
 security. It describes version 1 of control records and version 2 of
 message records, as implemented in `web/src/room-crypto.ts` (formats and
 primitives), `web/src/room-state.ts` (which records a tab trusts) and
@@ -76,13 +76,21 @@ are decimal, `\0` is a zero byte. `b64u` is unpadded base64url.
 | Signing key pair `S_i` (Ed25519) | each member | own tab; public in join | signs every record; its hash is the safety code |
 | Receiving keys `B_i,n` (X25519) | each member | own tab; public in join (n = 0) and `box` records | chain keys and the roster key are sealed to them |
 | Invite secret `IS_j` (32 B) | creator | creator's tab; invite link for place j | proves a join came from that link |
+| Password key `PK` (32 B) | creator, and each joiner, from the chat's password | creator's tab; a joiner only while joining | with IS_j, proves a join knew the password (optional) |
 | Chain key `CK` (32 B) | each sender, per generation | sender; members it was delivered to | derives one key per message |
 | Tokens | server | as below | owner, invite (single use) and member tokens, 32 random bytes |
 
 An invite link is
-`https://<host>/r/<id>#<b64u RK>.i<invite token>.c<b64u S_0 public>.s<b64u IS_j>.n<j>`.
+`https://<host>/r/<id>#<b64u RK>.i<invite token>.c<b64u S_0 public>.s<b64u IS_j>.n<j>[.p]`.
 The fragment never reaches the server. The creator's public signing key in
-it is the joiner's trust anchor.
+it is the joiner's trust anchor. `.p` is only a hint that the chat has a
+password (the page asks for it at once); the creator's signed `room` record
+decides.
+
+The **password key** is `PK = Argon2id(NFC(password), salt =
+H(16, "nullbin room password salt v1 <room>"), OPSLIMIT_MODERATE,
+MEMLIMIT_MODERATE)`, 32 bytes. The password (1 to 1,024 bytes) never leaves
+the browser it is typed in; the creator's tab keeps PK in its session.
 
 The **safety code** of a member is 30 digits from
 `H(32, S_public, key = "nullbin room safety code v2")`, read as six 32-bit
@@ -136,7 +144,8 @@ kind ∈ {member, label, room}.
 **Sealed name** (a joiner's): `b64u(Seal(pad || H(16, "nullbin room sealed name v1 <room> <j> <key> <box>"), NK_public))`,
 where key and box are the joiner's public keys as in their join.
 
-**Join proof**: `b64u(H(32, "nullbin room join v1 <room> <j> <key> <box>", key = IS_j))`.
+**Join proof**: `b64u(H(32, "nullbin room join v1 <room> <j> <key> <box>", key = IS_j))`;
+in a chat with a password, `b64u(H(32, "nullbin room join v2 <room> <j> <key> <box>", key = IS_j || PK))`.
 **Invite check**: `b64u(H(32, "nullbin room invite check v1 <room> <j>", key = IS_j))`.
 
 ## 6. Records
@@ -150,9 +159,9 @@ Records are deduplicated by `from` and `id` (joins also by key).
 | `t` | Fields | Who may post | Accepted when |
 |---|---|---|---|
 | `join` | `key`, `box`, `name`; creator: `namekey`; others: `proof` | the joiner, at their place | signed by `key`; `box` (and `namekey`) not low-order; place 0 carries `namekey`, others do not; place not removed, no member there yet. Place 0: accepted, and must match a pinned creator key (else *conflict*). Others: a member at once if the creator already admitted that `key` (else rejected); otherwise kept waiting for an admit |
-| `room` | `name` (boxed), `ends` | creator | first one only |
-| `invite` | `slot`, `label` (boxed), `check` | creator | first per place |
-| `admit` | `slot`, `key`, `roster`, `name` (boxed) | creator | first per place; a second with another `key` raises *conflict*; ignored for removed places |
+| `room` | `name` (boxed), `ends`, `pw` (boolean), `max` (2 to 20), `ttl` (300, 900 or 3600) | creator | first one only |
+| `invite` | `slot`, `label` (boxed), `check`, `exp` (ms) | creator | first per place |
+| `admit` | `slot`, `key`, `roster`, `name` (boxed) | creator | first per place; a second with another `key` raises *conflict*; ignored for removed places; refused (*over limit*) if the places admitted and not removed, the creator's included, already reach `max` |
 | `remove` | `slot` (not 0) | creator | always (permanent) |
 | `keys` | `gen`, `index`, `commit`, `to: [{slot, n, box}]` | any member | see section 7.4 |
 | `box` | `n` (1 to 4096), `box` | any member | `n` = current + 1 to current + 64; same `n` with another key is *equivocation* |
@@ -186,21 +195,26 @@ so its size does not depend on what was read.
 
 ### 7.1 Creating a room
 
-1. The creator's tab asks the server for a room (`POST /api/v1/rooms`) and
-   gets its id, the owner token and the creator's member token (place 0).
-2. It generates RK, RO, NK, S_0 and B_0,0.
+1. The creator's tab asks the server for a room (`POST /api/v1/rooms`, with
+   its member limit and invite lifetime) and gets its id, the owner token
+   and the creator's member token (place 0).
+2. It generates RK, RO, NK, S_0 and B_0,0, and, if the chat has a
+   password, derives PK.
 3. It posts its `join` (with `namekey` = NK public, its name boxed under
-   RO) and a `room` record (name boxed, `ends`).
+   RO) and a `room` record (name boxed, `ends`, `pw`, `max`, `ttl`).
 
 ### 7.2 Inviting
 
-1. The creator's tab asks for an invite (`POST /{id}/invites`): the server
-   returns a single-use invite token and a fresh place j (never reused).
-2. It generates IS_j, stores it in its session, and posts an `invite`
-   record for place j: label boxed under RO, and `check` (section 5). If
-   posting fails, the next attempt resends the same record for the same
-   place.
-3. It shows the link (section 4). The invite expires after an hour.
+1. The creator's tab refuses if the members and still-usable invites
+   already reach `max`. It asks for an invite (`POST /{id}/invites`): the
+   server, which counts the same way, returns a single-use invite token and
+   a fresh place j (never reused).
+2. It generates IS_j, stores it in its session with `exp` = now + `ttl`,
+   and posts an `invite` record for place j: label boxed under RO, `check`
+   (section 5) and `exp`. If posting fails, the next attempt resends the
+   same record for the same place.
+3. It shows the link (section 4). The server refuses the invite after
+   `ttl`. **Revoking** an unused invite is a removal (7.7) of its place.
 
 ### 7.3 Joining and admitting
 
@@ -211,9 +225,12 @@ so its size does not depend on what was read.
 3. It fetches the first records and checks that RK opens the creator's
    join, signed by the key in the link, with a name key. Until that check
    passes nothing is saved; if the room cannot be reached, it can retry.
-4. It generates S_j and B_j,0, seals its name to NK (bound to its place and
-   keys), computes the join proof with IS_j, stores the invite check, and
-   posts its `join`.
+4. If the creator's signed `room` record (in the first records) has `pw`,
+   it asks for the password and derives PK. It generates S_j and B_j,0,
+   seals its name to NK (bound to its place and keys), computes the join
+   proof with IS_j (and PK), stores the invite check, and posts its `join`.
+   The joiner cannot check the password first: a wrong one uses up the
+   invite.
 5. The creator's tab, for each invited place without an admit, checks the
    proof of each waiting join with IS_j. It admits the first valid one
    whose sealed name opens: it records the admitted key in its session
@@ -222,7 +239,11 @@ so its size does not depend on what was read.
    ever.
 6. If two different valid joins exist for a place (before or after the
    admit), the link leaked: the creator's tab admits neither, removes the
-   place and says so. A join whose proof fails is reported to the creator.
+   place and says so. A join whose proof fails is reported to the creator;
+   in a chat with a password, its place is removed at once (one guess per
+   invite). A valid join first seen more than 10 minutes after the
+   invite's `exp`, or when admitting would pass `max`, is not admitted and
+   its place is removed.
 7. The joiner, on reading the admit for its place, opens RO and becomes a
    member. If the creator's signed `invite` for its place carries a `check`
    that does not match its link's secret, it reports a damaged link and
@@ -307,7 +328,8 @@ at `ends`, or when the server restarts.
 | left out | for two minutes, deliveries from s go to others but none we can open | the sender, or the server |
 | stale key | a delivery sealed to a key we replaced long before | the sender, or the server |
 | receipts | a member's receipts disagree with what we read at that place | the member whose receipts disagree |
-| damaged invite / contested / bad proof | section 7.3 | the place |
+| damaged invite / contested / bad proof / late / full | section 7.3 | the place |
+| over limit | an admit that would pass the signed `max` (not let in) | nobody |
 
 Nothing a member signs can raise conflict, impostor or copy for everyone;
 only the creator's key, or a copy of a member's own keys, can.
@@ -373,7 +395,10 @@ key from an unsigned join, keeping an old receiving key, and accepting
 messages not signed by their sender (which only a model where chains are
 shared, as here, can catch).
 
-What the model leaves out: each chain goes to two members and carries one
+What the model leaves out: the optional password (the v2 join proof), the
+member limit and invite lifetimes, which were added after the model and
+have not been modelled (the unit and browser tests cover them); each chain
+goes to two members and carries one
 message (stepping it is modelled only for forward secrecy); the creator
 does not send; removal, receiving-key numbers, padding, schemas, record ids
 and the warnings of section 8 are not modelled (the unit tests and the room
@@ -402,6 +427,8 @@ short list, so comparing safety codes is the real check.
 | Receiving-key rotation / grace | 3 minutes / 2 minutes |
 | Left-out warning | after 2 minutes |
 | Stale-key and end-time slack | 10 minutes |
-| Invite lifetime | 1 hour |
+| Invite lifetime | 5 minutes, 15 minutes or 1 hour (signed); joins seen 10 minutes late are refused |
+| Member limit | 2 to 20 (signed), the creator included |
+| Password | 1 to 1,024 bytes; Argon2id, moderate limits |
 | Names, labels | 40 characters (160 bytes padded) |
 | Message text | 2,000 UTF-16 units |

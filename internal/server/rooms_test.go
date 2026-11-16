@@ -273,3 +273,34 @@ func TestRoomDeleteFallsBackToTheOwnerToken(t *testing.T) {
 		t.Fatalf("delete with no valid token: %d", resp.StatusCode)
 	}
 }
+
+func TestRoomCreateOptions(t *testing.T) {
+	e := roomEnv(t)
+	for _, body := range []string{
+		`{"expires_in":3600,"max_members":1}`, `{"expires_in":3600,"max_members":21}`, `{"expires_in":3600,"max_members":"2"}`,
+		`{"expires_in":3600,"max_members":2.5}`, `{"expires_in":3600,"invite_ttl":60}`, `{"expires_in":3600,"invite_ttl":7200}`,
+		`{"expires_in":3600,"invite_ttl":"900"}`,
+	} {
+		resp, _ := e.do(t, "POST", "/api/v1/rooms", []byte(body), jsonHdr)
+		if resp.StatusCode != http.StatusBadRequest {
+			t.Errorf("%q: %d", body, resp.StatusCode)
+		}
+	}
+	e.clock.add(time.Minute) // the cases above used the creation budget
+	// A one-to-one room with five-minute invites: one invite, then full.
+	resp, data := e.do(t, "POST", "/api/v1/rooms", []byte(`{"expires_in":3600,"max_members":2,"invite_ttl":300}`), jsonHdr)
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("create: %d %s", resp.StatusCode, data)
+	}
+	var c roomCreated
+	if err := json.Unmarshal(data, &c); err != nil {
+		t.Fatal(err)
+	}
+	owner := map[string]string{"Nullbin-Owner-Token": c.OwnerToken}
+	if resp, data := e.do(t, "POST", "/api/v1/rooms/"+c.ID+"/invites", nil, owner); resp.StatusCode != http.StatusCreated {
+		t.Fatalf("first invite: %d %s", resp.StatusCode, data)
+	}
+	if resp, _ := e.do(t, "POST", "/api/v1/rooms/"+c.ID+"/invites", nil, owner); resp.StatusCode != http.StatusConflict {
+		t.Fatalf("second invite in a one-to-one room: %d", resp.StatusCode)
+	}
+}

@@ -14,7 +14,7 @@ import (
 	"github.com/jacobzymet/nullbin-go/internal/rooms"
 )
 
-// Burner rooms: short-lived end-to-end encrypted group chats, kept in
+// Null Chats: short-lived end-to-end encrypted group chats, kept in
 // memory only (internal/rooms). The server relays opaque records and checks
 // tokens; it never has the room key.
 
@@ -25,7 +25,7 @@ const (
 	InviteTokenHeader = "Nullbin-Invite-Token"
 )
 
-const maxRoomCreateBody = 128 // {"expires_in": 604800}
+const maxRoomCreateBody = 128 // {"expires_in": 604800, "max_members": 20, "invite_ttl": 3600}
 
 // registerRooms adds the room API. Without a room store the routes do not
 // exist, so a server with rooms turned off answers 404 as for any unknown
@@ -97,6 +97,10 @@ func (s *Server) handleRoomCreate(w http.ResponseWriter, r *http.Request) {
 	}
 	var req struct {
 		ExpiresIn *int64 `json:"expires_in"`
+		// Optional: without them a room allows MaxSlots members and
+		// invites work for an hour.
+		MaxMembers *int64 `json:"max_members"`
+		InviteTTL  *int64 `json:"invite_ttl"`
 	}
 	dec := json.NewDecoder(r.Body)
 	dec.DisallowUnknownFields()
@@ -117,10 +121,26 @@ func (s *Server) handleRoomCreate(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "expires_in must be one of 300, 1800, 3600, 10800, 43200, 86400, 259200, 604800")
 		return
 	}
+	opts := rooms.Options{Expires: expires, MaxMembers: rooms.MaxSlots, InviteTTL: rooms.InviteTTL}
+	if req.MaxMembers != nil {
+		if *req.MaxMembers < rooms.MinMembers || *req.MaxMembers > rooms.MaxSlots {
+			writeError(w, http.StatusBadRequest, fmt.Sprintf("max_members must be from %d to %d", rooms.MinMembers, rooms.MaxSlots))
+			return
+		}
+		opts.MaxMembers = int(*req.MaxMembers)
+	}
+	if req.InviteTTL != nil {
+		ttl, ok := rooms.InviteTTLs[*req.InviteTTL]
+		if !ok {
+			writeError(w, http.StatusBadRequest, "invite_ttl must be one of 300, 900, 3600")
+			return
+		}
+		opts.InviteTTL = ttl
+	}
 	ip := s.ips.clientIP(r)
 	by := rooms.Creator{Client: s.roomCreates.hash(ip)}
 	by.Site, by.HasSite = s.roomCreates.hashSite(ip)
-	c, err := s.cfg.Rooms.Create(expires, by)
+	c, err := s.cfg.Rooms.CreateWith(opts, by)
 	if err != nil {
 		s.roomError(w, "room create", err)
 		return

@@ -30,7 +30,7 @@ services:
     security_opt: ["no-new-privileges:true"]
     # Process limit (threads count). Generous for full load; stops a runaway.
     pids_limit: 4096
-    # No core dumps: burner rooms live in this process's memory.
+    # No core dumps: Null Chats live in this process's memory.
     ulimits:
       core: 0
     environment:

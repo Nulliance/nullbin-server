@@ -50,7 +50,7 @@ if (misconfigured) {
   initCreate();
   initRoomCreate();
 } else if (room?.[1]) {
-  initRoom(room[1], fragment).catch(() => showProblem('This burner room can’t be opened', 'Something went wrong while opening it. Try the link again.'));
+  initRoom(room[1], fragment).catch(() => showProblem('This Null Chat can’t be opened', 'Something went wrong while opening it. Try the link again.'));
 } else if (view?.[1]) {
   initView(view[1], fragment).catch(() => showProblem('This paste can’t be opened', 'Something went wrong while opening it. Try the link again.'));
 } else if (del?.[1]) {

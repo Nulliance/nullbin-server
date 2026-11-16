@@ -1,4 +1,4 @@
-// The state of a burner room, rebuilt from its records in server order.
+// The state of a Null Chat, rebuilt from its records in server order.
 // Pure logic, no DOM: every rule about which records to trust lives here.
 //
 // - A slot's identity is a join record signed with the signing key it
@@ -225,6 +225,22 @@ export class RoomState {
   /** When the creator says the room ends (signed with the room's name), or null. */
   ends: number | null = null;
   /**
+   * The creator's signed settings, from the room record (null until it is
+   * read): joins must also prove the password; at most this many members at
+   * once, the creator included; how long an invite works (seconds).
+   */
+  passwordRequired: boolean | null = null;
+  maxMembers: number | null = null;
+  inviteTtl: number | null = null;
+  /** When each invited place's invite stops working, as the creator signed it (ms). */
+  readonly inviteExpires = new Map<number, number>();
+  /**
+   * Places whose admit would have taken the room past its signed member
+   * limit, so this tab did not let them in. Only the creator's key signs
+   * admits: an honest creator never does this.
+   */
+  readonly overLimit = new Set<number>();
+  /**
    * Members who showed different members different things: "keys" (signed
    * evidence: a key delivery that contradicts a chain we hold, or that
    * skips far ahead of it), "order" (their signed records went backwards in
@@ -368,6 +384,13 @@ export class RoomState {
     if (changed) this.rosterVersion++;
   }
 
+  /** Places let in and not removed, the creator's included: what the member limit counts. */
+  activeCount(): number {
+    const places = new Set<number>([0, ...this.admitted.keys()]);
+    for (const slot of this.removed) places.delete(slot);
+    return places.size;
+  }
+
   /** Gives a new member the newest receiving key this tab knew for their place. */
   private pinBox(m: Member): void {
     const pin = this.boxPins.get(m.slot);
@@ -483,11 +506,15 @@ export class RoomState {
         if (this.named) return null;
         this.named = true;
         this.ends = r.ends;
+        this.passwordRequired = r.pw;
+        this.maxMembers = r.max;
+        this.inviteTtl = r.ttl;
         this.roomNameRaw = r.name;
         this.resolve();
         return this.name ? { kind: 'renamed', name: this.name } : null;
       case 'invite':
         if (this.labels.has(r.slot)) return null;
+        this.inviteExpires.set(r.slot, r.exp);
         if (r.slot === this.me.slot && this.me.inviteCheck && r.check !== this.me.inviteCheck) this.inviteMismatch = true;
         this.labels.set(r.slot, ''); // the label itself once we have the roster key
         this.labelRaw.set(r.slot, r.label);
@@ -519,6 +546,12 @@ export class RoomState {
           return null;
         }
         if (this.removed.has(r.slot)) return null;
+        // The creator signed a member limit: an admit past it lets nobody in.
+        if (this.maxMembers !== null && this.activeCount() >= this.maxMembers) {
+          this.overLimit.add(r.slot);
+          this.waiting.delete(r.slot);
+          return null;
+        }
         this.admitted.set(r.slot, k);
         this.memberNameRaw.set(r.slot, r.name);
         this.openOwnRoster(r.slot, r.roster);

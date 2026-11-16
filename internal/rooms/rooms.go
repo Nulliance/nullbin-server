@@ -1,4 +1,4 @@
-// Package rooms keeps burner rooms: short-lived, end-to-end encrypted group
+// Package rooms keeps Null Chats: short-lived, end-to-end encrypted group
 // chats. The server only relays and stores opaque encrypted records; the
 // room key never reaches it (it travels in the URL fragment of invites).
 //
@@ -6,9 +6,10 @@
 // operating system could still swap memory out). A server
 // restart ends every room, and nothing about a room remains afterwards.
 //
-// A room has up to MaxSlots members. Slot 0 is the creator, who also holds
-// the owner token: it creates single-use invites, lists and removes
-// members, and deletes the room. An invite token can join once; joining
+// A room has up to MaxSlots members, or fewer if its creator set a limit.
+// Slot 0 is the creator, who also holds the owner token: it creates
+// single-use invites, lists and removes members (and revokes invites the
+// same way), and deletes the room. An invite token can join once; joining
 // replaces it with a member token. Every request is checked against hashes
 // of these tokens, in constant time, and anything else gets ErrNotFound.
 package rooms
@@ -33,7 +34,8 @@ const (
 	MaxReadBatch   = 200         // records returned by one read
 	MaxReadBytes   = 64 << 10    // record bytes returned by one read (at least one record); small, as each read is buffered whole
 	MaxRoomBytes   = 4 << 20     // record bytes one room may hold
-	InviteTTL      = time.Hour   // an invite nobody used by then stops working
+	InviteTTL      = time.Hour   // the longest an invite works; a room may choose less (InviteTTLs)
+	MinMembers     = 2           // the smallest member limit: the creator and one other
 
 	// Per client network (keyed hash of an IPv4 address or IPv6 /64), and
 	// four times that per IPv6 /48: rooms it created that are still live,
@@ -64,6 +66,20 @@ var Expiries = map[int64]time.Duration{
 	604800: 7 * 24 * time.Hour,
 }
 
+// InviteTTLs are the invite lifetimes a room may choose, by seconds.
+var InviteTTLs = map[int64]time.Duration{
+	300:  5 * time.Minute,
+	900:  15 * time.Minute,
+	3600: InviteTTL,
+}
+
+// Options are what the creator chooses for a room.
+type Options struct {
+	Expires    time.Duration // how long the room lives
+	MaxMembers int           // MinMembers to MaxSlots, the creator included
+	InviteTTL  time.Duration // how long an unused invite works: one of InviteTTLs
+}
+
 var (
 	// ErrNotFound covers unknown and expired rooms and wrong tokens, so
 	// callers cannot tell them apart.
@@ -72,9 +88,10 @@ var (
 	// used or its slot was removed. Only the invite's holder learns this.
 	ErrInviteUsed = errors.New("invite already used or removed")
 	// ErrInviteExpired means the invite token matched, but nobody used it
-	// within InviteTTL: a link that leaks later lets nobody in.
+	// within the room's invite lifetime: a link that leaks later lets nobody in.
 	ErrInviteExpired = errors.New("invite expired")
-	// ErrRoomFull means the room has no free slot or no room for records.
+	// ErrRoomFull means the room has no free slot (or is at its member
+	// limit) or no room for records.
 	ErrRoomFull = errors.New("room is full")
 	// ErrCapacity means the server's memory for rooms is used up.
 	ErrCapacity = errors.New("no capacity for rooms")
@@ -110,12 +127,16 @@ type Record struct {
 
 type room struct {
 	expires time.Time
-	owner   [sha256.Size]byte
-	creator Creator
-	slots   [MaxSlots]slot
-	records []Record
-	bytes   int64 // accounted: overhead and records
-	data    int64 // record bytes only
+	// The creator's choices: at most this many places open at once (the
+	// creator's included), and how long an invite works.
+	maxMembers int
+	inviteTTL  time.Duration
+	owner      [sha256.Size]byte
+	creator    Creator
+	slots      [MaxSlots]slot
+	records    []Record
+	bytes      int64 // accounted: overhead and records
+	data       int64 // record bytes only
 }
 
 // Creator identifies the network a room was created from, by the keyed
@@ -253,9 +274,16 @@ func (s *Store) charge(c Creator, rooms int, bytes int64) {
 	}
 }
 
-// Create starts a room whose creator has already joined as slot 0.
+// Create starts a room with the default limits: MaxSlots members and
+// invites that work for InviteTTL.
 func (s *Store) Create(expiresIn time.Duration, by Creator) (Created, error) {
-	if expiresIn <= 0 {
+	return s.CreateWith(Options{Expires: expiresIn, MaxMembers: MaxSlots, InviteTTL: InviteTTL}, by)
+}
+
+// CreateWith starts a room whose creator has already joined as slot 0.
+func (s *Store) CreateWith(o Options, by Creator) (Created, error) {
+	expiresIn := o.Expires
+	if expiresIn <= 0 || o.MaxMembers < MinMembers || o.MaxMembers > MaxSlots || o.InviteTTL <= 0 || o.InviteTTL > InviteTTL {
 		return Created{}, ErrInvalid
 	}
 	s.mu.Lock()
@@ -270,7 +298,7 @@ func (s *Store) Create(expiresIn time.Duration, by Creator) (Created, error) {
 	rand.Read(idb[:])
 	c := Created{ID: hex.EncodeToString(idb[:]), OwnerToken: newToken(), MemberToken: newToken()}
 	c.ExpiresAt = s.now().Add(expiresIn)
-	r := &room{expires: c.ExpiresAt, owner: hash(c.OwnerToken), creator: by, bytes: roomOverhead}
+	r := &room{expires: c.ExpiresAt, maxMembers: o.MaxMembers, inviteTTL: o.InviteTTL, owner: hash(c.OwnerToken), creator: by, bytes: roomOverhead}
 	r.slots[0] = slot{state: slotJoined, member: hash(c.MemberToken)}
 	s.rooms[c.ID] = r
 	s.bytes += r.bytes
@@ -340,8 +368,22 @@ func (s *Store) member(id string, token presented) (*room, int) {
 	return r, found
 }
 
+// open reports whether slot i holds a place that counts against the room's
+// member limit: a member who joined, or an invite that can still be used.
+// Removed places, and invites that expired unused, no longer count.
+func (s *Store) open(r *room, i int) bool {
+	switch r.slots[i].state {
+	case slotJoined:
+		return true
+	case slotInvited:
+		return s.now().Before(r.slots[i].invited.Add(r.inviteTTL))
+	}
+	return false
+}
+
 // Invite reserves a free slot for one new member and returns its
-// single-use invite token.
+// single-use invite token. A room at its member limit (counting members
+// and invites that still work) gets ErrRoomFull.
 func (s *Store) Invite(id, ownerToken string) (token string, n int, err error) {
 	owner := present(ownerToken)
 	s.mu.Lock()
@@ -349,6 +391,15 @@ func (s *Store) Invite(id, ownerToken string) (token string, n int, err error) {
 	r := s.owned(id, owner)
 	if r == nil {
 		return "", 0, ErrNotFound
+	}
+	used := 0
+	for i := range r.slots {
+		if s.open(r, i) {
+			used++
+		}
+	}
+	if used >= r.maxMembers {
+		return "", 0, ErrRoomFull
 	}
 	for i := 1; i < MaxSlots; i++ {
 		if r.slots[i].state == slotFree {
@@ -383,7 +434,7 @@ func (s *Store) Join(id, inviteToken string) (memberToken string, n int, err err
 	if r.slots[found].state != slotInvited {
 		return "", 0, ErrInviteUsed
 	}
-	if !s.now().Before(r.slots[found].invited.Add(InviteTTL)) {
+	if !s.now().Before(r.slots[found].invited.Add(r.inviteTTL)) {
 		return "", 0, ErrInviteExpired
 	}
 	memberToken = newToken()
@@ -474,7 +525,7 @@ func (s *Store) Members(id, ownerToken string) (map[int]MemberState, error) {
 		switch sl.state {
 		case slotInvited:
 			out[i] = StateInvited
-			if !s.now().Before(sl.invited.Add(InviteTTL)) {
+			if !s.now().Before(sl.invited.Add(r.inviteTTL)) {
 				out[i] = StateExpired
 			}
 		case slotJoined:
@@ -487,7 +538,8 @@ func (s *Store) Members(id, ownerToken string) (map[int]MemberState, error) {
 }
 
 // Remove closes slot n for good: its invite and member token stop working.
-// The creator's slot cannot be removed.
+// It also revokes an invite nobody used yet. The creator's slot cannot be
+// removed.
 func (s *Store) Remove(id, ownerToken string, n int) error {
 	owner := present(ownerToken)
 	s.mu.Lock()
@@ -508,7 +560,7 @@ func (s *Store) Remove(id, ownerToken string, n int) error {
 }
 
 // Destroy ends a room at once, for everyone. Any current member may do it
-// (a burner room self-destructs on anyone's say), with their member token,
+// (a Null Chat self-destructs on anyone's say), with their member token,
 // or the creator with the owner token.
 func (s *Store) Destroy(id, token string) error {
 	t := present(token)

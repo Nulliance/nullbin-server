@@ -219,7 +219,6 @@ async function createPaste(o: CreateOptions): Promise<{ share: string; del: stri
   if (o.files) await h.page.setInputFiles('#file', o.files);
   if (o.burn) await h.page.check('#burn');
   if (o.maxReads !== undefined) await h.page.fill('#burn-reads', String(o.maxReads));
-  if (o.discussion) await openMore(h.page);
   if (o.discussion) await h.page.check('#discussion');
   if (o.password) {
     await h.page.check('#password-switch');
@@ -248,11 +247,6 @@ async function createPaste(o: CreateOptions): Promise<{ share: string; del: stri
   await h.check();
   await h.context.close();
   return { share, del };
-}
-
-/** Opens "More options", where Separate links and Discussion are. */
-async function openMore(page: Page) {
-  if (await page.getAttribute('#more-toggle', 'aria-expanded') !== 'true') await page.click('#more-toggle');
 }
 
 /** The text shown in the viewer, line by line (line numbers excluded). */
@@ -1024,7 +1018,6 @@ test('separate links: one per person, each with its own opens, revocable one by 
   const c = await open();
   await goto(c, `${origin}/`);
   await c.page.fill('#text', 'for three people');
-  await openMore(c.page);
   await c.page.check('#recipients');
   assert.ok(await c.page.isDisabled('#discussion'), 'separate links rule out a discussion');
   await c.page.fill('#recipients-count', '3');
@@ -1138,7 +1131,6 @@ test('separate links without an open limit open any number of times', async (t) 
   const c = await open();
   await goto(c, `${origin}/`);
   await c.page.fill('#text', 'unlimited links');
-  await openMore(c.page);
   await c.page.check('#recipients');
   await c.page.click('#create-submit');
   await c.page.waitForSelector('#recipient-links:not([hidden])', { timeout: 60_000 });
@@ -1162,7 +1154,7 @@ test('separate links without an open limit open any number of times', async (t) 
   }
 });
 
-test('burner room: create, invite once, chat, reply, react, edit, unsend, remove, self-destruct', async (t) => {
+test('Null Chat: create, invite once, chat, reply, react, edit, unsend, remove, self-destruct', async (t) => {
   await restartAPI();
   t.after(() => restartAPI());
   const texts = (h: Harness) => h.page.$$eval('#room-messages .nb-m-text .nb-m-words', (ps) => ps.map((p) => p.textContent ?? ''));
@@ -1219,7 +1211,7 @@ test('burner room: create, invite once, chat, reply, react, edit, unsend, remove
   await again.page.fill('#room-join-name', 'Eve');
   await again.page.click('#room-join-submit');
   await again.page.waitForSelector('#problem:not([hidden])');
-  assert.equal(await again.page.textContent('#problem-title'), 'This invite was already used');
+  assert.equal(await again.page.textContent('#problem-title'), 'This invite was already used or revoked');
   await again.check(/status of 410/);
   await again.context.close();
 
@@ -1282,12 +1274,12 @@ test('burner room: create, invite once, chat, reply, react, edit, unsend, remove
   const codesB = await b.page.$$eval('#room-member-list .nb-member-detail', (s) => s.map((x) => x.textContent ?? ''));
   assert.deepEqual(codesA, codesB);
   assert.equal(codesA.length, 2, 'both members are listed');
-  assert.ok(codesA.every((c) => /^(Created the room · )?Code \d{5} \d{5} \d{5} \d{5} \d{5} \d{5}$/.test(c)), codesA.join(' | '));
+  assert.ok(codesA.every((c) => /^(Created the chat · )?Code \d{5} \d{5} \d{5} \d{5} \d{5} \d{5}$/.test(c)), codesA.join(' | '));
   assert.equal(await b.page.locator('#room-member-list .nb-btn-remove').count(), 0, 'only the creator can remove people');
   // Bob compared codes with Ada: he marks her verified, and her name shows a check.
   await b.page.click('#room-member-list .nb-btn-verify');
   await b.page.waitForFunction(() => document.querySelector('#room-member-list .nb-btn-verify')?.textContent === 'Unmark verified');
-  assert.match((await b.page.textContent('#room-member-list .nb-member-detail')) ?? '', /^Verified · Created the room · Code /);
+  assert.match((await b.page.textContent('#room-member-list .nb-member-detail')) ?? '', /^Verified · Created the chat · Code /);
   await b.page.click('#room-members-close');
   await b.page.waitForSelector('#room-messages .nb-m-name .nb-verified');
 
@@ -1341,21 +1333,124 @@ test('burner room: create, invite once, chat, reply, react, edit, unsend, remove
   await c.page.click('#room-destroy');
   await c.page.click('#room-destroy-confirm');
   await c.page.waitForSelector('#problem:not([hidden])');
-  assert.equal(await c.page.textContent('#problem-title'), 'Burner room destroyed');
+  assert.equal(await c.page.textContent('#problem-title'), 'Null Chat destroyed');
   assert.equal(await c.page.evaluate(() => sessionStorage.length), 0, 'nothing left in the tab');
   await c.check();
   await c.context.close();
   await a.page.waitForSelector('#problem:not([hidden])', { timeout: 30_000 });
-  assert.equal(await a.page.textContent('#problem-title'), 'This burner room has ended');
+  assert.equal(await a.page.textContent('#problem-title'), 'This Null Chat has ended');
   assert.equal(await a.page.evaluate(() => sessionStorage.length), 0);
   await a.check(/status of 404/);
   await a.context.close();
 });
 
-test('burner room links that are incomplete, or opened in another tab, explain what to do', async () => {
+test('Null Chat security options: a password, a member limit, short invites and revoking', async (t) => {
+  await restartAPI();
+  t.after(() => restartAPI());
+  const PASSWORD = 'correct horse battery';
+  const waitText = (h: Harness, text: string) =>
+    h.page.waitForFunction((x) => [...document.querySelectorAll('#room-messages .nb-m-text .nb-m-words')].some((p) => p.textContent === x), text, { timeout: 30_000 });
+  const openInvite = async (h: Harness, who: string) => {
+    await h.page.click('#room-invite-open');
+    await h.page.fill('#room-invite-label', who);
+    await h.page.click('#room-invite-create');
+  };
+  const invite = async (h: Harness, who: string) => {
+    await openInvite(h, who);
+    await h.page.waitForSelector('#room-invite-result:not([hidden])');
+    const link = (await h.page.textContent('#room-invite-link')) ?? '';
+    await h.page.click('#room-invite-close');
+    return link;
+  };
+  const tryJoin = async (link: string, name: string, password: string) => {
+    const h = await open();
+    await goto(h, link);
+    await h.page.waitForSelector('#room-join:not([hidden])');
+    await h.page.fill('#room-join-name', name);
+    if (password) await h.page.fill('#room-join-password', password);
+    await h.page.click('#room-join-submit');
+    return h;
+  };
+
+  // Ada makes a chat for two, with five-minute invites and a password.
+  const a = await open();
+  await goto(a, `${origin}/`);
+  await a.page.click('#tab-room');
+  await a.page.waitForSelector('#room-create-form', { state: 'visible' });
+  await a.page.fill('#room-you', 'Ada');
+  for (const bad of ['1', '21', '2.5', '']) {
+    await a.page.fill('#room-max', bad);
+    await a.page.click('#room-create-submit');
+    await a.page.waitForSelector('#room-max.is-invalid');
+  }
+  assert.deepEqual(a.apiCalls, [], 'nothing is created with a member limit out of range');
+  await a.page.fill('#room-max', '2');
+  await a.page.selectOption('#room-invite-ttl', '300');
+  await a.page.check('#room-password-switch');
+  await a.page.fill('#room-password', 'short');
+  await a.page.click('#room-create-submit');
+  await a.page.waitForSelector('#room-password.is-invalid');
+  assert.deepEqual(a.apiCalls, [], 'nothing is created with a too-short password');
+  await a.page.fill('#room-password', PASSWORD);
+  await a.page.click('#room-create-submit');
+  await a.page.waitForURL(new RegExp(`/r/${ID}$`), { timeout: 30_000 });
+  await a.page.waitForSelector('#room-chat:not([hidden])');
+  // The password never reaches the server, nor the tab's storage.
+  for (const s of a.sent) assert.ok(!(s.body?.toString('latin1') ?? '').includes(PASSWORD), `${s.method} ${s.path} carries the password`);
+  assert.ok(!(await a.page.evaluate(() => JSON.stringify(sessionStorage))).includes(PASSWORD), 'the password is not stored');
+
+  // An invite says it lasts five minutes and needs the password; revoking
+  // it from the same dialog stops the link at once.
+  await openInvite(a, 'Mallory');
+  await a.page.waitForSelector('#room-invite-result:not([hidden])');
+  assert.equal(await a.page.textContent('#room-invite-ttl-text'), '5 minutes');
+  assert.ok(await a.page.isVisible('#room-invite-password-note'));
+  const revoked = (await a.page.textContent('#room-invite-link')) ?? '';
+  assert.match(revoked, new RegExp(`\\.n1\\.p$`));
+  await a.page.click('#room-invite-revoke');
+  await a.page.waitForTimeout(600);
+  await a.page.click('#room-invite-revoke');
+  await a.page.waitForSelector('#room-invite-dialog:not([open])', { state: 'attached' });
+  const m = await tryJoin(revoked, 'Mallory', PASSWORD);
+  await m.page.waitForSelector('#problem:not([hidden])');
+  assert.equal(await m.page.textContent('#problem-title'), 'This invite was already used or revoked');
+  await m.check(/status of 410/);
+  await m.context.close();
+
+  // A chat for two takes one more invite, and Ada's own tab refuses a third.
+  const wrongLink = await invite(a, 'Bob');
+  await openInvite(a, 'Cleo');
+  await a.page.waitForSelector('#room-invite-error:not([hidden])');
+  assert.match((await a.page.textContent('#room-invite-error')) ?? '', /allows 2 people/);
+  await a.page.click('#room-invite-close');
+
+  // A wrong password: one try. The invite's place closes, and Bob is told.
+  const wrong = await tryJoin(wrongLink, 'Bob', 'not the password');
+  assert.ok(await wrong.page.isVisible('#room-join-password'), 'the link asks for the password at once');
+  await wrong.page.waitForSelector('#problem:not([hidden])', { timeout: 45_000 });
+  assert.equal(await wrong.page.textContent('#problem-title'), 'You weren’t let in');
+  await wrong.check(/status of 404/);
+  await wrong.context.close();
+  await a.page.waitForFunction(() => (document.getElementById('room-messages')?.textContent ?? '').includes('with the wrong password'), undefined, { timeout: 30_000 });
+
+  // The closed place frees the chat's one other place: the right password gets in.
+  const b = await tryJoin(await invite(a, 'Bob'), 'Bob', PASSWORD);
+  await b.page.waitForSelector('#room-chat:not([hidden])');
+  // (Bob's name matches the closed invite's label, so it shows with his code.)
+  await a.page.waitForFunction(() => document.getElementById('room-member-count')?.textContent === '2 members', undefined, { timeout: 30_000 });
+  await a.page.fill('#room-text', 'Hello Bob');
+  await a.page.press('#room-text', 'Enter');
+  await waitText(b, 'Hello Bob');
+  await b.check();
+  await b.context.close();
+  await a.check();
+  await a.context.close();
+});
+
+test('Null Chat links that are incomplete, or opened in another tab, explain what to do', async () => {
   const id = '0123456789abcdef0123456789abcdef';
   for (const [url, title] of [
-    [`${origin}/r/${id}`, 'This burner room isn’t open in this tab'],
+    [`${origin}/r/${id}`, 'This Null Chat isn’t open in this tab'],
     [`${origin}/r/${id}#short`, 'This invite link is incomplete'],
     [`${origin}/r/${id}#${'A'.repeat(43)}`, 'This invite link is incomplete'],
   ] as const) {
@@ -1403,7 +1498,6 @@ test('create form: a discussion rules out burning, and the open count is validat
   assert.ok(await h.page.isEnabled('#burn'), 'a password is compatible with burn after reading');
   assert.equal(await h.page.locator('.nb-option-notes, .nb-option-note').count(), 0, 'settings do not add inline notices');
   await h.page.uncheck('#password-switch');
-  await openMore(h.page);
   await h.page.check('#discussion');
   assert.equal(await h.page.isChecked('#password-switch'), false, 'a discussion does not need a password');
   assert.ok(await h.page.isEnabled('#password-switch'), 'a password stays optional');
@@ -1422,7 +1516,7 @@ test('create form: a discussion rules out burning, and the open count is validat
   assert.ok(await h.page.isDisabled('#discussion'), 'no discussion on a burn paste');
   assert.ok(await h.page.isVisible('#burn-reads'));
   assert.equal(await h.page.inputValue('#burn-reads'), '1');
-  assert.equal(await h.page.textContent('#burn-label'), 'Burn after');
+  assert.equal(await h.page.textContent('#burn-label'), 'Burn after opening');
   assert.equal(await h.page.textContent('#burn-reads-unit'), 'open');
   await h.page.fill('#password', 'valid password');
   for (const invalid of ['', '0', '1.5', '1001']) {
@@ -1437,7 +1531,7 @@ test('create form: a discussion rules out burning, and the open count is validat
   assert.ok(await h.page.isHidden('#burn-reads'));
   assert.ok(await h.page.isDisabled('#burn-reads'));
   assert.ok(await h.page.isEnabled('#discussion'));
-  assert.equal(await h.page.locator('label:has(#discussion)').getAttribute('title'), 'Allow encrypted comments from everyone who can open the paste.');
+  assert.equal(await h.page.locator('label:has(#discussion)').getAttribute('title'), 'Everyone who can open it can leave encrypted comments.');
   await h.check();
   await h.context.close();
 });
@@ -1679,12 +1773,12 @@ test('password-protected burn paste survives ID-only access and wrong passwords'
 });
 
 
-test('settings keep logical rows across viewport sizes, option states, and input methods', async () => {
+test('the create studio keeps its layout across viewport sizes, option states, and input methods', async () => {
   for (const hasTouch of [false, true]) {
     for (const colorScheme of ['light', 'dark'] as const) {
       const h = await open({ colorScheme, hasTouch });
       await goto(h, `${origin}/`);
-      for (const width of [320, 360, 390, 414, 479, 480, 600, 767, 768, 844, 1024, 1199, 1200, 1400, 1920]) {
+      for (const width of [320, 360, 390, 414, 479, 480, 600, 767, 768, 844, 991, 992, 1024, 1199, 1200, 1400, 1920]) {
         await h.page.setViewportSize({ width, height: 844 });
         const checkLayout = async (state: string) => {
           const layout = await h.page.evaluate(() => {
@@ -1692,14 +1786,21 @@ test('settings keep logical rows across viewport sizes, option states, and input
               const box = document.querySelector(selector)!.getBoundingClientRect();
               return { x: box.x, y: box.y, width: box.width, height: box.height, right: box.right, bottom: box.bottom };
             };
-            const controls = [...document.querySelectorAll<HTMLElement>('.btn, input.form-control, select.form-select, .nb-check')]
+            const controls = [...document.querySelectorAll<HTMLElement>('#create .btn, #create input.form-control, #create select.form-select')]
               .filter((element) => element.getBoundingClientRect().height > 0)
               .map((element) => ({ id: element.id || element.textContent!.trim(), height: element.getBoundingClientRect().height, clipped: element.scrollWidth > element.clientWidth + 1 }));
+            const options = [...document.querySelectorAll<HTMLElement>('#create-form .nb-opt')].map((o) => {
+              const box = o.getBoundingClientRect();
+              return { x: box.x, y: box.y, bottom: box.bottom, right: box.right };
+            });
+            const fields = [...document.querySelectorAll<HTMLElement>('#create-form .nb-opt-field')]
+              .filter((f) => !f.hidden)
+              .map((f) => ({ field: f.getBoundingClientRect().y, row: f.previousElementSibling!.getBoundingClientRect().bottom }));
             return {
               overflow: document.documentElement.scrollWidth > innerWidth,
-              toolbar: rect('.nb-toolbar'), expiry: rect('#expiry'), burn: rect('.nb-burn-setting'), recipients: rect('.nb-recipients-setting'), more: rect('#more-toggle'), passwordSetting: rect('.nb-password-setting'),
-              discussion: rect('label:has(#discussion)'), password: rect('label:has(#password-switch)'),
-              passwordField: rect('#password-row'), attach: rect('#attach'), submit: rect('#create-submit'), controls,
+              main: rect('#composer'), side: rect('.nb-toolbar'), actions: rect('#create-form .nb-panel-actions'),
+              actionsPad: (() => { const c = getComputedStyle(document.querySelector('#create-form .nb-panel-actions')!); return parseFloat(c.paddingLeft) + parseFloat(c.paddingRight); })(),
+              attach: rect('#attach'), submit: rect('#create-submit'), controls, options, fields,
             };
           });
           const label = `${width}px ${colorScheme} ${hasTouch ? 'touch' : 'mouse'}, ${state}`;
@@ -1708,19 +1809,19 @@ test('settings keep logical rows across viewport sizes, option states, and input
             assert.equal(control.clipped, false, `${label}: ${control.id} clips`);
             assert.equal(control.height, width < 768 || hasTouch ? 44 : 36, `${label}: ${control.id} height`);
           }
-          if (width < 768) {
-            assert.ok(layout.burn.y >= layout.expiry.bottom + 7, `${label}: burn needs its own row`);
-            assert.ok(layout.password.y >= layout.burn.bottom + 7, `${label}: password needs its own row`);
-            if (layout.passwordField.height) assert.ok(layout.passwordField.y >= layout.password.bottom + 7, `${label}: password field follows its checkbox`);
-            assert.ok(layout.more.y >= layout.passwordSetting.bottom + 7, `${label}: more options follow`);
-            if (layout.recipients.height) {
-              assert.ok(layout.recipients.y >= layout.more.bottom + 7, `${label}: separate links need their own row`);
-              assert.ok(layout.discussion.y >= layout.recipients.bottom + 7, `${label}: discussion needs its own row`);
-            }
-            assert.ok(layout.submit.y >= layout.attach.bottom + 11, `${label}: Create follows Attach`);
-            for (const action of [layout.attach, layout.submit]) assert.ok(Math.abs(action.width - layout.toolbar.width) < 1, `${label}: standalone actions fill their row`);
-          } else if (width < 1200) {
-            assert.equal(layout.expiry.y, layout.burn.y, `${label}: first settings row aligns`);
+          if (width >= 992) {
+            assert.ok(layout.side.x >= layout.main.right + 19, `${label}: the settings panel sits beside the editor`);
+            assert.ok(Math.abs(layout.side.y - layout.main.y) < 1 && Math.abs(layout.side.bottom - layout.main.bottom) < 1, `${label}: the settings panel is exactly as tall as the editor`);
+          } else assert.ok(layout.side.y >= layout.main.bottom + 11, `${label}: the settings panel follows the editor`);
+          if (width < 768 || width >= 992) {
+            // One option per row.
+            for (let i = 1; i < layout.options.length; i++) assert.ok(layout.options[i]!.y >= layout.options[i - 1]!.bottom - 1, `${label}: option ${i + 1} has its own row`);
+          }
+          for (const f of layout.fields) assert.ok(f.field >= f.row + 7, `${label}: an option's field follows its switch`);
+          if (width < 768 || width >= 992) {
+            assert.ok(layout.submit.y >= layout.attach.bottom + 7, `${label}: Create follows Attach`);
+            for (const action of [layout.attach, layout.submit]) assert.ok(Math.abs(action.width - (layout.actions.width - layout.actionsPad)) < 1, `${label}: actions fill their row`);
+          } else {
             assert.equal(layout.attach.y, layout.submit.y, `${label}: action row aligns`);
           }
         };
@@ -1729,13 +1830,11 @@ test('settings keep logical rows across viewport sizes, option states, and input
         await h.page.fill('#burn-reads', '1000');
         await h.page.check('#password-switch');
         await checkLayout('burn limit and password');
-        await openMore(h.page);
         await h.page.check('#recipients');
         await h.page.fill('#recipients-count', '20');
         await checkLayout('separate links, burn limit and password');
         await h.page.uncheck('#recipients');
         await h.page.uncheck('#burn');
-        await openMore(h.page);
         await h.page.check('#discussion');
         await checkLayout('discussion and password');
         await h.page.uncheck('#discussion');
@@ -1759,17 +1858,17 @@ test('paste controls stay reachable at phone and desktop widths in both themes',
       assert.ok(await h.page.isVisible('#expiry'));
       assert.ok(await h.page.isVisible('#attach'));
       const submit = await h.page.locator('#create-submit').boundingBox();
-      const toolbar = await h.page.locator('.nb-toolbar').boundingBox();
-      assert.ok(submit && toolbar && Math.abs(submit.x + submit.width - toolbar.x - toolbar.width) < 2, 'create action aligns to the right');
-      if (width < 768) assert.ok(submit && toolbar && Math.abs(submit.width - toolbar.width) < 2, 'mobile create action fills its row');
+      const actions = await h.page.locator('#create-form .nb-panel-actions').boundingBox();
+      const pad = await h.page.locator('#create-form .nb-panel-actions').evaluate((e) => parseFloat(getComputedStyle(e).paddingRight));
+      assert.ok(submit && actions && Math.abs(submit.x + submit.width - actions.x - actions.width + pad) < 2, 'create action aligns to the right of the panel');
+      if (width < 768) assert.ok(submit && actions && Math.abs(submit.width - actions.width + 2 * pad) < 2, 'mobile create action fills its row');
       await h.page.waitForFunction(() => document.fonts.check('30px "Damion"', 'Nullbin') && [...document.fonts].some((font) => font.family === 'Damion' && font.status === 'loaded'));
       assert.equal(await h.page.locator('.nb-brand svg, .nb-brand-description').count(), 0);
-      await openMore(h.page);
       await h.page.check('#discussion');
       await h.page.check('#password-switch');
       assert.ok(await h.page.isVisible('#password'));
       assert.ok(await h.page.isDisabled('#burn'));
-      const heights = await h.page.locator('#create-submit, #expiry, #password, #password-reveal, #attach, #theme-toggle, .nb-check').evaluateAll((controls) => controls.map((control) => control.getBoundingClientRect().height));
+      const heights = await h.page.locator('#create-submit, #expiry, #password, #password-reveal, #attach, #theme-toggle').evaluateAll((controls) => controls.map((control) => control.getBoundingClientRect().height));
       assert.ok(heights.every((height) => Math.abs(height - heights[0]!) < 1), `controls must share one height at ${width}px (${colorScheme})`);
       if (width < 768) assert.ok(heights[0]! >= 44, 'mobile controls retain touch-friendly sizing');
       await checkWidth();

@@ -97,7 +97,7 @@ var allowedExpiry = map[int64]time.Duration{
 // Config configures a Server.
 type Config struct {
 	Store *storage.Store
-	// Rooms holds burner rooms; nil turns them off.
+	// Rooms holds Null Chats; nil turns them off.
 	Rooms          *rooms.Store
 	Assets         *assets.Bundle
 	Version        string

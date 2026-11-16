@@ -1,4 +1,4 @@
-// Shared by the paste viewer, discussions and burner rooms.
+// Shared by the paste viewer, discussions and Null Chats.
 
 // Text a room message may not carry: control and format characters (direction
 // overrides and isolates, zero-width spaces, soft hyphens, tag characters

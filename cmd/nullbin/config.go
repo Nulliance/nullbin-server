@@ -24,7 +24,7 @@ type config struct {
 	TrustedProxies []netip.Prefix
 	APIOnly        bool
 	FrontendOrigin string
-	Rooms          bool // burner rooms (in memory only)
+	Rooms          bool // Null Chats (in memory only)
 }
 
 const (

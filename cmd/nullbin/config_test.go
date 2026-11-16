@@ -212,7 +212,7 @@ func TestDeletePasteCommand(t *testing.T) {
 func TestConfigRooms(t *testing.T) {
 	cfg, err := loadConfig(nil)
 	if err != nil || !cfg.Rooms {
-		t.Fatalf("burner rooms are on by default: %v %v", cfg.Rooms, err)
+		t.Fatalf("Null Chats are on by default: %v %v", cfg.Rooms, err)
 	}
 	for v, want := range map[string]bool{"false": false, "true": true, "0": false, "": true} {
 		cfg, err := loadConfig([]string{"NULLBIN_ROOMS=" + v})

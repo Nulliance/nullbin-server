@@ -6,7 +6,7 @@ cannot read. The key is the part of the link after `#`, which browsers never
 send to the server.
 
 Passwords, file attachments, encrypted comments, expiry, and burn after
-reading are all built in, and so are **burner rooms**: temporary end-to-end
+reading are all built in, and so are **Null Chats**: temporary end-to-end
 encrypted group chats. There are no accounts and no database.
 
 ## Start here
@@ -66,15 +66,33 @@ way. If a paste contains invisible or direction-changing characters (a trick
 that makes text look different from what it does when copied), Nullbin shows
 a warning above it.
 
-### Burner rooms
+### Null Chats
 
-A burner room is a group chat that deletes itself. Choose **Burner room** at
-the top of the home page, enter your name, optionally a room name, and how
-long it lasts (5 minutes to 1 week), then **Create burner room**.
+A Null Chat is a group chat that deletes itself. Choose **Null Chat** at
+the top of the home page, enter your name, optionally a chat name, and
+choose:
+
+- **Self-destructs after**: 5 minutes to 1 week.
+- **People, you included**: 2 (a one-to-one chat) to 20. The server refuses
+  invites past it, and everyone's app refuses to let in anyone past it, so
+  a one-to-one chat stays one-to-one even if the server is tampered with.
+  Invites that can still be used count, as do members; removed people,
+  revoked and expired invites do not.
+- **Invite links work for**: 5 minutes, 15 minutes (the default) or 1 hour.
+  The server refuses an invite after that, and the creator's tab refuses a
+  join it first sees more than ten minutes after, whatever the server does.
+- **Password** (optional): joining also takes it, so a leaked invite link
+  alone gets nobody in. Send it a different way from the links. It never
+  leaves your browser: the tab keeps only a key derived from it (Argon2id).
+  Each invite allows one try: a wrong password closes that invite.
+
+Then **Create Null Chat**.
 
 - **Invite** people one at a time: type who the invite is for, then copy the
-  link and send it to that person. Each invite works once, and only for an
-  hour: once used or expired, the link opens nothing. Keep the room open
+  link and send it to that person. Each invite works once, and only for the
+  time chosen: once used, expired or revoked, the link opens nothing.
+  **Revoke this invite** (in the invite window, or **Revoke invite** in
+  Members) stops a link at once. Keep the room open
   while people join: your tab lets them in, and until it does they see that
   they are waiting (and their safety code). Each invite lets one person in. If your tab sees two people
   prove they had the same invite (only a tampered server allows it), it
@@ -113,7 +131,7 @@ to come back), and after a reload you see new messages only. New members
 cannot read messages from before they joined. If the room ever shows that
 someone else took your place, leave and tell the person who invited you.
 Rooms are text only: up to 20 places (each invite uses one, even if it is
-cancelled, expires or the person is removed) and 1,000 records (messages,
+revoked, expires or the person is removed) and 1,000 records (messages,
 reactions, edits and key changes all count). Keys take more of them the
 more people join: a room of 5 keeps roughly 900 for messages, a full room
 of 20 roughly 400 to 500.
@@ -453,7 +471,7 @@ change with `sudo ./nullbin start`.
 | `MAX_PASTES` | `100000` | Most pastes kept at once. Each uses about four inodes; check with `df -i` before raising it. |
 | `DOMAIN` (A) or `API_DOMAIN` (B) | set by `setup` | The server's domain name. |
 | `FRONTEND_ORIGIN` (B only) | set by `setup-api` | The website's exact address. |
-| `ROOMS` | `true` | `false` turns burner rooms off. |
+| `ROOMS` | `true` | `false` turns Null Chats off. |
 | `CLOUDFLARE` | not set (off) | `true` when Cloudflare's proxy is in front, `self-signed` to also never use Let's Encrypt. Change it with `sudo ./nullbin cloudflare on`, `self-signed` or `off`, not by hand. See [Behind Cloudflare](#behind-cloudflare). |
 
 Write each setting on its own line as `NAME=value`, with no quotes or
@@ -814,7 +832,7 @@ startup.
 | `NULLBIN_MAX_SIZE` | `100MiB` | Largest paste, `64KiB` to `2GiB`. |
 | `NULLBIN_BEHIND_HTTPS` | `false` | `true` sends `Strict-Transport-Security: max-age=31536000`. |
 | `NULLBIN_TRUSTED_PROXIES` | empty | IPs or CIDR ranges whose `X-Forwarded-For` header is trusted. Public ranges wider than /12 (IPv4) or /29 (IPv6) are refused; private, shared and loopback ranges may be wider (such as 10.0.0.0/8 or fc00::/7). |
-| `NULLBIN_ROOMS` | `true` | Burner rooms. `false` removes their API: a separately hosted website's room page then says rooms are off, and the all-in-one server answers room links with 404. They are kept in memory only: at most 1,000 rooms and 128 MiB in total; 4 MiB of messages per room; and per client network (IPv4 address or IPv6 /64) at most 10 live rooms holding 4 MiB of messages together, four times that per IPv6 /48. |
+| `NULLBIN_ROOMS` | `true` | Null Chats. `false` removes their API: a separately hosted website's room page then says rooms are off, and the all-in-one server answers room links with 404. They are kept in memory only: at most 1,000 rooms and 128 MiB in total; 4 MiB of messages per room; and per client network (IPv4 address or IPv6 /64) at most 10 live rooms holding 4 MiB of messages together, four times that per IPv6 /48. |
 
 The `nullbin` program also has `nullbin healthcheck` (used by the container
 health check) and `nullbin delete <paste id>` (used by `./nullbin delete`;
@@ -830,9 +848,9 @@ the server must be stopped).
 | Delete a paste | 60 per minute | 20 |
 | Downloads, burn reads and comment reads (shared) | 20 per minute | 20 |
 | Pages, assets and the version link | 5 per second | 100 |
-| Create a burner room | 10 per minute | 10 |
-| Burner room messages, invites, joins and creator actions | 2 per second | 30 |
-| Burner room reads (polling) | 10 per second | 100 |
+| Create a Null Chat | 10 per minute | 10 |
+| Null Chat messages, invites, joins and creator actions | 2 per second | 30 |
+| Null Chat reads (polling) | 10 per second | 100 |
 
 One IPv6 `/48` as a whole gets four times a client's rates and bursts.
 Each limiter tracks up to 100,000 clients and refuses new ones when full.
@@ -963,7 +981,7 @@ required for every change.
 </details>
 
 <details>
-<summary><strong>Burner rooms</strong>: keys, forward secrecy, formats and endpoints</summary>
+<summary><strong>Null Chats</strong>: keys, forward secrecy, formats and endpoints</summary>
 
 **Keys.** A room key (32 random bytes) travels only in invite links, after
 the `#`. It encrypts *control records*: joins, admits, the room name, invite labels,
@@ -994,8 +1012,14 @@ there; it then admits neither.) So the room key alone adds nobody, even with
 the server's help. X25519 keys of low order are refused. Each tab remembers the keys
 it has seen for each place and the removals, and refuses a later history
 that contradicts them. Only slot 0 (the creator) may name the room, label
-invites, admit and announce removals. An invite nobody used within an hour
-stops working (the server refuses it).
+invites, admit and announce removals. The creator also signs the chat's
+settings (whether joins need a password, the member limit, the invite
+lifetime) and each invite's expiry. An invite nobody used in time stops
+working (the server refuses it, and the creator's tab refuses joins it sees
+more than ten minutes late). In a chat with a password, a join's proof is
+keyed by the invite secret and an Argon2id key of the password together; a
+join whose proof fails closes its place, so each invite allows one guess,
+also against a server that posts joins of its own.
 
 **Messages and forward secrecy** ("sender keys", as in Signal and WhatsApp
 groups). Each member has a sending chain: a 32-byte chain key `CK`, from which
@@ -1104,14 +1128,17 @@ token check; a valid token can also get `409` for a full room and `410` for
 a used or expired invite, which tells whoever holds such an invite whether
 the room still exists):
 
-- `POST /api/v1/rooms` with `{"expires_in": 300 | 1800 | 3600 | 10800 | 43200 | 86400 | 259200 | 604800}` returns
+- `POST /api/v1/rooms` with `{"expires_in": 300 | 1800 | 3600 | 10800 | 43200 | 86400 | 259200 | 604800}`,
+  and optionally `"max_members"` (2 to 20, default 20) and `"invite_ttl"`
+  (300, 900 or 3600 seconds, default 3600), returns
   `201` with `id`, `owner_token`, `member_token` and `slot` 0 (the creator);
   `429` when this client network already has 10 live rooms.
 - `POST /{id}/invites` (with `Nullbin-Owner-Token`) returns `201` with a
-  single-use `invite_token` and its `slot`; `409` when 20 slots are used.
+  single-use `invite_token` and its `slot`; `409` when 20 slots are used, or
+  when members and still-usable invites reach `max_members`.
 - `POST /{id}/join` (with `Nullbin-Invite-Token`) returns `200` with a new
-  `member_token` and the `slot`; `410` if that invite was used, removed or
-  made more than an hour ago.
+  `member_token` and the `slot`; `410` if that invite was used, revoked
+  (removed) or is older than the room's `invite_ttl`.
 - `POST /{id}/records` (with `Nullbin-Member-Token`, `application/octet-stream`,
   41 bytes to 16 KiB) stores one record and stamps it with the sender's slot.
   `409` after 1,000 records or 4 MiB, or when the creator's network holds
@@ -1122,7 +1149,8 @@ the room still exists):
   streamed under the download bandwidth limits.
 - `GET /{id}/members` (owner) returns each used slot's state
   (`invited`, `expired`, `joined`, `removed`).
-- `POST /{id}/members/{n}/remove` (owner) closes slot `n` (not 0) for good.
+- `POST /{id}/members/{n}/remove` (owner) closes slot `n` (not 0) for good:
+  it removes a member, or revokes an invite nobody used yet.
 - `DELETE /{id}` (with `Nullbin-Member-Token` of any current member, or the
   owner token) self-destructs the room for everyone.
 
@@ -1247,7 +1275,7 @@ go build -trimpath -o nullbin ./cmd/nullbin
 
 Then open `http://127.0.0.1:8080`.
 
-Burner rooms live in the server's memory, so outside Docker (whose files
+Null Chats live in the server's memory, so outside Docker (whose files
 here already turn them off) run it with core dumps off: `ulimit -c 0` first
 on Linux and macOS, and on systemd `LimitCORE=0`.
 
@@ -1269,7 +1297,7 @@ npm run test:browser
 NB_TEST_SPLIT=1 npm run test:browser
 ```
 
-`npm test` includes a fuzzer for burner rooms: a malicious member who also
+`npm test` includes a fuzzer for Null Chats: a malicious member who also
 runs the server tampers with every room, and each tab must still show only
 admitted members, only what people said, keys that only move forward and
 every warning it raised. Run it longer with

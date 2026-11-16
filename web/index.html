@@ -56,6 +56,7 @@
   <symbol id="i-smile" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M8.5 14.5a4.5 4.5 0 0 0 7 0M9 9.5h.01M15 9.5h.01"/></symbol>
   <symbol id="i-edit" viewBox="0 0 24 24"><path d="M4 20h4l10.5-10.5-4-4L4 16z"/><path d="M13.5 6.5l4 4"/></symbol>
   <symbol id="i-chevron" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></symbol>
+  <symbol id="i-link" viewBox="0 0 24 24"><path d="M10 13.5a4.5 4.5 0 0 0 6.4.5l3-3a4.5 4.5 0 0 0-6.4-6.4l-1.2 1.2"/><path d="M14 10.5a4.5 4.5 0 0 0-6.4-.5l-3 3a4.5 4.5 0 0 0 6.4 6.4l1.2-1.2"/></symbol>
   <symbol id="i-qr" viewBox="0 0 24 24"><path d="M3 3h6v6H3zM15 3h6v6h-6zM3 15h6v6H3zM15 15h3v3h3v3h-6zM12 3v9H3M12 15v6M15 12h6M21 12v3"/></symbol>
 </svg>
 
@@ -75,61 +76,113 @@
   </noscript>
   <p id="loading" class="nb-meta nb-loading" role="status"><span class="spinner-border spinner-border-sm" aria-hidden="true"></span>Loading</p>
 
-  <!-- New paste -->
+  <!-- New paste or Null Chat: one studio. A switch picks what to make; both
+       share the same frame, with the work on the left and its settings and
+       action in a panel on the right (under it on narrow screens). -->
   <section id="create" aria-labelledby="create-title" hidden>
-    <h1 id="create-title" class="visually-hidden">New paste</h1>
-    <div class="nb-mode-tabs" role="tablist" aria-label="What to create">
-      <button id="tab-paste" type="button" class="nb-tab" role="tab" aria-selected="true" aria-controls="create-form"><svg class="nb-i" aria-hidden="true"><use href="#i-new"/></svg><span>Paste</span></button>
-      <button id="tab-room" type="button" class="nb-tab" role="tab" aria-selected="false" aria-controls="room-create-form" tabindex="-1"><svg class="nb-i" aria-hidden="true"><use href="#i-users"/></svg><span>Burner room</span></button>
-    </div>
-    <form id="room-create-form" class="nb-card nb-pad nb-room-create" role="tabpanel" aria-labelledby="tab-room" novalidate hidden>
-      <h2 class="nb-h2"><svg class="nb-i" aria-hidden="true"><use href="#i-users"/></svg>Burner room</h2>
-      <p class="nb-muted">An end-to-end encrypted group chat that deletes itself when time’s up. Only people you invite can read it, not even the server.</p>
-      <p id="room-create-error" class="nb-note nb-tone-danger" role="alert" tabindex="-1" hidden></p>
-      <div class="nb-room-fields">
-        <label for="room-you" class="form-label">Your name</label>
-        <input id="room-you" class="form-control" maxlength="40" autocomplete="off" spellcheck="false" autocorrect="off" autocapitalize="off" aria-invalid="false">
-        <label for="room-name" class="form-label">Room name <span class="nb-muted">(optional)</span></label>
-        <input id="room-name" class="form-control" maxlength="40" autocomplete="off" spellcheck="false" autocorrect="off" autocapitalize="off">
-        <label for="room-expiry" class="form-label">Self-destructs after</label>
-        <select id="room-expiry" class="form-select">
-          <option value="300">5 minutes</option>
-          <option value="1800">30 minutes</option>
-          <option value="3600">1 hour</option>
-          <option value="10800">3 hours</option>
-          <option value="43200">12 hours</option>
-          <option value="86400" selected>1 day</option>
-          <option value="259200">3 days</option>
-          <option value="604800">1 week</option>
-        </select>
+    <h1 id="create-title" class="visually-hidden">Create</h1>
+    <div class="nb-studio-head">
+      <div class="nb-mode-tabs" role="tablist" aria-label="What to create">
+        <button id="tab-paste" type="button" class="nb-tab" role="tab" aria-selected="true" aria-controls="create-form"><svg class="nb-i" aria-hidden="true"><use href="#i-new"/></svg><span>Paste</span></button>
+        <button id="tab-room" type="button" class="nb-tab" role="tab" aria-selected="false" aria-controls="room-create-form" tabindex="-1"><svg class="nb-i" aria-hidden="true"><use href="#i-users"/></svg><span>Null Chat</span></button>
       </div>
-      <button id="room-create-submit" type="submit" class="btn nb-btn-primary"><svg class="nb-i" aria-hidden="true"><use href="#i-lock"/></svg><span>Create burner room</span></button>
-      <p class="nb-meta nb-room-fineprint">Your access stays in this browser tab: if you close it, you’ll need a new invite to get back in. Rooms are never written to the server’s disk, so a server restart also ends them.</p>
+    </div>
+
+    <form id="room-create-form" class="nb-studio" role="tabpanel" aria-labelledby="tab-room" novalidate hidden>
+      <div class="nb-studio-main nb-card nb-room-intro">
+        <h2 class="nb-room-title">Start a Null Chat</h2>
+        <p class="nb-room-lede">An end-to-end encrypted group chat. Messages are encrypted in your browser, so only the people you invite can read them, not even the server. When time’s up, it deletes itself.</p>
+        <p id="room-create-error" class="nb-note nb-tone-danger" role="alert" tabindex="-1" hidden></p>
+        <div class="nb-room-fields">
+          <div class="nb-field">
+            <label for="room-you" class="form-label">Your name</label>
+            <input id="room-you" class="form-control" maxlength="40" autocomplete="off" spellcheck="false" autocorrect="off" autocapitalize="off" aria-invalid="false">
+          </div>
+          <div class="nb-field">
+            <label for="room-name" class="form-label">Chat name <span class="nb-muted">(optional)</span></label>
+            <input id="room-name" class="form-control" maxlength="40" autocomplete="off" spellcheck="false" autocorrect="off" autocapitalize="off">
+          </div>
+        </div>
+        <ul class="nb-room-facts">
+          <li><span class="nb-opt-icon"><svg class="nb-i" aria-hidden="true"><use href="#i-lock"/></svg></span><span><strong>End-to-end encrypted.</strong> The server only passes along messages it can’t read.</span></li>
+          <li><span class="nb-opt-icon"><svg class="nb-i" aria-hidden="true"><use href="#i-refresh"/></svg></span><span><strong>Forward secrecy.</strong> Every message has its own key, deleted once it’s used.</span></li>
+          <li><span class="nb-opt-icon"><svg class="nb-i" aria-hidden="true"><use href="#i-check"/></svg></span><span><strong>Safety codes.</strong> Compare codes with each other to be sure no one is listening in, the server included.</span></li>
+          <li><span class="nb-opt-icon"><svg class="nb-i" aria-hidden="true"><use href="#i-user-plus"/></svg></span><span><strong>Invite only.</strong> Each invite link lets one person in, for a short time you choose, and you can revoke it.</span></li>
+          <li><span class="nb-opt-icon"><svg class="nb-i" aria-hidden="true"><use href="#i-flame"/></svg></span><span><strong>Never on disk.</strong> Chats live only in the server’s memory, so a restart also ends them.</span></li>
+          <li><span class="nb-opt-icon"><svg class="nb-i" aria-hidden="true"><use href="#i-key"/></svg></span><span><strong>Tied to this tab.</strong> If you close it, you’ll need a new invite to get back in.</span></li>
+        </ul>
+      </div>
+      <div class="nb-panel nb-studio-side" role="group" aria-label="Chat settings">
+        <div class="nb-panel-field">
+          <label for="room-expiry"><svg class="nb-i" aria-hidden="true"><use href="#i-clock"/></svg>Self-destructs after</label>
+          <select id="room-expiry" class="form-select">
+            <option value="300">5 minutes</option>
+            <option value="1800">30 minutes</option>
+            <option value="3600">1 hour</option>
+            <option value="10800">3 hours</option>
+            <option value="43200">12 hours</option>
+            <option value="86400" selected>1 day</option>
+            <option value="259200">3 days</option>
+            <option value="604800">1 week</option>
+          </select>
+        </div>
+        <div class="nb-panel-field">
+          <label for="room-max"><svg class="nb-i" aria-hidden="true"><use href="#i-users"/></svg>People, you included</label>
+          <div class="has-validation">
+            <input id="room-max" class="form-control" type="number" min="2" max="20" step="1" value="20" inputmode="numeric" aria-describedby="room-max-help room-max-error" aria-invalid="false">
+            <div id="room-max-error" class="invalid-feedback">From 2 (you and one other) to 20.</div>
+          </div>
+          <span id="room-max-help" class="visually-hidden">From 2 to 20. Everyone’s app refuses anyone past this limit, not only the server.</span>
+        </div>
+        <div class="nb-panel-field">
+          <label for="room-invite-ttl"><svg class="nb-i" aria-hidden="true"><use href="#i-user-plus"/></svg>Invite links work for</label>
+          <select id="room-invite-ttl" class="form-select" aria-describedby="room-invite-ttl-help">
+            <option value="300">5 minutes</option>
+            <option value="900" selected>15 minutes</option>
+            <option value="3600">1 hour</option>
+          </select>
+          <span id="room-invite-ttl-help" class="visually-hidden">An invite nobody used by then stops working, so a link that leaks later lets nobody in.</span>
+        </div>
+        <div class="nb-opts">
+          <div class="nb-opt">
+            <label class="nb-opt-row"><span class="nb-opt-icon"><svg class="nb-i" aria-hidden="true"><use href="#i-key"/></svg></span><span class="nb-opt-text"><span id="room-password-label" class="nb-opt-title">Password</span><span id="room-password-help" class="nb-opt-desc">Invites also need it, so a leaked link alone gets nobody in.</span></span><input id="room-password-switch" class="nb-switch" type="checkbox" role="switch" aria-labelledby="room-password-label" aria-describedby="room-password-help" aria-controls="room-password-row"></label>
+            <div id="room-password-row" class="nb-opt-field nb-toolbar-password" hidden>
+              <label for="room-password" class="visually-hidden">Chat password</label>
+              <div class="input-group has-validation">
+                <input id="room-password" type="password" class="form-control" autocomplete="off" spellcheck="false" autocorrect="off" autocapitalize="off" placeholder="At least 8 characters" aria-describedby="room-password-error" aria-invalid="false">
+                <button id="room-password-generate" type="button" class="btn nb-btn-ghost" aria-label="Generate a strong password" title="Generate a strong random password"><svg class="nb-i" aria-hidden="true"><use href="#i-key"/></svg></button>
+                <button id="room-password-copy" type="button" class="btn nb-btn-ghost nb-copy-btn" aria-label="Copy password" title="Copy the password, to send it separately from invites"><svg class="nb-i" aria-hidden="true"><use href="#i-copy"/></svg></button>
+                <button id="room-password-reveal" type="button" class="btn nb-btn-ghost" aria-pressed="false" aria-label="Show password"><svg class="nb-i" aria-hidden="true"><use href="#i-eye"/></svg></button>
+                <div id="room-password-error" class="invalid-feedback">Use at least 8 characters.</div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="nb-panel-actions">
+          <button id="room-create-submit" type="submit" class="btn nb-btn-primary"><svg class="nb-i" aria-hidden="true"><use href="#i-lock"/></svg><span>Create Null Chat</span></button>
+        </div>
+      </div>
     </form>
-    <form id="create-form" role="tabpanel" aria-labelledby="tab-paste" novalidate>
-      <div id="error-banner" class="nb-note nb-tone-danger" role="alert" tabindex="-1" hidden></div>
+
+    <form id="create-form" class="nb-studio" role="tabpanel" aria-labelledby="tab-paste" novalidate>
+      <div id="error-banner" class="nb-note nb-tone-danger nb-studio-note" role="alert" tabindex="-1" hidden></div>
 
       <!-- The editor comes first, so keyboard and reading order run from the
-           text to its settings and Create. Wide screens show the settings
-           above it (app.css). -->
-      <div id="composer" class="nb-composer">
-        <div class="nb-editor-heading">
-          <label for="text">Editor</label>
-          <span class="nb-meta nb-kbd"><kbd id="kbd-mod">Ctrl</kbd> + <kbd>Enter</kbd> to create</span>
-        </div>
+           text to its settings and Create. -->
+      <div id="composer" class="nb-composer nb-studio-main">
+        <label for="text" class="visually-hidden">Text</label>
         <textarea id="text" class="nb-editor" rows="20" spellcheck="false" autocomplete="off" autocorrect="off" autocapitalize="off" placeholder="Paste text here…" aria-invalid="false"></textarea>
         <div class="nb-composer-bar">
           <ul id="file-list" class="nb-file-list" aria-label="Attached files" hidden></ul>
           <span class="nb-meta nb-drop-label">Drop files or paste an image to attach. Several files are sent as one zip.</span>
-          <span id="char-count" class="nb-meta ms-auto">0 characters</span>
+          <span class="nb-meta nb-composer-end"><span class="nb-kbd"><kbd id="kbd-mod">Ctrl</kbd> <kbd>Enter</kbd> to create</span><span id="char-count">0 characters</span></span>
         </div>
         <div class="nb-drop-hint" aria-hidden="true"><svg class="nb-i" aria-hidden="true"><use href="#i-clip"/></svg>Drop to attach</div>
       </div>
 
-      <div class="nb-toolbar" aria-label="Paste settings">
-        <div class="nb-toolbar-settings">
-        <div class="nb-toolbar-field nb-expiry">
-          <label for="expiry">Expires</label>
+      <div class="nb-panel nb-studio-side nb-toolbar" role="group" aria-label="Paste settings">
+        <div class="nb-panel-field nb-expiry">
+          <label for="expiry"><svg class="nb-i" aria-hidden="true"><use href="#i-clock"/></svg>Expires after</label>
           <select id="expiry" name="expiry" class="form-select">
             <option value="300">5 minutes</option>
             <option value="1800">30 minutes</option>
@@ -142,54 +195,61 @@
             <option value="2592000">1 month</option>
           </select>
         </div>
-        <div class="nb-burn-setting">
-          <label class="nb-check" title="Deleted from the server after the configured number of authorized opens."><input id="burn" class="form-check-input" type="checkbox" aria-label="Burn after opening" aria-describedby="burn-help" aria-controls="burn-reads-field"><span id="burn-label">Burn after opening</span></label>
-          <div id="burn-reads-field" class="nb-toolbar-field nb-read-limit" hidden>
-            <label for="burn-reads" class="visually-hidden">Allowed opens before deletion</label>
-            <input id="burn-reads" class="form-control" type="number" min="1" max="1000" step="1" value="1" inputmode="numeric" aria-describedby="burn-reads-help" disabled>
-            <span id="burn-reads-unit">open</span>
-          </div>
-        </div>
-        <div class="nb-password-setting">
-        <label class="nb-check" title="Readers need the password as well as the link. Send it separately."><input id="password-switch" class="form-check-input" type="checkbox" aria-describedby="password-help" aria-controls="password-row">Password</label>
-        <div id="password-row" class="nb-toolbar-password" hidden>
-          <label for="password" class="visually-hidden">Password</label>
-          <div class="input-group has-validation">
-            <input id="password" type="password" class="form-control" autocomplete="off" spellcheck="false" autocorrect="off" autocapitalize="off" placeholder="At least 8 characters" aria-describedby="password-error" aria-invalid="false">
-            <button id="password-generate" type="button" class="btn nb-btn-ghost" aria-label="Generate a strong password" title="Generate a strong random password"><svg class="nb-i" aria-hidden="true"><use href="#i-key"/></svg></button>
-            <button id="password-copy" type="button" class="btn nb-btn-ghost nb-copy-btn" aria-label="Copy password" title="Copy the password, to send it separately from the link"><svg class="nb-i" aria-hidden="true"><use href="#i-copy"/></svg></button>
-            <button id="password-reveal" type="button" class="btn nb-btn-ghost" aria-pressed="false" aria-label="Show password"><svg class="nb-i" aria-hidden="true"><use href="#i-eye"/></svg></button>
-            <div id="password-error" class="invalid-feedback">Use at least 8 characters.</div>
-          </div>
-        </div>
-        </div>
-        <button id="more-toggle" type="button" class="nb-more-toggle" aria-expanded="false" aria-controls="more-options"><span>More options</span><svg class="nb-i" aria-hidden="true"><use href="#i-chevron"/></svg></button>
-        <div id="more-options" class="nb-more-options" hidden>
-        <div class="nb-recipients-setting">
-          <label class="nb-check" title="Give each person their own link. You can see how often each was opened and revoke it on its own."><input id="recipients" class="form-check-input" type="checkbox" aria-describedby="recipients-help" aria-controls="recipients-field"><span>Separate links</span></label>
-          <div id="recipients-field" class="nb-toolbar-field nb-read-limit" hidden>
-            <label for="recipients-count" class="visually-hidden">Number of people</label>
-            <input id="recipients-count" class="form-control" type="number" min="2" max="20" step="1" value="2" inputmode="numeric" aria-describedby="recipients-count-help" disabled>
-            <span>people</span>
-          </div>
-        </div>
-        <label class="nb-check" title="Allow encrypted comments from everyone who can open the paste."><input id="discussion" class="form-check-input" type="checkbox" aria-describedby="discussion-help">Discussion</label>
-        </div>
-        </div>
-        <div class="nb-toolbar-attachment">
-          <input id="file" type="file" class="nb-file-input" multiple aria-label="Attach files">
-          <label id="attach" for="file" class="btn nb-btn-secondary"><svg class="nb-i" aria-hidden="true"><use href="#i-clip"/></svg><span id="attach-label">Attach files</span></label>
-        </div>
-        <button id="create-submit" type="submit" class="btn nb-btn-primary"><svg class="nb-i" aria-hidden="true"><use href="#i-lock"/></svg><span>Create</span></button>
-      </div>
-      <span id="burn-help" class="visually-hidden">Delete the paste after the allowed number of authorized opens. Defaults to one open.</span>
-      <span id="burn-reads-help" class="visually-hidden">Allow 1 to 1,000 authorized opens before deletion. Reloads and interrupted downloads count as opens.</span>
-      <span id="password-help" class="visually-hidden">Readers need the password as well as the link. Send it separately.</span>
-      <span id="recipients-help" class="visually-hidden">Give each person their own link, with its own open count. The delete link can revoke each one. Cannot be combined with a discussion.</span>
-      <span id="recipients-count-help" class="visually-hidden">Make 2 to 20 separate links.</span>
-      <span id="discussion-help" class="visually-hidden">Everyone who can open the paste can read and leave encrypted comments.</span>
 
-      <div id="create-progress" class="nb-progress" hidden>
+        <!-- Each option is a row: what it does, then a switch. An option that
+             needs a value shows its field under the row once it is on. -->
+        <div class="nb-opts">
+          <div class="nb-opt nb-burn-setting">
+            <label class="nb-opt-row"><span class="nb-opt-icon"><svg class="nb-i" aria-hidden="true"><use href="#i-flame"/></svg></span><span class="nb-opt-text"><span id="burn-label" class="nb-opt-title">Burn after opening</span><span id="burn-help" class="nb-opt-desc">Deleted from the server after a set number of opens.</span></span><input id="burn" class="nb-switch" type="checkbox" role="switch" aria-labelledby="burn-label" aria-describedby="burn-help" aria-controls="burn-reads-field"></label>
+            <div id="burn-reads-field" class="nb-opt-field" hidden>
+              <label for="burn-reads" class="visually-hidden">Allowed opens before deletion</label>
+              <span aria-hidden="true">Deleted after</span>
+              <input id="burn-reads" class="form-control" type="number" min="1" max="1000" step="1" value="1" inputmode="numeric" aria-describedby="burn-reads-help" disabled>
+              <span id="burn-reads-unit">open</span>
+            </div>
+          </div>
+
+          <div class="nb-opt nb-password-setting">
+            <label class="nb-opt-row"><span class="nb-opt-icon"><svg class="nb-i" aria-hidden="true"><use href="#i-key"/></svg></span><span class="nb-opt-text"><span id="password-label" class="nb-opt-title">Password</span><span id="password-help" class="nb-opt-desc">Readers need it as well as the link. Send it separately.</span></span><input id="password-switch" class="nb-switch" type="checkbox" role="switch" aria-labelledby="password-label" aria-describedby="password-help" aria-controls="password-row"></label>
+            <div id="password-row" class="nb-opt-field nb-toolbar-password" hidden>
+              <label for="password" class="visually-hidden">Password</label>
+              <div class="input-group has-validation">
+                <input id="password" type="password" class="form-control" autocomplete="off" spellcheck="false" autocorrect="off" autocapitalize="off" placeholder="At least 8 characters" aria-describedby="password-error" aria-invalid="false">
+                <button id="password-generate" type="button" class="btn nb-btn-ghost" aria-label="Generate a strong password" title="Generate a strong random password"><svg class="nb-i" aria-hidden="true"><use href="#i-key"/></svg></button>
+                <button id="password-copy" type="button" class="btn nb-btn-ghost nb-copy-btn" aria-label="Copy password" title="Copy the password, to send it separately from the link"><svg class="nb-i" aria-hidden="true"><use href="#i-copy"/></svg></button>
+                <button id="password-reveal" type="button" class="btn nb-btn-ghost" aria-pressed="false" aria-label="Show password"><svg class="nb-i" aria-hidden="true"><use href="#i-eye"/></svg></button>
+                <div id="password-error" class="invalid-feedback">Use at least 8 characters.</div>
+              </div>
+            </div>
+          </div>
+
+          <div class="nb-opt nb-recipients-setting">
+            <label class="nb-opt-row"><span class="nb-opt-icon"><svg class="nb-i" aria-hidden="true"><use href="#i-link"/></svg></span><span class="nb-opt-text"><span id="recipients-label" class="nb-opt-title">Separate links</span><span id="recipients-help" class="nb-opt-desc">One link per person, each with its own open count. Revoke any of them later.</span></span><input id="recipients" class="nb-switch" type="checkbox" role="switch" aria-labelledby="recipients-label" aria-describedby="recipients-help" aria-controls="recipients-field"></label>
+            <div id="recipients-field" class="nb-opt-field" hidden>
+              <label for="recipients-count" class="visually-hidden">Number of people</label>
+              <span aria-hidden="true">Links for</span>
+              <input id="recipients-count" class="form-control" type="number" min="2" max="20" step="1" value="2" inputmode="numeric" aria-describedby="recipients-count-help" disabled>
+              <span>people</span>
+            </div>
+          </div>
+
+          <div class="nb-opt">
+            <label class="nb-opt-row"><span class="nb-opt-icon"><svg class="nb-i" aria-hidden="true"><use href="#i-chat"/></svg></span><span class="nb-opt-text"><span id="discussion-label" class="nb-opt-title">Discussion</span><span id="discussion-help" class="nb-opt-desc">Everyone who can open it can leave encrypted comments.</span></span><input id="discussion" class="nb-switch" type="checkbox" role="switch" aria-labelledby="discussion-label" aria-describedby="discussion-help"></label>
+          </div>
+        </div>
+
+        <div class="nb-panel-actions">
+          <div class="nb-toolbar-attachment">
+            <input id="file" type="file" class="nb-file-input" multiple aria-label="Attach files">
+            <label id="attach" for="file" class="btn nb-btn-secondary"><svg class="nb-i" aria-hidden="true"><use href="#i-clip"/></svg><span id="attach-label">Attach files</span></label>
+          </div>
+          <button id="create-submit" type="submit" class="btn nb-btn-primary"><svg class="nb-i" aria-hidden="true"><use href="#i-lock"/></svg><span>Create</span></button>
+        </div>
+      </div>
+      <span id="burn-reads-help" class="visually-hidden">Allow 1 to 1,000 authorized opens before deletion. Reloads and interrupted downloads count as opens.</span>
+      <span id="recipients-count-help" class="visually-hidden">Make 2 to 20 separate links.</span>
+
+      <div id="create-progress" class="nb-progress nb-studio-progress" hidden>
         <div id="create-bar" class="progress" role="progressbar" aria-label="Upload progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
           <div id="create-bar-fill" class="progress-bar nb-w-0"></div>
         </div>
@@ -368,15 +428,23 @@
     </div>
   </section>
 
-  <!-- Burner room -->
+  <!-- Null Chat -->
   <section id="room" class="nb-room" aria-labelledby="room-title" hidden>
     <div id="room-join" class="nb-gate" hidden>
       <div class="nb-gate-icon"><svg class="nb-i" aria-hidden="true"><use href="#i-users"/></svg></div>
-      <h1 id="room-join-title" class="nb-gate-title" tabindex="-1">You’re invited to a burner room</h1>
-      <p class="nb-gate-text">An end-to-end encrypted group chat. Only invited people can read it, and it deletes itself when time’s up. This invite works once, within an hour of being made.</p>
+      <h1 id="room-join-title" class="nb-gate-title" tabindex="-1">You’re invited to a Null Chat</h1>
+      <p class="nb-gate-text">An end-to-end encrypted group chat. Only invited people can read it, not even the server, and it deletes itself when time’s up. This invite works once, for a limited time.</p>
       <form id="room-join-form" class="nb-gate-form" novalidate>
         <label for="room-join-name" class="form-label">Your name</label>
         <input id="room-join-name" class="form-control" maxlength="40" autocomplete="off" spellcheck="false" autocorrect="off" autocapitalize="off" aria-invalid="false">
+        <div id="room-join-password-field" class="mt-3" hidden>
+          <label for="room-join-password" class="form-label">Chat password</label>
+          <div class="input-group">
+            <input id="room-join-password" type="password" class="form-control" autocomplete="off" spellcheck="false" autocorrect="off" autocapitalize="off" aria-invalid="false" aria-describedby="room-join-password-help">
+            <button id="room-join-password-reveal" type="button" class="btn nb-btn-ghost" aria-pressed="false" aria-label="Show password"><svg class="nb-i" aria-hidden="true"><use href="#i-eye"/></svg></button>
+          </div>
+          <p id="room-join-password-help" class="nb-meta mt-1 mb-0">Check it before you join: a wrong password uses up this invite.</p>
+        </div>
         <p id="room-join-error" class="nb-note nb-tone-danger mt-2" role="alert" hidden></p>
         <button id="room-join-submit" type="submit" class="btn nb-btn-primary w-100 mt-3">Join</button>
       </form>
@@ -385,16 +453,16 @@
       <header class="nb-chat-head">
         <div id="room-avatar" class="nb-chat-avatar" aria-hidden="true">B</div>
         <div class="nb-chat-heading">
-          <h1 id="room-title" class="nb-chat-title" tabindex="-1">Burner room</h1>
+          <h1 id="room-title" class="nb-chat-title" tabindex="-1">Null Chat</h1>
           <div class="nb-chips nb-chat-sub">
-            <span class="nb-chip nb-chip-ok" title="End-to-end encrypted: only people in this room can read it, not even the server."><svg class="nb-i" aria-hidden="true"><use href="#i-lock"/></svg><span class="nb-wide">End-to-end encrypted</span><span class="nb-narrow">Encrypted</span></span>
+            <span class="nb-chip nb-chip-ok" title="End-to-end encrypted: only people in this chat can read it, not even the server."><svg class="nb-i" aria-hidden="true"><use href="#i-lock"/></svg><span class="nb-wide">End-to-end encrypted</span><span class="nb-narrow">Encrypted</span></span>
             <button id="room-members-open" type="button" class="nb-chip nb-chip-btn" aria-haspopup="dialog" aria-controls="room-members-dialog" title="Members and safety codes"><svg class="nb-i" aria-hidden="true"><use href="#i-users"/></svg><span id="room-member-count">1 member</span></button>
             <span id="room-expires" class="nb-chip nb-chip-warn"></span>
           </div>
         </div>
         <div class="nb-chat-tools">
           <button id="room-invite-open" type="button" class="btn nb-btn-primary nb-chat-invite" aria-haspopup="dialog" aria-controls="room-invite-dialog" hidden><svg class="nb-i" aria-hidden="true"><use href="#i-user-plus"/></svg><span>Invite</span></button>
-          <button id="room-destroy" type="button" class="nb-chat-tool nb-chat-tool-danger" aria-haspopup="dialog" aria-controls="room-destroy-dialog" title="Self-destruct this room" aria-label="Self-destruct this room"><svg class="nb-i" aria-hidden="true"><use href="#i-flame"/></svg></button>
+          <button id="room-destroy" type="button" class="nb-chat-tool nb-chat-tool-danger" aria-haspopup="dialog" aria-controls="room-destroy-dialog" title="Self-destruct this chat" aria-label="Self-destruct this chat"><svg class="nb-i" aria-hidden="true"><use href="#i-flame"/></svg></button>
         </div>
       </header>
       <ol id="room-messages" class="nb-chat-log" aria-label="Messages" aria-live="polite"></ol>
@@ -467,7 +535,7 @@
 
 <dialog id="room-destroy-dialog" class="nb-dialog" aria-labelledby="room-destroy-title" aria-describedby="room-destroy-text">
   <div class="nb-dialog-head">
-    <h2 id="room-destroy-title" class="nb-h2">Self-destruct this room?</h2>
+    <h2 id="room-destroy-title" class="nb-h2">Self-destruct this chat?</h2>
     <button id="room-destroy-close" type="button" class="btn nb-btn-ghost nb-dialog-close" aria-label="Close"><svg class="nb-i" aria-hidden="true"><use href="#i-x"/></svg></button>
   </div>
   <p id="room-destroy-text" class="nb-muted">It ends right now for everyone, with all its messages. This can’t be undone.</p>
@@ -489,10 +557,12 @@
     <button id="room-invite-create" type="submit" class="btn nb-btn-primary w-100 mt-3">Create invite link</button>
   </form>
   <div id="room-invite-result" hidden>
-    <p class="nb-muted">Send this link to <strong id="room-invite-who"></strong> only. It works once, within the next hour, and lets them read what is sent in this room from when they join.</p>
+    <p class="nb-muted">Send this link to <strong id="room-invite-who"></strong> only. It works once, within the next <span id="room-invite-ttl-text">hour</span>, and lets them read what is sent in this chat from when they join.</p>
+    <p id="room-invite-password-note" class="nb-note nb-tone-warn" hidden><svg class="nb-i" aria-hidden="true"><use href="#i-key"/></svg><span>They’ll also need the chat’s password. Send it a different way from the link, so one leaked message isn’t enough to get in.</span></p>
     <p id="room-invite-link" class="nb-link" tabindex="0" aria-label="Invite link"></p>
     <button id="room-invite-copy" type="button" class="btn nb-btn-primary nb-copy-btn w-100 mt-3"><svg class="nb-i" aria-hidden="true"><use href="#i-copy"/></svg><span>Copy link</span></button>
     <button id="room-invite-another" type="button" class="btn nb-btn-secondary w-100 mt-2">Invite someone else</button>
+    <button id="room-invite-revoke" type="button" class="btn nb-btn-secondary nb-btn-remove w-100 mt-2">Revoke this invite</button>
   </div>
   <p id="room-invite-error" class="nb-note nb-tone-danger mt-2" role="alert" hidden></p>
 </dialog>

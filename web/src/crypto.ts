@@ -159,7 +159,7 @@ export function preparePaste(sodium: Sodium, input: PasteInput): PreparedPaste {
   const hasPassword = input.password.length > 0;
   const recipients = input.recipients ?? 0;
   if (recipients !== 0 && (!Number.isSafeInteger(recipients) || recipients < MIN_RECIPIENTS || recipients > MAX_RECIPIENTS || input.discussion)) {
-    throw new PasteError('format', `Separate links need ${MIN_RECIPIENTS} to ${MAX_RECIPIENTS} people, and no discussion.`);
+    throw new PasteError('format', `Separate links need ${MIN_RECIPIENTS} to ${MAX_RECIPIENTS} people, and comments must be off.`);
   }
   const filename = hasFile ? (input.filename || 'file').slice(0, MAX_FILENAME_LENGTH) : null;
   const mime = hasFile && input.mime ? input.mime.slice(0, MAX_MIME_LENGTH) : null;

@@ -601,7 +601,8 @@ body.nb-in-room #room { display: flex; flex: 1; flex-direction: column; }
 /* Reader and attachments */
 .nb-paste-actions { display: flex; gap: 8px; margin-bottom: 16px; }
 .nb-paste-actions > .btn { min-width: 112px; }
-.nb-view-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; margin: 0 0 12px; }
+.nb-view-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 0 0 12px; }
+.nb-view-head .nb-countdown { margin: 0; margin-inline-start: auto; }
 /* Status reads as a pill: decrypted here, never on the server. */
 .nb-view-head .nb-eyebrow { margin: 0; padding: 4px 12px 4px 10px; border-radius: var(--nb-pill); background: var(--nb-ok-tint); color: var(--nb-ok); font-size: 13px; }
 .nb-viewer { overflow: hidden; }

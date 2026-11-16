@@ -72,7 +72,7 @@ export function initDiscussion(pasteId: string, keys: DiscussionKeys): void {
       if (!quiet) announce(`${comments.length} ${comments.length === 1 ? 'comment' : 'comments'}.`);
     } catch (e) {
       loadError.textContent =
-        e instanceof ApiError && e.status === 404 ? 'This discussion is no longer available.' : 'Comments could not be loaded. Try Refresh.';
+        e instanceof ApiError && e.status === 404 ? 'Comments are no longer available.' : 'Comments could not be loaded. Try Refresh.';
       show(loadError);
     } finally {
       done();
@@ -221,9 +221,9 @@ function hash(s: string): number {
 function describe(e: unknown): string {
   if (e instanceof PasteError) return e.message;
   if (e instanceof ApiError) {
-    if (e.status === 404) return 'This discussion is no longer available.';
+    if (e.status === 404) return 'Comments are no longer available.';
     if (e.status === 429) return 'You’re commenting too quickly. Wait a moment.';
-    if (e.status === 409) return e.message.includes('full') ? 'This discussion is full.' : 'Another comment was being saved. Try again.';
+    if (e.status === 409) return e.message.includes('full') ? 'This paste can’t accept more comments.' : 'Another comment was being saved. Try again.';
     if (e.status === 413) return 'This comment is too long.';
   }
   return 'The comment could not be posted. Try again.';

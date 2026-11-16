@@ -215,7 +215,7 @@ async function open(id: string, key: Uint8Array, burn: boolean, recipient: Uint8
     chips.push(remaining);
   }
   if (asked) chips.push(chip('Password', 'lock'));
-  if (meta.discussion) chips.push(chip('Discussion', 'chat', 'accent'));
+  if (meta.discussion) chips.push(chip('Comments', 'chat', 'accent'));
   if (opened.file) chips.push(chip('1 file', 'file'));
   el('view-chips').replaceChildren(...chips);
   const burned = burn && readsRemaining === 0;

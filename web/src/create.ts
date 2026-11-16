@@ -208,15 +208,15 @@ export function initCreate(draft?: { text: string; file: File | null }): void {
     updateReadUnit();
     burnReads.parentElement?.setAttribute('title', el('burn-reads-help').textContent ?? '');
     setOptionHint(burn, 'burn-help', discussion.checked
-      ? 'Turn off Discussion to enable burn after reading.'
+      ? 'Turn off Comments to enable burn after reading.'
       : recipients.checked
         ? 'Each link stops working after a set number of opens.'
         : 'Deleted from the server after a set number of opens.');
     setOptionHint(recipients, 'recipients-help', discussion.checked
-      ? 'Turn off Discussion to make separate links.'
+      ? 'Turn off Comments to make separate links.'
       : 'One link per person, each with its own open count. Revoke any of them later.');
     setOptionHint(discussion, 'discussion-help', burn.checked || recipients.checked
-      ? `Disable ${burn.checked ? 'burning' : 'separate links'} to enable a discussion.`
+      ? `Disable ${burn.checked ? 'burning' : 'separate links'} to enable comments.`
       : 'Everyone who can open it can leave encrypted comments.');
     setOptionHint(pwSwitch, 'password-help', 'Readers need it as well as the link. Send it separately.');
     show(pwRow, pwSwitch.checked);
@@ -435,7 +435,7 @@ async function createAndUpload(progress: Progress, o: CreateOptions): Promise<st
   if (separate) chips.push(chip(`${o.recipients} separate links`, 'users', 'accent'));
   if (o.burn) chips.push(chip(`Burn after ${o.maxReads.toLocaleString()} ${o.maxReads === 1 ? 'open' : 'opens'}${separate ? ' each' : ''}`, 'flame', 'warn'));
   if (o.password) chips.push(chip('Password', 'lock'));
-  if (o.discussion) chips.push(chip('Discussion', 'chat', 'accent'));
+  if (o.discussion) chips.push(chip('Comments', 'chat', 'accent'));
   if (o.files.length === 1) chips.push(chip(o.files[0]!.name, 'file', 'file'));
   else if (o.files.length > 1) chips.push(chip(`${o.files.length} files (as ${archiveName(o.files.length)})`, 'file', 'file'));
   if (chips.length === 0) chips.push(chip('Link only'));

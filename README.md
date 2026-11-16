@@ -35,8 +35,8 @@ mid-2022 on; Safari 16.4 or later). Older browsers cannot open it.
    image (such as a screenshot) to attach it. Several files are sent as one
    zip archive, which the reader downloads and opens. Readers can view an
    attached PNG, JPEG, GIF or WebP image with **Show image**.
-2. Choose how long the paste lasts, and any options: a password, a
-   discussion, or burn after reading.
+2. Choose how long the paste lasts, and any options: a password,
+   comments, or burn after reading.
 3. Select **Create** and share the **whole link, including everything after
    `#`**. It is copied for you when the browser allows; otherwise use
    **Copy link**.
@@ -46,8 +46,8 @@ mid-2022 on; Safari 16.4 or later). Older browsers cannot open it.
 | Option | What it does |
 |---|---|
 | **Password** | Readers need the password as well as the link. At least 8 characters. The key button generates a strong random one (20 characters, about 116 bits) and shows it, so you can copy it and send it separately. |
-| **Separate links** | One link for each person (2 to 20), instead of one shared link. Each link counts its own opens (with burn after reading, each gets that many), and the delete link shows how often each was opened and can revoke any of them. Revoking stops that link from opening the paste, but cannot take back what its holder already saw. Cannot be combined with a discussion. |
-| **Discussion** | Everyone who can open the paste can read and post encrypted comments: with a password, only people who also know it. Cannot be combined with burn after reading. |
+| **Separate links** | One link for each person (2 to 20), instead of one shared link. Each link counts its own opens (with burn after reading, each gets that many), and the delete link shows how often each was opened and can revoke any of them. Revoking stops that link from opening the paste, but cannot take back what its holder already saw. Cannot be combined with comments. |
+| **Comments** | Everyone who can open the paste can read and post encrypted comments: with a password, only people who also know it. Cannot be combined with burn after reading. |
 | **Burn after reading** | The paste is deleted after a set number of opens (1 to 1,000; 1 by default). Every authorized open counts, including reloads and interrupted downloads; wrong passwords and link previews do not. Leaving the page clears the paste from it, even while it is still opening, so **Back** does not bring it back. |
 
 After opening a paste:
@@ -595,7 +595,7 @@ hosting provider.
 ### What the server knows
 
 The server stores only encrypted pastes and what it needs to serve them:
-size, creation and expiry times, burn and discussion settings, and hashes of
+size, creation and expiry times, burn and comment settings, and hashes of
 access tokens. The size is padded before encryption: every paste whose
 encoded content fits in 16 KiB (up to about 16,000 characters of plain
 English text; fewer with many line breaks, quotes or non-Latin characters,
@@ -694,7 +694,7 @@ reordered or truncated data, without holding whole files in memory.
 | Link secret | 32 fresh random bytes per paste, written as 43 base64url characters after `#`. |
 | Encryption key | A 32-byte stream key derived from the master key: the link secret alone, or the link secret combined with the password. |
 | Password | Argon2id v1.3 with a fresh 16-byte salt, `opslimit = 3`, `memlimit = 256 MiB` and a 32-byte result, after Unicode NFC normalization. Keyed BLAKE2b-256 combines it with the link secret. Neither the password nor the master key is sent to the API. |
-| Separate keys | Paste encryption, comment encryption, discussion access, burn access and separate-link access use distinct `crypto_kdf_derive_from_key` contexts. Access tokens sent to the server cannot decrypt anything. |
+| Separate keys | Paste encryption, comment encryption, comment access, burn access and separate-link access use distinct `crypto_kdf_derive_from_key` contexts. Access tokens sent to the server cannot decrypt anything. |
 | Comments | XChaCha20-Poly1305 with a fresh 24-byte random nonce, under the separate comment key, bound to the paste ID. Names, text, times and replies are encrypted, and padded to 4 KiB (rounded up like pastes beyond that), so a comment's size does not show its length. Names are not verified. |
 | IDs and tokens | Paste IDs are 128 random bits (32 hexadecimal characters); upload and delete tokens are 256 random bits. The server stores SHA-256 hashes of tokens and compares them in constant time. |
 
@@ -714,7 +714,7 @@ Binary units are powers of 1,024. Text limits count JavaScript UTF-16 units.
 | Attachments | Up to 100 files per paste, with optional text. Several files become one uncompressed zip archive in the sender's browser before encryption: names are stripped of folders, drive letters, control and direction characters and leading dots, and made unique; entries carry no real dates and are never executable. Filename and type up to 255 characters each. |
 | Text preview | Up to 5,000 lines or 100,000 characters. Copy, Raw text, Save document and Clone use the full text. |
 | Saving and cloning files | Up to 64 MiB in memory. Larger files need streaming saves (desktop Chrome or Edge). Files are never opened; images and plain text can be previewed only when the reader asks (**Show image**, **Show preview**), and archives never are. |
-| Discussions | Up to 200 comments per paste; 4,000 characters of text and a 40-character name each. |
+| Comments | Up to 200 comments per paste; 4,000 characters of text and a 40-character name each. |
 | Expiry | 5 or 30 minutes; 1, 3 or 12 hours; 1 or 3 days; 7 days or 30 days. Never unlimited. Expired pastes are never served and are removed within a minute. |
 | Burn after reading | 1 to 1,000 authorized opens (default 1), counted before delivery and kept across restarts. |
 | Separate links | 2 to 20 per paste, each with no open limit or 1 to 1,000 opens. |
@@ -736,7 +736,7 @@ Each subkey is `crypto_kdf_derive_from_key(32, 1, context, master)`:
 |---|---|
 | `nbstream` | Paste and file encryption key |
 | `nbcmtenc` | Comment encryption key |
-| `nbcmtacc` | Discussion access token |
+| `nbcmtacc` | Comment access token |
 | `nbburnac` | Burn-read access token |
 | `nbrcptac` | Key for the access tokens of separate links (never sent) |
 
@@ -883,7 +883,7 @@ An upload is charged 32 KiB when it starts and its bytes as they arrive,
 so uploads that send nothing cannot fill the budget. It starts only if the
 whole paste fits at that moment, but other uploads can take the space
 before it finishes. Each comment is charged when it is posted, so an
-unused discussion costs nothing. A full budget returns `507`; too
+unused comment section costs nothing. A full budget returns `507`; too
 many uploads or transfers return `503` with `Retry-After`. This is
 Nullbin's own budget, not a disk quota: leave free disk space, or use a
 dedicated volume.
@@ -908,7 +908,7 @@ rate limited):
 - `total_size`: the exact ciphertext size, from 67 bytes to the maximum.
 - `max_reads` (optional, burn only): 1 to 1000, default 1.
 - `comment_token` (optional, not with burn): 43 base64url characters;
-  enables a discussion.
+  enables comments.
 - `burn_token` (required for burn, otherwise not allowed): 43 base64url
   characters, derived in the browser with the `nbburnac` context.
 - `recipients` (optional): separate links, 2 to 20 entries of

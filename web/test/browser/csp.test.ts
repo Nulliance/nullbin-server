@@ -229,6 +229,7 @@ async function createPaste(o: CreateOptions): Promise<{ share: string; del: stri
   await h.page.waitForSelector('#result', { state: 'visible', timeout: 60_000 });
   const share = `${await h.page.textContent('#share-server')}${await h.page.textContent('#share-key')}`;
   const del = await h.page.inputValue('#delete-link');
+  if (o.discussion) assert.match((await h.page.textContent('#result-chips')) ?? '', /Comments/);
   if (o.burn) {
     const reads = o.maxReads ?? 1;
     assert.match(await h.page.textContent('#result-chips') ?? '', new RegExp(`Burn after ${reads} ${reads === 1 ? 'open' : 'opens'}`));
@@ -1670,6 +1671,7 @@ test('delete link removes the paste', async () => {
 test('create form: a discussion rules out burning, and the open count is validated', async () => {
   const h = await open();
   await goto(h, `${origin}/`);
+  assert.ok(await h.page.getByRole('switch', { name: 'Comments', exact: true }).isVisible());
   await h.page.check('#password-switch');
   assert.ok(await h.page.isEnabled('#discussion'), 'a password is compatible with discussion');
   assert.ok(await h.page.isEnabled('#burn'), 'a password is compatible with burn after reading');
@@ -1679,8 +1681,9 @@ test('create form: a discussion rules out burning, and the open count is validat
   assert.equal(await h.page.isChecked('#password-switch'), false, 'a discussion does not need a password');
   assert.ok(await h.page.isEnabled('#password-switch'), 'a password stays optional');
   assert.ok(await h.page.isDisabled('#burn'), 'burn after reading unavailable');
-  assert.equal(await h.page.locator('label:has(#burn)').getAttribute('title'), 'Turn off Discussion to enable burn after reading.');
-  assert.equal(await h.page.textContent('#burn-help'), 'Turn off Discussion to enable burn after reading.');
+  assert.ok(await h.page.isDisabled('#recipients'), 'comments cannot outlive a revoked recipient link');
+  assert.equal(await h.page.locator('label:has(#burn)').getAttribute('title'), 'Turn off Comments to enable burn after reading.');
+  assert.equal(await h.page.textContent('#burn-help'), 'Turn off Comments to enable burn after reading.');
   await h.page.check('#password-switch');
   await h.page.fill('#text', 'x');
   await h.page.fill('#password', 'short');
@@ -1703,12 +1706,16 @@ test('create form: a discussion rules out burning, and the open count is validat
   }
   await h.page.fill('#burn-reads', '3');
   assert.equal(await h.page.textContent('#burn-reads-unit'), 'opens');
-  assert.equal(await h.page.locator('label:has(#discussion)').getAttribute('title'), 'Disable burning to enable a discussion.');
+  assert.equal(await h.page.locator('label:has(#discussion)').getAttribute('title'), 'Disable burning to enable comments.');
   await h.page.uncheck('#burn');
   assert.ok(await h.page.isHidden('#burn-reads'));
   assert.ok(await h.page.isDisabled('#burn-reads'));
   assert.ok(await h.page.isEnabled('#discussion'));
   assert.equal(await h.page.locator('label:has(#discussion)').getAttribute('title'), 'Everyone who can open it can leave encrypted comments.');
+  await h.page.check('#recipients');
+  assert.ok(await h.page.isDisabled('#discussion'));
+  assert.equal(await h.page.locator('label:has(#discussion)').getAttribute('title'), 'Disable separate links to enable comments.');
+  await h.page.uncheck('#recipients');
   await h.check();
   await h.context.close();
 });
@@ -1720,6 +1727,8 @@ test('discussion without a password: anyone with the link reads and comments, no
   await h.page.waitForSelector('#view-content:not([hidden])', { timeout: 60_000 });
   assert.ok(await h.page.isHidden('#gate-password'), 'no password prompt');
   await h.page.waitForSelector('#comments:not([hidden])');
+  assert.match((await h.page.textContent('#view-chips')) ?? '', /Comments/);
+  assert.ok(await h.page.getByRole('heading', { name: 'Comments', exact: true }).isVisible());
   await h.page.fill('#comment-name', 'Sam');
   await h.page.fill('#comment-text', 'Hello from the link alone.');
   await h.page.click('#comment-submit');
@@ -1750,6 +1759,11 @@ test('discussion: encrypted comments and replies, readable only with the passwor
 
   const a = await open();
   await goto(a, share);
+  await unlock(a.page, 'wrong comments password');
+  await a.page.waitForSelector('#view-password.is-invalid', { timeout: 60000 });
+  assert.ok(await a.page.isHidden('#view-content'));
+  assert.ok(await a.page.isHidden('#comments'));
+  assert.equal(a.sent.filter((r) => r.path.endsWith('/comments')).length, 0, 'wrong passwords never reach comment access');
   await unlock(a.page, 'team password 1');
   await a.page.waitForSelector('#comments', { state: 'visible', timeout: 60_000 });
   await a.page.waitForSelector('#comments-empty', { state: 'visible' });

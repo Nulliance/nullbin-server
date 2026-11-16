@@ -12,7 +12,7 @@ import { createHash } from 'node:crypto';
 import { mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
-import { parseAPIOrigin, parseSiteOrigin, frontendHeaders, contentSecurityPolicy } from './frontend.mjs';
+import { parseAPIOrigin, parseSiteOrigin, frontendHeaders, contentSecurityPolicy, validatePageReferences } from './frontend.mjs';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
 const outDir = path.join(root, 'internal', 'assets', 'dist');
@@ -143,7 +143,8 @@ let html = await readFile(path.join(root, 'web', 'index.html'), 'utf8');
 if (/<script(?![^>]*\ssrc=)[^>]*>/i.test(html)) fail('index.html has an inline script');
 if (/<style[\s>]/i.test(html) || /\sstyle\s*=/i.test(html)) fail('index.html has inline styles');
 if (/\son[a-z]+\s*=/i.test(html)) fail('index.html has an inline event handler');
-if (/(src|href)\s*=\s*"(https?:)?\/\//i.test(html)) fail('index.html references another origin');
+try { validatePageReferences(html); }
+catch (e) { fail(e.message); }
 const ids = [...html.matchAll(/\sid="([^"]+)"/g)].map((m) => m[1]);
 const dup = ids.find((id, i) => ids.indexOf(id) !== i);
 if (dup) fail(`index.html has a duplicate id: ${dup}`);

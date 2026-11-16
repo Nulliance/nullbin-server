@@ -2,7 +2,21 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { parseAPIOrigin, parseSiteOrigin, contentSecurityPolicy, frontendHeaders } from '../frontend.mjs';
+import { parseAPIOrigin, parseSiteOrigin, contentSecurityPolicy, frontendHeaders, validatePageReferences } from '../frontend.mjs';
+import { readFileSync } from 'node:fs';
+
+test('the project footer link permits navigation without allowing external resources or other links', () => {
+  const html = readFileSync(new URL('../index.html', import.meta.url), 'utf8');
+  assert.doesNotThrow(() => validatePageReferences(html));
+  for (const tag of [
+    '<script src="https://nulliance.com/work/nullbin/"></script>',
+    '<img src="https://nulliance.com/work/nullbin/">',
+    '<link rel="stylesheet" href="https://nulliance.com/work/nullbin/">',
+    '<a href="https://other.example/">Other</a>',
+    '<img src="//other.example/image.png">',
+  ]) assert.throws(() => validatePageReferences(html + tag), /another origin/);
+  assert.throws(() => validatePageReferences(html.replace('rel="noopener noreferrer"', '')), /Project info link/);
+});
 
 test('static frontend API origin is explicit and rejects unsafe or ambiguous URLs', () => {
   assert.equal(parseAPIOrigin(''), '');

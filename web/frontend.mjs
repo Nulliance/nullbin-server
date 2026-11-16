@@ -51,3 +51,11 @@ export function frontendHeaders(apiOrigin = '') {
     'Strict-Transport-Security': 'max-age=31536000',
   };
 }
+
+// This fixed navigation link is the only external reference allowed in
+// the source page. Do not exempt its URL in resource tags or other links.
+export function validatePageReferences(html) {
+  const projectLink = '<a href="https://nulliance.com/work/nullbin/" class="nb-foot-link" target="_blank" rel="noopener noreferrer" title="About the Nullbin project. Opens in a new tab.">Project info</a>';
+  if (html.split(projectLink).length !== 2) throw new Error('index.html must contain exactly one Project info link');
+  if (/(src|href)\s*=\s*"(https?:)?\/\//i.test(html.replace(projectLink, ''))) throw new Error('index.html references another origin');
+}

@@ -442,9 +442,11 @@ jobs:
           sudo systemctl stop nullbin-update-check.service
           # Exercise the real service sandbox with a fake GitHub response,
           # so this test needs neither a published release nor network access.
-          sudo install -d -m 0755 /run/nullbin-update-test /etc/systemd/system/nullbin-update-check.service.d
-          trap 'sudo rm -rf /run/nullbin-update-test /etc/systemd/system/nullbin-update-check.service.d; sudo systemctl daemon-reload' EXIT
-          sudo tee /run/nullbin-update-test/curl >/dev/null <<'SH'
+          # Not under /run: Ubuntu mounts it noexec, so the fake could not run.
+          sudo install -d -m 0755 /usr/local/lib/nullbin-update-test /etc/systemd/system/nullbin-update-check.service.d
+          # On failure, show why the service failed before cleaning up.
+          trap 'if [ $? -ne 0 ]; then sudo journalctl -u nullbin-update-check.service --no-pager -n 50 || :; fi; sudo rm -rf /usr/local/lib/nullbin-update-test /etc/systemd/system/nullbin-update-check.service.d; sudo systemctl daemon-reload' EXIT
+          sudo tee /usr/local/lib/nullbin-update-test/curl >/dev/null <<'SH'
           #!/bin/sh
           while [ "$#" -gt 0 ]; do
             if [ "$1" = --output ]; then
@@ -456,10 +458,10 @@ jobs:
           done
           exit 1
           SH
-          sudo chmod 0755 /run/nullbin-update-test/curl
+          sudo chmod 0755 /usr/local/lib/nullbin-update-test/curl
           sudo tee /etc/systemd/system/nullbin-update-check.service.d/test.conf >/dev/null <<'UNIT'
           [Service]
-          Environment=PATH=/run/nullbin-update-test:/usr/bin:/bin
+          Environment=PATH=/usr/local/lib/nullbin-update-test:/usr/bin:/bin
           UNIT
           sudo systemctl daemon-reload
           sudo systemctl start nullbin-update-check.service

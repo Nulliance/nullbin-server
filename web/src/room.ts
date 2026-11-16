@@ -223,9 +223,13 @@ function settingsOk(v: unknown): boolean {
     o['max'] >= MIN_MEMBERS && o['max'] <= MAX_SLOTS && typeof o['ttl'] === 'number' && INVITE_TTLS.includes(o['ttl']);
 }
 
+/** A chat gives out each of its 19 places once: removed people and revoked or expired invites keep theirs. */
+const NO_PLACES = 'This chat has given out all 19 places it ever can: removed people and revoked or expired invites keep theirs, so nobody new can join. Start a new chat to add people.';
+
 function roomError(e: unknown, fallback: string): string {
   if (e instanceof ApiError) {
     if (e.status === 404) return 'Null Chats are turned off on this server, or the chat no longer exists.';
+    if (e.status === 409 && e.message.includes('all its places')) return NO_PLACES;
     if (e.status === 409) return 'This chat is full: every place it allows is taken or invited. Revoke an invite, or remove someone, to make room.';
     if (e.status === 429 && e.message.includes('live burner rooms')) return 'Your network already has 10 Null Chats open. Delete one, or wait for one to expire.';
     if (e.status === 429) return 'Too many requests in a short time. Wait a minute, then try again.';
@@ -259,10 +263,6 @@ function newSession(sodium: Sodium, roomKey: Uint8Array, slot: number, member: s
     boxRotate: false, boxRotated: Date.now(), pendingBox: null, owner, known: [{ slot: 0, key: b64(sodium, creator) }], removedSlots: [],
     invites: [], password: null, settings: null, joinProof: null, inviteCheck: null, chain: null, sentTo: [], sent: 0, rotate: false, peers: [], posted: [], peerBoxes: [], verified: [], roster: null, nameSecret: null,
   };
-}
-
-async function postControl(sodium: Sodium, key: Uint8Array, id: string, slot: number, member: string, signSecret: Uint8Array, record: ControlRecord): Promise<void> {
-  await postRecord(id, member, sealControl(sodium, key, id, slot, signSecret, record) as Uint8Array<ArrayBuffer>);
 }
 
 // --- The home page tab ---
@@ -418,10 +418,14 @@ export function initRoomCreate(): void {
           pw: password !== '', max: maxMembers, ttl: inviteTtl });
       sodium.memzero(roster);
       sodium.memzero(nameKeys.privateKey);
+      // Both records are remembered as ours before they are posted: a record
+      // signed with our key that this tab did not post is a copy's.
+      const joinBytes = sealControl(sodium, key, created.id, 0, me.sign, me.join);
+      session.posted.push(signatureHash(sodium, openControl(sodium, key, created.id, 0, joinBytes)!.signature));
       session.posted.push(signatureHash(sodium, openControl(sodium, key, created.id, 0, named)!.signature));
       try {
         // Join first: it carries the keys every reader checks against.
-        await postControl(sodium, key, created.id, 0, created.memberToken, me.sign, me.join);
+        await postRecord(created.id, created.memberToken, joinBytes as Uint8Array<ArrayBuffer>);
         await postRecord(created.id, created.memberToken, named as Uint8Array<ArrayBuffer>);
       } finally {
         sodium.memzero(key);
@@ -625,13 +629,17 @@ function joinFlow(sodium: Sodium, id: string, roomKey: Uint8Array, inviteToken: 
     let me: ReturnType<typeof newIdentity>;
     let session: Session;
     let key: Uint8Array;
+    let joinBytes: Uint8Array;
     try {
       me = newIdentity(sodium, name, { sealTo: nameKey }, { roomId: id, slot: joined.slot, secret: inviteSecret, password: pwKey });
       session = newSession(sodium, roomKey, joined.slot, joined.memberToken, null, name, me.sign, me.box, creatorKey);
       session.joinProof = me.join.proof ?? null;
       session.inviteCheck = inviteCheck(sodium, inviteSecret, id, joined.slot);
-      saveSession(id, session);
       key = controlKey(sodium, roomKey);
+      // Our join is remembered as ours before it is posted (see post()).
+      joinBytes = sealControl(sodium, key, id, joined.slot, me.sign, me.join);
+      session.posted.push(signatureHash(sodium, openControl(sodium, key, id, joined.slot, joinBytes)!.signature));
+      saveSession(id, session);
     } catch {
       done();
       form.removeAttribute('aria-busy');
@@ -644,7 +652,7 @@ function joinFlow(sodium: Sodium, id: string, roomKey: Uint8Array, inviteToken: 
       if (pwKey) sodium.memzero(pwKey);
     }
     try {
-      await postControl(sodium, key, id, joined.slot, joined.memberToken, me.sign, me.join);
+      await postRecord(id, joined.memberToken, joinBytes as Uint8Array<ArrayBuffer>);
     } catch {
       // The chat sees that our join is missing and sends it again.
     } finally {
@@ -799,6 +807,8 @@ function openChat(sodium: Sodium, id: string, session: Session): void {
   const contested = new Set<number>();
   /** Places whose damaged-invite notice was shown. */
   const badProofShown = new Set<number>();
+  /** Places whose over-the-limit notice was shown. */
+  const overLimitShown = new Set<number>();
   /** Places closed because their invite expired before its join reached this tab, or the chat was full. */
   const lateShown = new Set<number>();
   /** Messages we could not read, counted after the first full fetch; more later may mean hidden key deliveries. */
@@ -855,6 +865,17 @@ function openChat(sodium: Sodium, id: string, session: Session): void {
     avatar.textContent = 'B';
     document.title = baseTitle;
     document.body.classList.remove('nb-in-room');
+    // Drop this tab's copy of the session's secrets from the page as well as
+    // from storage (persist() writes nothing once ended). JavaScript cannot
+    // erase strings, but nothing keeps them reachable any more.
+    Object.assign(session, {
+      key: '', member: '', sign: '', owner: null, password: null, settings: null, roster: null, nameSecret: null,
+      boxes: [], pendingBox: null, chain: null, peers: [], invites: [], joinProof: null, inviteCheck: null,
+      known: [], peerBoxes: [], posted: [], verified: [], sentTo: [], name: '',
+    } satisfies Partial<Session>);
+    // The chat's elements are replaced by clean copies: every listener on
+    // them (and with it this chat's closures) goes too.
+    for (const e of [log, composer, jump]) e.replaceWith(e.cloneNode(true));
   };
   const end = (heading: string, body: string) => {
     if (ended) return;
@@ -1883,6 +1904,12 @@ function openChat(sodium: Sodium, id: string, session: Session): void {
         end('Someone else took your place in this chat', 'The chat shows keys for your place that are not yours, so someone who has the chat’s key, working with the server, may be posing as you. Leave this chat and tell the person who invited you.');
         return;
       }
+      // Admits past the chat's signed member limit: this tab let nobody in.
+      for (const slot of state.overLimit) {
+        if (overLimitShown.has(slot)) continue;
+        overLimitShown.add(slot);
+        add(system('The creator’s app let ', nameNode(slot), ` in past this chat’s limit of ${state.maxMembers ?? '?'} people, so this tab didn’t. Only the creator’s key can do that: their app or the server may have been tampered with.`), false, false);
+      }
       if (session.slot === 0) await admitWaiting();
       if (!state.members.has(session.slot)) {
         if (state.waitingForAdmit()) {
@@ -2315,6 +2342,8 @@ function initOwner(sodium: Sodium, id: string, session: Session, owner: string, 
   const placesTaken = () => {
     const taken = new Set<number>([0]);
     for (const [slot, m] of state.members) if (!m.removed && !state.removed.has(slot)) taken.add(slot);
+    // Also places this tab let in, even if the server hides their records.
+    for (const k of session.known) if (!state.removed.has(k.slot)) taken.add(k.slot);
     for (const inv of session.invites) {
       if (!state.removed.has(inv.slot) && !session.removedSlots.includes(inv.slot) && Date.now() < inv.exp) taken.add(inv.slot);
     }
@@ -2387,6 +2416,11 @@ function initOwner(sodium: Sodium, id: string, session: Session, owner: string, 
       return;
     }
     // The chat's own limit, checked here too: the server's word is not needed for it.
+    if (!unfinished && session.invites.length >= MAX_SLOTS - 1) {
+      error.textContent = NO_PLACES;
+      show(error);
+      return;
+    }
     if (!unfinished && placesTaken() >= settings.max) {
       error.textContent = `This chat allows ${settings.max} people, and every place is taken or invited. Revoke an invite, or remove someone, to make room.`;
       show(error);

@@ -736,8 +736,13 @@ export function nameSkeleton(name: string): string {
 
 /** The words of a name, folded like a skeleton: "Ada (you)" has "ada" and "you". */
 export function nameWords(name: string): string[] {
-  const plain = name.normalize('NFKD').replace(/[\p{M}\p{Cf}\p{Cn}\p{Default_Ignorable_Code_Point}\u034F\uFE00-\uFE0F]/gu, '').toLowerCase();
+  const plain = name.normalize('NFKD').replace(/[\p{M}\p{Cf}\p{Cn}\p{Co}\p{Cs}\p{Default_Ignorable_Code_Point}\u034F\uFE00-\uFE0F]/gu, '').toLowerCase();
   return Array.from(plain, (c) => LOOKALIKES[c] ?? c).join('').split(/[^\p{L}\p{N}]+/u).filter(Boolean);
+}
+
+/** A name's words without digits, folded like a skeleton: "Admin2" has "admln". */
+export function nameStems(name: string): string[] {
+  return nameWords(name).map((w) => w.replace(/\p{N}/gu, '').replace(/i/g, 'l').replace(/rn/g, 'm')).filter(Boolean);
 }
 
 /**
@@ -767,8 +772,10 @@ export function nameAllowed(n: string, room = false): boolean {
     !/verif/iu.test(plain.replace(/[^\p{L}]/gu, '')) && !skeleton.includes('verlf') &&
     // Nor what the app calls people with no name yet ("The creator",
     // "Member 3"), nor a role the room does not have.
-    skeleton !== 'thecreator' && !/^member[\p{N}ol]*$/u.test(skeleton) &&
-    !nameWords(n).some((w) => ROLE_WORDS.has(w.replace(/i/g, 'l').replace(/rn/g, 'm')));
+    // Anything that starts like them counts ("The creator2", "Member 3x"),
+    // and digits do not hide a role ("Admin2", "0wner").
+    !skeleton.startsWith('thecreator') && !/^member(?:[\p{N}ol].*)?$/u.test(skeleton) &&
+    !nameStems(n).some((w) => ROLE_WORDS.has(w));
 }
 
 /** Roles a name or label could claim (folded like a skeleton); a room has only its creator and members. */

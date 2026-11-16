@@ -381,7 +381,7 @@ proverif -lib formal/room formal/member.pv
 | G3: only the honest joiners' keys are admitted for their places | holds | holds |
 | G3: a tab takes no other keys as an honest member's | (implied) | holds |
 | G2: a message read as X's was sent by X, to that reader | holds | holds |
-| G1: a message between two honest members stays secret | holds | holds |
+| G1: a message between two honest members stays secret | holds | holds (from non-members: the attacker member is left out of that chain here, while in the code every member gets every chain) |
 | G4: it stays secret after the reader's device is taken later | holds | holds |
 | G6: the roster key (all names) stays secret | holds | (the attacker is a member) |
 

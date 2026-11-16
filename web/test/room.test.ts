@@ -5,6 +5,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
 import { loadSodium } from '../src/sodium.ts';
+import { cleanName } from '../src/comments.ts';
 import { paddedLength } from '../src/format.ts';
 import { encodeInviteFragment, parseInviteFragment, parseKeyFragment } from '../src/link.ts';
 import {
@@ -796,11 +797,13 @@ test('records made with our keys that this tab never posted mean another copy is
   const boxes = new Map([[0, { publicKey: b.box.publicKey, secretKey: b.box.privateKey }]]);
   const s = new RoomState(sodium, key, ROOM, { slot: 1, signPublic: b.sign.publicKey, boxes, posted: (h) => posted.has(h) });
   s.apply(0, ctl(a, join(a, 'Ada')));
-  enter(s, a, b, 'Bob');
   const ours = (bytes: Uint8Array) => {
     posted.add(signatureHash(sodium, bytes[0] === 2 ? outerSignature(bytes) : openControl(sodium, key, ROOM, 1, bytes)!.signature));
     return bytes;
   };
+  // Bob's tab remembers its own join before posting it, like any record.
+  s.apply(1, ours(ctl(b, join(b, 'Bob'))));
+  s.apply(0, ctl(a, admit(b, 'Bob')));
   const chain = newChain(sodium, 1);
   const sent = ours(sealMessage(sodium, chain, ROOM, 1, b.sign.privateKey, msg('ours')));
   assert.ok(checkOuterSignature(sodium, b.sign.publicKey, ROOM, 1, sent));
@@ -1209,6 +1212,67 @@ test('names must show something, and cannot claim a role, a placeholder or "veri
   ]) assert.ok(!nameAllowed(bad), JSON.stringify(bad));
   for (const good of ['Ada', 'Modi', 'Ada Lovelace', cp(0x1f600), 'Mo', 'Jo 1234', 'Members club']) assert.ok(nameAllowed(good), good);
   assert.ok(nameAllowed(''), 'an empty label is allowed');
+});
+
+test('private-use characters, digits and suffixes do not get round the name rules', () => {
+  // Private-use and unassigned code points are cleaned away: they could
+  // split a word while drawing as nothing.
+  assert.equal(cleanName(`Adm${cp(0xe000)}in`), 'Admin');
+  assert.equal(cleanName(`Y${cp(0xe000)}ou`), 'You');
+  assert.equal(cleanName(`Bo${cp(0xf0000)}b`), 'Bob');
+  for (const bad of [`Adm${cp(0xe000)}in`, 'Admin2', 'Owner2', 'Moderator2', '0wner', 'The creator2', 'The creator (real)', 'Member 3x', 'Member3b']) {
+    assert.ok(!nameAllowed(cleanName(bad)), JSON.stringify(bad));
+  }
+  for (const good of ['Ada', 'Modi', 'Members club', 'Owen', 'Hosting team']) assert.ok(nameAllowed(good), good);
+  // A member named "You" in any of these forms shows their code.
+  const a = person(0);
+  const s = stateOf(a);
+  s.apply(0, ctl(a, join(a, 'Ada')));
+  ['You2', 'You!', 'YOU'].forEach((name, i) => {
+    const p = person(i + 1);
+    enter(s, a, p, name);
+    assert.notEqual(s.tagOf(p.slot), null, name);
+  });
+});
+
+test('a join signed with our key that this tab never posted sets off the copy alarm', () => {
+  const a = person(0);
+  const b = person(1);
+  const ours = new Set<string>();
+  const s = new RoomState(sodium, key, ROOM, {
+    slot: 1, signPublic: b.sign.publicKey, boxes: new Map([[0, { publicKey: b.box.publicKey, secretKey: b.box.privateKey }]]),
+    posted: (h) => ours.has(h),
+  });
+  s.apply(0, ctl(a, join(a, 'Ada')));
+  const mine = ctl(b, join(b, 'Bob'));
+  ours.add(signatureHash(sodium, openControl(sodium, key, ROOM, 1, mine)!.signature));
+  s.apply(1, mine);
+  s.apply(0, ctl(a, admit(b, 'Bob')));
+  assert.equal(s.cloned, false, 'our own join is not a copy');
+  // A copy of Bob's keys announces itself again with a new record.
+  s.apply(1, ctl(b, join(b, 'Bob')));
+  assert.equal(s.cloned, true);
+});
+
+test('the creator sees a second valid join for an admitted place even before that member’s own join', () => {
+  const a = person(0);
+  const b = person(1);
+  const eve = person(1);
+  const secret = sodium.randombytes_buf(32);
+  const withProof = (p: Person): ControlRecord => {
+    const j = join(p, 'Bob') as ControlRecord & { t: 'join' };
+    return { ...j, proof: joinProof(sodium, secret, ROOM, 1, j.key, j.box) };
+  };
+  // After a reload the creator knows Bob's key; the server shows Eve's join
+  // (made with the same leaked link) before Bob's own.
+  const s = new RoomState(sodium, key, ROOM, {
+    slot: 0, signPublic: a.sign.publicKey, boxes: new Map(), roster: ROSTER, nameSecret: NAMES.privateKey,
+    checkProof: (slot, j) => (slot === 1 ? j.proof !== null && checkJoinProof(sodium, secret, ROOM, slot, j.key, j.box, j.proof) : null),
+  }, new Map(), { known: new Map([[0, a.sign.publicKey], [1, b.sign.publicKey]]) });
+  s.apply(0, ctl(a, join(a, 'Ada')));
+  s.apply(0, ctl(a, admit(b, 'Bob')));
+  s.apply(1, ctl(eve, withProof(eve)));
+  assert.ok(s.contested.has(1));
 });
 
 test('a name that holds another member’s name gets a code, and so does the other', () => {

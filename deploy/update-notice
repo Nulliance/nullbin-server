@@ -6,12 +6,16 @@ export LC_ALL=C
 
 config=${1:-/etc/nullbin-update-check.conf}
 cache=${2:-/var/lib/nullbin-update-check}
-[[ -r $config && -r $cache/latest ]] || exit 0
+# The cache belongs to the unprivileged checker: read it only if it is a
+# small regular file (not a link, FIFO or device), and only its first bytes.
+[[ -r $config && -f $cache/latest && ! -L $cache/latest ]] || exit 0
+[[ $(stat -c %s -- "$cache/latest" 2>/dev/null || echo 99) -le 64 ]] || exit 0
 {
   IFS= read -r _repository
   IFS= read -r installed
 } < "$config" || exit 0
-IFS= read -r latest < "$cache/latest" || exit 0
+# (The file could be swapped after the check: give up after a second.)
+latest=$(timeout 1 head -c 65 -- "$cache/latest" 2>/dev/null | head -n 1) || exit 0
 stable='^v(0|[1-9][0-9]*)[.](0|[1-9][0-9]*)[.](0|[1-9][0-9]*)$'
 [[ ${#installed} -le 64 && ${#latest} -le 64 && $installed =~ $stable && $latest =~ $stable ]] || exit 0
 [[ $latest != "$installed" ]] || exit 0

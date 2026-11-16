@@ -140,6 +140,9 @@ func deletePaste(environ []string, id string, out io.Writer) int {
 	case errors.Is(err, storage.ErrNotFound):
 		fmt.Fprintln(out, "No paste with that ID. It may have expired or been deleted already.")
 		return 1
+	case errors.Is(err, storage.ErrConflict):
+		fmt.Fprintln(out, "The paste is in use (a download or another change is still running), so it was not deleted. Stop the server, then try again.")
+		return 1
 	default:
 		fmt.Fprintln(out, "delete failed:", err)
 		return 1

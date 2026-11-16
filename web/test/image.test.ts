@@ -99,6 +99,12 @@ test('GIF frames cannot expand a small canvas or exceed the animation budget', (
   assert.deepEqual(previewInfo(gifImage(10, 10, gifFrame(10, 10), gifFrame(5, 5, 5, 5))), { type: 'image/gif', width: 10, height: 10 });
 });
 
+test('a tiny canvas cannot carry more than a thousand frames', () => {
+  const frames = (n: number) => Array.from({ length: n }, () => gifFrame(1, 1));
+  assert.deepEqual(previewInfo(gifImage(1, 1, ...frames(1000))), { type: 'image/gif', width: 1, height: 1 });
+  assert.equal(previewInfo(gifImage(1, 1, ...frames(1001))), null);
+});
+
 test('animated PNG and WebP frames are held to the same budget as GIF frames', () => {
   assert.notEqual(previewInfo(pngHeader(100, 100, acTL(3), fcTL(), fcTL(), fcTL())), null, 'a short animation');
   assert.notEqual(previewInfo(pngHeader(10_000, 5_000, acTL(1), fcTL())), null, 'one canvas at the pixel limit');

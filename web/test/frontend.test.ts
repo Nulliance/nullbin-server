@@ -7,6 +7,13 @@ import { parseAPIOrigin, parseSiteOrigin, contentSecurityPolicy, frontendHeaders
 test('static frontend API origin is explicit and rejects unsafe or ambiguous URLs', () => {
   assert.equal(parseAPIOrigin(''), '');
   assert.equal(parseAPIOrigin('https://api.example.com/'), 'https://api.example.com');
+  // Characters a URL allows in a host name but that could act as
+  // replacement patterns or end an attribute are refused.
+  for (const bad of ["https://foo$&bar.example", "https://foo$'bar.example", 'https://foo`bar.example']) {
+    assert.throws(() => parseAPIOrigin(bad), bad);
+    assert.throws(() => parseSiteOrigin(bad), bad);
+  }
+  assert.equal(parseAPIOrigin('https://api-2.example.com:8443'), 'https://api-2.example.com:8443');
   assert.equal(parseAPIOrigin('https://api.example.com:8443'), 'https://api.example.com:8443');
   assert.throws(() => parseAPIOrigin('http://127.0.0.1:8000'), Error, 'plain HTTP only when the tests ask for it');
   process.env.NULLBIN_LOCAL_TEST_HTTP = '1';

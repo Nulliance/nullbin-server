@@ -16,6 +16,14 @@ export const MAX_PREVIEW_BYTES = 25 * 1024 * 1024;
 export const MAX_PREVIEW_PIXELS = 50_000_000;
 /** Browsers cannot draw images with a side much longer than this. */
 export const MAX_PREVIEW_SIDE = 16_384;
+/**
+ * At most this many animation frames, however small each is: a tiny canvas
+ * would otherwise allow millions, each decoded again as it plays.
+ */
+export const MAX_PREVIEW_FRAMES = 1000;
+
+/** How many frames an image of this size may have: within the pixel budget, and never more than MAX_PREVIEW_FRAMES. */
+const frameLimit = (width: number, height: number) => Math.min(MAX_PREVIEW_FRAMES, Math.floor(MAX_PREVIEW_PIXELS / (width * height)));
 
 /** Declared types worth offering a preview for. The bytes decide later. */
 const PREVIEWABLE = new Set<string>(['image/png', 'image/jpeg', 'image/jpg', 'image/pjpeg', 'image/gif', 'image/webp']);
@@ -61,7 +69,7 @@ function png(b: Uint8Array): ImageInfo | null {
     if (ascii(b, i + 4, 'fcTL')) controls++;
     i += 12 + length;
   }
-  if (Math.max(declared, controls, 1) > Math.floor(MAX_PREVIEW_PIXELS / (width * height))) return null;
+  if (Math.max(declared, controls, 1) > frameLimit(width, height)) return null;
   return { type: 'image/png', width, height };
 }
 
@@ -102,7 +110,7 @@ function gif(b: Uint8Array): ImageInfo | null {
     if (!w || !h || x + w > width || y + h > height) return null;
     // Animated frames may each need a full compositing canvas. Bound their
     // aggregate pixel budget as well as any individual frame's dimensions.
-    if (++frames > Math.floor(MAX_PREVIEW_PIXELS / (width * height))) return null;
+    if (++frames > frameLimit(width, height)) return null;
     const packed = b[i + 8]!;
     i += 9;
     if (packed & 0x80) i += 3 * (2 << (packed & 7)); // local color table
@@ -165,7 +173,7 @@ function webp(b: Uint8Array): ImageInfo | null {
       if (size > b.length - i - 8) break;
       i += 8 + size + (size & 1);
     }
-    if (Math.max(frames, 1) > Math.floor(MAX_PREVIEW_PIXELS / (width * height))) return null;
+    if (Math.max(frames, 1) > frameLimit(width, height)) return null;
     return { type: 'image/webp', width, height };
   }
   return null;

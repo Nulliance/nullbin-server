@@ -157,11 +157,27 @@ if (tags.length !== 2 || !tags.every((t) => t.includes(`integrity="${t.startsWit
 // separately hosted API that is on another origin, fixed at build time.
 const versionLink = 'href="/api/v1/version"';
 if (html.split(versionLink).length !== 2) fail('index.html must contain exactly one Version link');
-html = html.replace(versionLink, `href="${apiOrigin}/api/v1/version"`);
+// A function, so nothing in the origin is read as a replacement pattern.
+html = html.replace(versionLink, () => `href="${apiOrigin}/api/v1/version"`);
 if (html.split('__NULLBIN_VERSION__').length !== 2) fail('index.html must show the version exactly once');
 html = html.replace('__NULLBIN_VERSION__', version);
 if (html.includes('__')) fail('index.html has an unreplaced placeholder');
-const htmlBytes = new TextEncoder().encode(html);
+// The same policy as a <meta> tag, in case a static host ignores _headers or
+// a proxy strips the header: every build carries it, the all-in-one server's
+// too, where it matches the header (both are enforced). Browsers ignore
+// frame-ancestors there; X-Frame-Options and the page's own check cover
+// framing.
+const metaPolicy = contentSecurityPolicy(apiOrigin).replace("frame-ancestors 'none'; ", '');
+if (metaPolicy.includes('frame-ancestors') || metaPolicy.includes('"')) fail('unexpected Content-Security-Policy for the meta tag');
+const charset = '<meta charset="utf-8">';
+if (html.split(charset).length !== 2) fail('index.html must contain exactly one charset meta tag');
+const withPolicy = (page) => page.replace(charset, `${charset}
+<meta http-equiv="Content-Security-Policy" content="${metaPolicy}">`);
+const embeddedHTML = withPolicy(html);
+if (embeddedHTML.split('<meta http-equiv="Content-Security-Policy"').length !== 2 || embeddedHTML.indexOf('http-equiv="Content-Security-Policy"') > embeddedHTML.indexOf('<link')) {
+  fail('index.html must carry its Content-Security-Policy once, before any stylesheet or script');
+}
+const htmlBytes = new TextEncoder().encode(embeddedHTML);
 
 if (!frontendOnly) {
   await mkdir(outDir, { recursive: true });
@@ -191,16 +207,7 @@ const previewTags = siteOrigin === '' ? '' : `
 <meta property="og:image:alt" content="Nullbin">`;
 const cardTag = '<meta name="twitter:card" content="summary">';
 if (html.split(cardTag).length !== 2) fail('index.html must contain exactly one twitter:card meta tag');
-// The same policy as a <meta> tag, in case a static host ignores _headers.
-// Browsers ignore frame-ancestors there; X-Frame-Options still covers framing
-// on hosts that do send the headers.
-const metaPolicy = contentSecurityPolicy(apiOrigin).replace("frame-ancestors 'none'; ", '');
-if (metaPolicy.includes('frame-ancestors') || metaPolicy.includes('"')) fail('unexpected Content-Security-Policy for the meta tag');
-const charset = '<meta charset="utf-8">';
-if (html.split(charset).length !== 2) fail('index.html must contain exactly one charset meta tag');
-const staticHTML = html
-  .replace(charset, `${charset}
-<meta http-equiv="Content-Security-Policy" content="${metaPolicy}">`)
+const staticHTML = withPolicy(html)
   .replace('/assets/app.js', `/assets/${jsName}`).replace('/assets/app.css', `/assets/${cssName}`)
   .replace(cardTag, cardTag + previewTags);
 if (staticHTML.split('<meta http-equiv="Content-Security-Policy"').length !== 2 || staticHTML.indexOf('http-equiv="Content-Security-Policy"') > staticHTML.indexOf('<link')) {

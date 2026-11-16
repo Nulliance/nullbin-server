@@ -68,6 +68,8 @@ func (s *Server) roomError(w http.ResponseWriter, op string, err error) {
 		writeError(w, http.StatusGone, "this invite has expired")
 	case errors.Is(err, rooms.ErrRoomFull):
 		writeError(w, http.StatusConflict, "this room is full")
+	case errors.Is(err, rooms.ErrNoPlaces):
+		writeError(w, http.StatusConflict, "this room has used all its places")
 	case errors.Is(err, rooms.ErrCapacity):
 		writeError(w, http.StatusInsufficientStorage, "no room for more burner rooms right now")
 	case errors.Is(err, rooms.ErrTooMany):

@@ -706,7 +706,7 @@ Binary units are powers of 1,024. Text limits count JavaScript UTF-16 units.
 | Text and metadata | The encrypted metadata, including the text, filename and type, must fit in 16 MiB. |
 | Attachments | Up to 100 files per paste, with optional text. Several files become one uncompressed zip archive in the sender's browser before encryption: names are stripped of folders, drive letters, control and direction characters and leading dots, and made unique; entries carry no real dates and are never executable. Filename and type up to 255 characters each. |
 | Text preview | Up to 5,000 lines or 100,000 characters. Copy, Raw text, Save document and Clone use the full text. |
-| Saving and cloning files | Up to 64 MiB in memory. Larger files need streaming saves (desktop Chrome or Edge). Files are never previewed or opened. |
+| Saving and cloning files | Up to 64 MiB in memory. Larger files need streaming saves (desktop Chrome or Edge). Files are never opened; images and plain text can be previewed only when the reader asks (**Show image**, **Show preview**), and archives never are. |
 | Discussions | Up to 200 comments per paste; 4,000 characters of text and a 40-character name each. |
 | Expiry | 5 or 30 minutes; 1, 3 or 12 hours; 1 or 3 days; 7 days or 30 days. Never unlimited. Expired pastes are never served and are removed within a minute. |
 | Burn after reading | 1 to 1,000 authorized opens (default 1), counted before delivery and kept across restarts. |
@@ -930,7 +930,8 @@ publishes the paste once all bytes have arrived. Returns `200` with
 pastes return `404`. `HEAD` returns `405`.
 
 **`GET /api/v1/pastes/{id}/prefix`** returns a burn paste's first 22 bytes
-(format, flags and password salt), without using an open.
+(format, flags and password salt), without using an open. It answers `200`
+for any live burn paste (its ID is enough) and `404` otherwise.
 
 **`POST /api/v1/pastes/{id}/read`** (with `Nullbin-Burn-Token`) streams a
 burn paste, using one open before any data is sent. A wrong or missing

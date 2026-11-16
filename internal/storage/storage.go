@@ -996,7 +996,15 @@ func (s *Store) Remove(id string) error {
 	if !ValidID(id) {
 		return ErrNotFound
 	}
-	if err := s.discard(path.Join(dirPastes, id), id); err == nil || errors.Is(err, ErrNotErased) {
+	// Only a paste that is not there may be an unfinished upload instead.
+	// Anything else (on Windows, a file still open, or another operation on
+	// the same ID) is reported as it is, never as "not found".
+	switch err := s.discard(path.Join(dirPastes, id), id); {
+	case err == nil || errors.Is(err, ErrNotErased):
+		return err
+	case errors.Is(err, errStillOpen):
+		return ErrConflict
+	case !errors.Is(err, ErrNotFound):
 		return err
 	}
 	dir := path.Join(dirPending, id)

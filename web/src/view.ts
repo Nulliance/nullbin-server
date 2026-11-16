@@ -103,6 +103,8 @@ async function open(id: string, key: Uint8Array, burn: boolean, recipient: Uint8
     if (!limited) return;
     left = true;
     if (discussionKey) discussionKey.fill(0);
+    // The share link (with its key) leaves the page too.
+    el('view-email').removeAttribute('href');
     el('view-text').replaceChildren();
     el('view-content').replaceChildren();
     showProblem('This paste was cleared from this page', `Its link has an open limit, so it was cleared when you left. ${readsKnown === 0 ? 'It can’t be opened again with this link.' : 'Open its link again to read it, if it has opens left; that uses another open.'}`);

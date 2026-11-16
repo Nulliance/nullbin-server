@@ -278,7 +278,8 @@ main() {
     esac
   }
 
-  installed() { g describe --tags --always 2>/dev/null || echo unknown; }
+  # A checkout with local changes says so: it is not the release it is on.
+  installed() { g describe --tags --always --dirty 2>/dev/null || echo unknown; }
 
   # The version the running API was built from, from its image label.
   running() {

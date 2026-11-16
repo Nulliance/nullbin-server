@@ -93,6 +93,9 @@ var (
 	// ErrRoomFull means the room has no free slot (or is at its member
 	// limit) or no room for records.
 	ErrRoomFull = errors.New("room is full")
+	// ErrNoPlaces means the room gave out every place it has, ever: places
+	// are never reused, so removing someone does not free one.
+	ErrNoPlaces = errors.New("room has used all its places")
 	// ErrCapacity means the server's memory for rooms is used up.
 	ErrCapacity = errors.New("no capacity for rooms")
 	// ErrTooMany means the creator's network already has MaxRoomsPerClient
@@ -408,7 +411,7 @@ func (s *Store) Invite(id, ownerToken string) (token string, n int, err error) {
 			return token, i, nil
 		}
 	}
-	return "", 0, ErrRoomFull
+	return "", 0, ErrNoPlaces
 }
 
 // Join uses an invite: its slot becomes joined with a new member token,

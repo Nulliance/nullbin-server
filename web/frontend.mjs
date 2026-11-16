@@ -20,7 +20,11 @@ function parseOrigin(value, name, example) {
   const local = process.env.NULLBIN_LOCAL_TEST_HTTP === '1' && ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname);
   if ((url.protocol !== 'https:' && !(url.protocol === 'http:' && local)) ||
       url.username || url.password || url.pathname !== '/' || url.search || url.hash ||
-      ![url.origin, `${url.origin}/`].includes(value)) {
+      ![url.origin, `${url.origin}/`].includes(value) ||
+      // Host names of letters, digits, dots and hyphens (and a port) only:
+      // the origin goes into HTML attributes and headers, and characters
+      // such as $ or ' could change what a replacement writes.
+      !/^https?:\/\/(\[::1\]|[a-z0-9.-]+)(:[0-9]{1,5})?$/.test(url.origin)) {
     throw new Error(`${name} must be a canonical HTTPS origin without a path, credentials, query or fragment (HTTP to localhost is for the browser tests only, with NULLBIN_LOCAL_TEST_HTTP=1)`);
   }
   return url.origin;

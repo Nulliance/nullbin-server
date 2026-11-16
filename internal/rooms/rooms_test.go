@@ -595,3 +595,22 @@ func TestCreateWithRejectsBadOptions(t *testing.T) {
 		}
 	}
 }
+
+func TestPlacesAreNeverReused(t *testing.T) {
+	s, _ := newStore(t)
+	c, _ := s.Create(time.Hour, someone)
+	for i := 1; i < MaxSlots; i++ {
+		_, n, err := s.Invite(c.ID, c.OwnerToken)
+		if err != nil || n != i {
+			t.Fatalf("invite %d: %d %v", i, n, err)
+		}
+		if err := s.Remove(c.ID, c.OwnerToken, n); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Below the member limit, but every place was given out once: removing
+	// someone does not free a place, and the error says which case it is.
+	if _, _, err := s.Invite(c.ID, c.OwnerToken); !errors.Is(err, ErrNoPlaces) {
+		t.Fatalf("a twentieth place: %v", err)
+	}
+}

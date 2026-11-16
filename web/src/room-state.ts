@@ -53,6 +53,7 @@ import {
   validName,
   nameSkeleton,
   nameWords,
+  nameStems,
   safetyCode,
   verifySignature,
   type Chain,
@@ -432,6 +433,21 @@ export class RoomState {
       // creator can check its proof, and then closes the place.
       if (from !== 0 && this.members.has(from) && signKey && this.me.checkProof && !this.same(this.members.get(from)!.signKey, signKey) &&
         verifySignature(this.sodium, opened, signKey) && this.me.checkProof(from, join) === true) {
+        this.contested.add(from);
+      }
+      // A join signed with our own key that this tab never posted: another
+      // copy of our keys is in use (a copy rejoining, or lurking), as for
+      // any other record of ours.
+      if (from === this.me.slot && signKey && this.same(signKey, this.me.signPublic) && this.me.posted &&
+        verifySignature(this.sodium, opened, signKey) && !this.me.posted(signatureHash(this.sodium, opened.signature))) {
+        this.seen.add(seenKey);
+        this.cloned = true;
+        return null;
+      }
+      // Another valid join for a place whose key the creator already
+      // admitted, whether or not that member's own join has come yet.
+      if (from !== 0 && !this.members.has(from) && this.admitted.has(from) && signKey && this.me.checkProof &&
+        !this.same(this.admitted.get(from)!, signKey) && verifySignature(this.sodium, opened, signKey) && this.me.checkProof(from, join) === true) {
         this.contested.add(from);
       }
       if (this.members.has(from) || this.removed.has(from) || !signKey || !boxKey || !boxKeyOk(this.sodium, boxKey) ||
@@ -900,7 +916,9 @@ export class RoomState {
     if (!m || m.name === '') return null;
     const twin = [...this.members.values()].some((o) => o.slot !== slot && o.name !== '' && resembles(o.name, m.name)) ||
       [...this.labels].some(([s, label]) => s !== slot && label !== '' && resembles(label, m.name));
-    const posing = slot !== this.me.slot && nameWords(m.name).includes('you');
+    // "You" as a word, also with digits ("You2"); private-use characters
+    // that could split it are refused by cleanName.
+    const posing = slot !== this.me.slot && nameStems(m.name).includes('you');
     const others = [...[...this.members.values()].filter((o) => o.slot !== slot).map((o) => o.name), ...[...this.labels].filter(([s]) => s !== slot).map(([, l]) => l)];
     const scripts = lookalikeScript(m.name) || (LATIN.test(m.name) && others.some(lookalikeScript));
     if (!twin && !posing && !scripts) return null;
@@ -966,5 +984,8 @@ export class RoomState {
     for (const m of this.members.values()) m.name = '';
     this.labels.clear();
     this.roomNameRaw = null;
+    this.name = '';
+    this.memberNameRaw.clear();
+    this.labelRaw.clear();
   }
 }

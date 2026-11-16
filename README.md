@@ -98,8 +98,10 @@ Then **Create Null Chat**.
   sees more than ten minutes after the expiry, whatever the server does.
   **Revoke this invite** (in the invite window, or **Revoke invite** in
   Members) stops a link at once. Keep the room open
-  while people join: your tab lets them in, and until it does they see that
-  they are waiting (and their safety code). Each invite lets one person in. If your tab sees two people
+  while people join: your tab lets them in, and until it does they see a
+  waiting screen with their safety code, without the chat or its controls.
+  Pending visitors cannot self-destruct the room or send anything beyond
+  their one join announcement. Each invite lets one person in. If your tab sees two people
   prove they had the same invite (only a tampered server allows it), it
   closes that place, even if one of them got in: send a new invite another
   way. It also tells you when someone's invite link was changed on the way.
@@ -1145,11 +1147,16 @@ the room still exists):
   `invite_ttl`, which is also its default) returns `201` with a
   single-use `invite_token` and its `slot`; `409` when 20 slots are used, or
   when members and still-usable invites reach `max_members`.
-- `POST /{id}/join` (with `Nullbin-Invite-Token`) returns `200` with a new
+- `POST /{id}/join` (with `Nullbin-Invite-Token`) returns `200` with a pending
   `member_token` and the `slot`; `410` if that invite was used, revoked
   (removed) or older than its `ttl`.
+- `POST /{id}/members/{n}/admit` (with `Nullbin-Owner-Token`) grants full
+  server permissions after the creator's tab verifies the join proof.
+  Requires a pending place with a posted announcement; retries are safe.
 - `POST /{id}/records` (with `Nullbin-Member-Token`, `application/octet-stream`,
   41 bytes to 16 KiB) stores one record and stamps it with the sender's slot.
+  Before admission, only one immutable announcement is allowed: an exact
+  retry returns its existing index, and a different record gets `403`.
   `409` after 1,000 records or 4 MiB, or when the creator's network holds
   4 MiB in its rooms (16 MiB per IPv6 /48).
 - `GET /{id}/records?after=n` (with `Nullbin-Member-Token`; `n` up to 1000)
@@ -1157,10 +1164,10 @@ the room still exists):
   `{"next": m, "expires_in": seconds, "records": [{"from": slot, "data": "<base64>"}]}`,
   streamed under the download bandwidth limits.
 - `GET /{id}/members` (owner) returns each used slot's state
-  (`invited`, `expired`, `joined`, `removed`).
+  (`invited`, `expired`, `pending`, `joined`, `removed`).
 - `POST /{id}/members/{n}/remove` (owner) closes slot `n` (not 0) for good:
   it removes a member, or revokes an invite nobody used yet.
-- `DELETE /{id}` (with `Nullbin-Member-Token` of any current member, or the
+- `DELETE /{id}` (with `Nullbin-Member-Token` of any admitted current member, or the
   owner token) self-destructs the room for everyone.
 
 Invite links look like

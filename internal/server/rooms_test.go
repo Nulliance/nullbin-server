@@ -136,6 +136,33 @@ func TestRoomFlowOverHTTP(t *testing.T) {
 	if resp, _ := e.do(t, "POST", base+"/records", msg, with(octet, MemberTokenHeader, joined.MemberToken)); resp.StatusCode != http.StatusCreated {
 		t.Fatalf("post: %d", resp.StatusCode)
 	}
+	// Using an invite does not grant self-destruct or arbitrary writes.
+	if resp, _ := e.do(t, "DELETE", base, nil, them); resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("pending member self-destructs: %d", resp.StatusCode)
+	}
+	if resp, _ := e.do(t, "POST", base+"/records", bytes.Repeat([]byte{8}, 100), with(octet, MemberTokenHeader, joined.MemberToken)); resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("pending member posts a second record: %d", resp.StatusCode)
+	}
+	resp, data = e.do(t, "GET", base+"/members", nil, owner)
+	if strings.TrimSpace(string(data)) != `{"members":{"0":"joined","1":"pending"}}` {
+		t.Fatalf("pending member state: %d %s", resp.StatusCode, data)
+	}
+	for _, hdr := range []map[string]string{nil, them, me, {OwnerTokenHeader: joined.MemberToken}} {
+		if resp, _ := e.do(t, "POST", base+"/members/1/admit", nil, hdr); resp.StatusCode != http.StatusNotFound {
+			t.Fatalf("non-owner admits: %d", resp.StatusCode)
+		}
+	}
+	for _, n := range []string{"0", "-1", "20", "01", "x", "2"} {
+		resp, _ := e.do(t, "POST", base+"/members/"+n+"/admit", nil, owner)
+		if resp.StatusCode != http.StatusNotFound && resp.StatusCode != http.StatusBadRequest {
+			t.Fatalf("admit %s: %d", n, resp.StatusCode)
+		}
+	}
+	for i := 0; i < 2; i++ {
+		if resp, _ := e.do(t, "POST", base+"/members/1/admit", nil, owner); resp.StatusCode != http.StatusNoContent {
+			t.Fatalf("owner admits/retries: %d", resp.StatusCode)
+		}
+	}
 	for _, bad := range []struct {
 		body []byte
 		hdr  map[string]string
@@ -196,6 +223,7 @@ func TestRoomFlowOverHTTP(t *testing.T) {
 	if resp.StatusCode != http.StatusOK || strings.TrimSpace(string(data)) != `{"members":{"0":"joined","1":"joined"}}` {
 		t.Fatalf("members: %d %s", resp.StatusCode, data)
 	}
+	e.clock.add(time.Minute) // replenish the write budget after the admission checks
 	for _, n := range []string{"0", "-1", "20", "01", "x"} {
 		resp, _ := e.do(t, "POST", base+"/members/"+n+"/remove", nil, owner)
 		if resp.StatusCode != http.StatusNotFound && resp.StatusCode != http.StatusBadRequest {
@@ -207,6 +235,9 @@ func TestRoomFlowOverHTTP(t *testing.T) {
 	}
 	if resp, _ := e.do(t, "POST", base+"/members/1/remove", nil, owner); resp.StatusCode != http.StatusNoContent {
 		t.Fatalf("remove: %d", resp.StatusCode)
+	}
+	if resp, _ := e.do(t, "POST", base+"/members/1/admit", nil, owner); resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("admission reopened a removed member: %d", resp.StatusCode)
 	}
 	if resp, _ := e.do(t, "GET", base+"/records", nil, them); resp.StatusCode != http.StatusNotFound {
 		t.Fatalf("removed member reads: %d", resp.StatusCode)

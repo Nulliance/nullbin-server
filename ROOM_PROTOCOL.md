@@ -224,8 +224,11 @@ so its size does not depend on what was read.
 
 1. The joiner opens the link. The fragment is read once and removed from
    the address bar.
-2. The joiner uses the invite token (`POST /{id}/join`) and gets a member
-   token and its place, which must equal j (else it stops).
+2. The joiner uses the invite token (`POST /{id}/join`) and gets a pending
+   member token and its place, which must equal j (else it stops). This
+   token can read ciphertext and post one immutable announcement. Exact
+   retries reuse the stored record; other writes and self-destruct are
+   refused until the owner grants admission.
 3. It fetches the first records and checks that RK opens the creator's
    join, signed by the key in the link, with a name key. Until that check
    passes nothing is saved; if the room cannot be reached, it can retry.
@@ -238,9 +241,13 @@ so its size does not depend on what was read.
 5. The creator's tab, for each invited place without an admit, checks the
    proof of each waiting join with IS_j. It admits the first valid one
    whose sealed name opens: it records the admitted key in its session
-   before posting, then posts an `admit` with the joiner's signing key, RO
+   before posting, grants server permissions with the owner-authenticated
+   `POST /{id}/members/{j}/admit`, then posts an `admit` with the joiner's signing key, RO
    sealed to B_j,0 and the name boxed under RO. It admits each place once,
-   ever.
+   ever. The server admission is idempotent, requires a posted announcement,
+   and cannot reopen a removed place. If it fails, the same admission is
+   retried before publishing the signed admit; no password or key is sent
+   to this endpoint.
 6. If two different valid joins exist for a place (before or after the
    admit), the link leaked: the creator's tab admits neither, removes the
    place and says so. A join whose proof fails is reported to the creator;
@@ -252,7 +259,8 @@ so its size does not depend on what was read.
    member. If the creator's signed `invite` for its place carries a `check`
    that does not match its link's secret, it reports a damaged link and
    leaves. If the admit names another key, it reports that someone took its
-   place.
+   place. Until admission is verified, the app shows a waiting screen
+   rather than the conversation or its controls, including after reload.
 
 ### 7.4 Sending keys
 

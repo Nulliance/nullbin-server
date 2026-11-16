@@ -426,7 +426,7 @@ export async function fetchRecords(id: string, memberToken: string, after: numbe
   return { records: out, next, expiresIn: left };
 }
 
-export type SlotState = 'invited' | 'joined' | 'removed' | 'expired';
+export type SlotState = 'invited' | 'pending' | 'joined' | 'removed' | 'expired';
 
 /** Every used slot's state, for the owner. */
 export async function fetchMembers(id: string, ownerToken: string): Promise<Map<number, SlotState>> {
@@ -442,10 +442,20 @@ export async function fetchMembers(id: string, ownerToken: string): Promise<Map<
   const out = new Map<number, SlotState>();
   for (const [k, state] of Object.entries(members)) {
     const n = Number(k);
-    if (!/^\d{1,2}$/.test(k) || !validSlot(n, 0) || (state !== 'invited' && state !== 'joined' && state !== 'removed' && state !== 'expired')) throw new Error('The server sent an invalid response.');
+    if (!/^\d{1,2}$/.test(k) || !validSlot(n, 0) || (state !== 'invited' && state !== 'pending' && state !== 'joined' && state !== 'removed' && state !== 'expired')) throw new Error('The server sent an invalid response.');
     out.set(n, state);
   }
   return out;
+}
+
+/** Grants server permissions after the creator verifies the join proof. */
+export async function admitMember(id: string, ownerToken: string, slot: number): Promise<void> {
+  const resp = await fetch(apiURL(`/api/v1/rooms/${id}/members/${slot}/admit`), {
+    ...base, signal: AbortSignal.timeout(REQUEST_MS),
+    method: 'POST',
+    headers: { 'Nullbin-Owner-Token': ownerToken },
+  });
+  if (resp.status !== 204) throw await errorFrom(resp);
 }
 
 /** Closes a member's slot for good (owner only). */

@@ -455,6 +455,13 @@
         <button id="room-join-submit" type="submit" class="btn nb-btn-primary w-100 mt-3">Join</button>
       </form>
     </div>
+    <div id="room-waiting" class="nb-gate" hidden>
+      <div class="nb-gate-icon"><svg class="nb-i" aria-hidden="true"><use href="#i-lock"/></svg></div>
+      <h1 id="room-waiting-title" class="nb-gate-title" tabindex="-1">Waiting to be let in</h1>
+      <p id="room-waiting-status" class="nb-gate-text" role="status" aria-live="polite">The person who invited you checks your invite while the chat is open in their tab. Keep this tab open.</p>
+      <p class="nb-meta">Your safety code</p>
+      <p id="room-waiting-code" class="nb-mono"></p>
+    </div>
     <div id="room-chat" class="nb-chat" hidden>
       <header class="nb-chat-head">
         <div id="room-avatar" class="nb-chat-avatar" aria-hidden="true">B</div>

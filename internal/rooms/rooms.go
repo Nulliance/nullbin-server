@@ -8,13 +8,15 @@
 //
 // A room has up to MaxSlots members, or fewer if its creator set a limit.
 // Slot 0 is the creator, who also holds the owner token: it creates
-// single-use invites, lists and removes members (and revokes invites the
-// same way), and deletes the room. An invite token can join once; joining
-// replaces it with a member token. Every request is checked against hashes
-// of these tokens, in constant time, and anything else gets ErrNotFound.
+// single-use invites, admits, lists and removes members (and revokes invites
+// the same way), and deletes the room. An invite token can join once; joining
+// replaces it with a pending token until the owner admits it. Every request
+// is checked against hashes of these tokens, in constant time, and anything
+// else gets ErrNotFound.
 package rooms
 
 import (
+	"bytes"
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
@@ -104,6 +106,9 @@ var (
 	// ErrInvalid means a request that can never succeed (a bad size, the
 	// creator's own slot).
 	ErrInvalid = errors.New("invalid request")
+	// ErrNotAdmitted means a pending invite holder tried to post more than
+	// their one join announcement before the owner approved their place.
+	ErrNotAdmitted = errors.New("not admitted")
 )
 
 type slotState uint8
@@ -111,6 +116,7 @@ type slotState uint8
 const (
 	slotFree slotState = iota
 	slotInvited
+	slotPending
 	slotJoined
 	slotRemoved
 )
@@ -121,6 +127,7 @@ type slot struct {
 	member  [sha256.Size]byte // hash of the member token, once joined
 	invited time.Time         // when the invite was made
 	ttl     time.Duration     // how long it works: the creator's choice for this invite
+	join    int               // index + 1 of a pending place's immutable announcement (0 before posting)
 }
 
 // Record is one stored encrypted record and the slot that posted it.
@@ -352,7 +359,7 @@ func (s *Store) owned(id string, owner presented) *room {
 	return r
 }
 
-// member returns the room and the joined slot whose member token matches.
+// member returns the room and the pending or joined slot whose token matches.
 // Every slot is compared, whatever its state and whether or not the room
 // exists, so timing shows neither which slot matched nor how many joined.
 func (s *Store) member(id string, token presented) (*room, int) {
@@ -363,7 +370,7 @@ func (s *Store) member(id string, token presented) (*room, int) {
 	}
 	found := -1
 	for i := range look.slots {
-		if token.matches(look.slots[i].member) && look.slots[i].state == slotJoined && found < 0 {
+		if token.matches(look.slots[i].member) && (look.slots[i].state == slotPending || look.slots[i].state == slotJoined) && found < 0 {
 			found = i
 		}
 	}
@@ -378,7 +385,7 @@ func (s *Store) member(id string, token presented) (*room, int) {
 // Removed places, and invites that expired unused, no longer count.
 func (s *Store) open(r *room, i int) bool {
 	switch r.slots[i].state {
-	case slotJoined:
+	case slotPending, slotJoined:
 		return true
 	case slotInvited:
 		return s.now().Before(r.slots[i].invited.Add(r.slots[i].ttl))
@@ -432,8 +439,9 @@ func (s *Store) InviteFor(id, ownerToken string, ttl time.Duration) (token strin
 	return "", 0, ErrNoPlaces
 }
 
-// Join uses an invite: its slot becomes joined with a new member token,
-// and the invite can never be used again.
+// Join consumes an invite and issues a pending token. Until the owner
+// admits the place, it can read ciphertext and post one join announcement,
+// but cannot send further records or destroy the room.
 func (s *Store) Join(id, inviteToken string) (memberToken string, n int, err error) {
 	invite := present(inviteToken)
 	s.mu.Lock()
@@ -459,9 +467,34 @@ func (s *Store) Join(id, inviteToken string) (memberToken string, n int, err err
 		return "", 0, ErrInviteExpired
 	}
 	memberToken = newToken()
-	r.slots[found].state = slotJoined
+	r.slots[found].state = slotPending
 	r.slots[found].member = hash(memberToken)
 	return memberToken, found, nil
+}
+
+// Admit grants full member permissions after the creator's browser has
+// verified the join's invite and password proof. Only the owner may do it.
+// Retrying an admission succeeds; a removed place can never be reopened.
+func (s *Store) Admit(id, ownerToken string, n int) error {
+	owner := present(ownerToken)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	r := s.owned(id, owner)
+	if r == nil {
+		return ErrNotFound
+	}
+	if n <= 0 || n >= MaxSlots {
+		return ErrInvalid
+	}
+	sl := &r.slots[n]
+	if sl.state == slotJoined {
+		return nil
+	}
+	if sl.state != slotPending || sl.join == 0 {
+		return ErrNotFound
+	}
+	sl.state = slotJoined
+	return nil
 }
 
 // Post stores one encrypted record from a member.
@@ -476,6 +509,15 @@ func (s *Store) Post(id, memberToken string, data []byte) (int, error) {
 	if r == nil {
 		return 0, ErrNotFound
 	}
+	sl := &r.slots[from]
+	if sl.state == slotPending && sl.join != 0 {
+		// A lost reply can be retried without consuming records or memory.
+		// Any different record waits for the owner's approval.
+		if bytes.Equal(r.records[sl.join-1].Data, data) {
+			return sl.join - 1, nil
+		}
+		return 0, ErrNotAdmitted
+	}
 	n := int64(len(data))
 	if len(r.records) >= MaxRecords || r.data+n > MaxRoomBytes {
 		return 0, ErrRoomFull
@@ -488,6 +530,9 @@ func (s *Store) Post(id, memberToken string, data []byte) (int, error) {
 		return 0, ErrCapacity
 	}
 	r.records = append(r.records, Record{From: from, Data: append([]byte(nil), data...)})
+	if sl.state == slotPending {
+		sl.join = len(r.records)
+	}
 	r.bytes += cost
 	r.data += n
 	s.bytes += cost
@@ -526,6 +571,7 @@ type MemberState string
 
 const (
 	StateInvited MemberState = "invited"
+	StatePending MemberState = "pending"
 	StateJoined  MemberState = "joined"
 	StateRemoved MemberState = "removed"
 	StateExpired MemberState = "expired" // invited, but not used in time
@@ -551,6 +597,8 @@ func (s *Store) Members(id, ownerToken string) (map[int]MemberState, error) {
 			}
 		case slotJoined:
 			out[i] = StateJoined
+		case slotPending:
+			out[i] = StatePending
 		case slotRemoved:
 			out[i] = StateRemoved
 		}
@@ -589,7 +637,11 @@ func (s *Store) Destroy(id, token string) error {
 	defer s.mu.Unlock()
 	r := s.owned(id, t)
 	if r == nil {
-		r, _ = s.member(id, t)
+		var n int
+		r, n = s.member(id, t)
+		if r != nil && r.slots[n].state != slotJoined {
+			r = nil
+		}
 	}
 	if r == nil {
 		return ErrNotFound

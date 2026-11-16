@@ -40,6 +40,7 @@ func (s *Server) registerRooms(mux *http.ServeMux) {
 	mux.Handle("POST /api/v1/rooms/{id}/records", s.route(rooms.MaxRecordBytes, s.roomWrites, s.handleRoomPost))
 	mux.Handle("GET /api/v1/rooms/{id}/records", s.route(0, s.roomReads, s.handleRoomRead))
 	mux.Handle("GET /api/v1/rooms/{id}/members", s.route(0, s.roomReads, s.handleRoomMembers))
+	mux.Handle("POST /api/v1/rooms/{id}/members/{n}/admit", s.route(0, s.roomWrites, s.handleRoomAdmit))
 	mux.Handle("POST /api/v1/rooms/{id}/members/{n}/remove", s.route(0, s.roomWrites, s.handleRoomRemove))
 	mux.Handle("DELETE /api/v1/rooms/{id}", s.route(0, s.roomWrites, s.handleRoomDelete))
 	if !s.cfg.APIOnly {
@@ -62,6 +63,8 @@ func (s *Server) roomError(w http.ResponseWriter, op string, err error) {
 	switch {
 	case errors.Is(err, rooms.ErrNotFound):
 		writeError(w, http.StatusNotFound, "not found")
+	case errors.Is(err, rooms.ErrNotAdmitted):
+		writeError(w, http.StatusForbidden, "waiting for the creator to let you in")
 	case errors.Is(err, rooms.ErrInviteUsed):
 		writeError(w, http.StatusGone, "this invite was already used or removed")
 	case errors.Is(err, rooms.ErrInviteExpired):
@@ -312,6 +315,23 @@ func (s *Server) handleRoomMembers(w http.ResponseWriter, r *http.Request) {
 		out[strconv.Itoa(n)] = st
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"members": out})
+}
+
+func (s *Server) handleRoomAdmit(w http.ResponseWriter, r *http.Request) {
+	id, ok := roomID(w, r)
+	if !ok {
+		return
+	}
+	n, ok := parseChunkIndex(r.PathValue("n"))
+	if !ok || n >= rooms.MaxSlots {
+		writeError(w, http.StatusNotFound, "not found")
+		return
+	}
+	if err := s.cfg.Rooms.Admit(id, r.Header.Get(OwnerTokenHeader), n); err != nil {
+		s.roomError(w, "room admit", err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (s *Server) handleRoomRemove(w http.ResponseWriter, r *http.Request) {

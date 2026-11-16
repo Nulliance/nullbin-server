@@ -1439,7 +1439,7 @@ test('Null Chat security options: a password, a member limit, short invites and 
 
   // A wrong password: one try. The invite's place closes, and Bob is told.
   const wrong = await tryJoin(wrongLink, 'Bob', 'not the password');
-  assert.ok(await wrong.page.isVisible('#room-join-password'), 'the link asks for the password at once');
+  assert.ok(await wrong.page.isHidden('#room-chat'), 'a password attempt does not open the chat');
   await wrong.page.waitForSelector('#problem:not([hidden])', { timeout: 45_000 });
   assert.equal(await wrong.page.textContent('#problem-title'), 'You weren’t let in');
   await wrong.check(/status of 404/);
@@ -1458,6 +1458,127 @@ test('Null Chat security options: a password, a member limit, short invites and 
   await b.context.close();
   await a.check();
   await a.context.close();
+});
+
+test('Null Chat pending admission: no chat flash, self-destruct or record flooding, including after reload', async (t) => {
+  await restartAPI();
+  const a = await open();
+  t.after(() => a.context.close());
+  await goto(a, `${origin}/chat`);
+  await a.page.fill('#room-you', 'Ada');
+  await a.page.fill('#room-name', 'Private garden');
+  await a.page.check('#room-password-switch');
+  await a.page.fill('#room-password', 'correct horse battery');
+  await a.page.click('#room-create-submit');
+  await a.page.waitForSelector('#room-chat:not([hidden])');
+  const roomID = new URL(a.page.url()).pathname.split('/').pop()!;
+
+  for (const width of [1280, 390]) {
+    await a.page.click('#room-invite-open');
+    await a.page.fill('#room-invite-label', 'Bob');
+    await a.page.click('#room-invite-create');
+    await a.page.waitForSelector('#room-invite-result:not([hidden])');
+    const link = (await a.page.textContent('#room-invite-link'))!;
+    await a.page.click('#room-invite-close');
+
+    // Hold the creator's next poll as if their tab had lost its connection.
+    // The pending visitor must remain harmless for the entire wait.
+    const held = Promise.withResolvers<void>();
+    const blocked = Promise.withResolvers<void>();
+    t.after(() => held.resolve());
+    await a.page.route('**/api/v1/rooms/*/records?*', async (route) => {
+      blocked.resolve();
+      await held.promise;
+      await route.continue();
+    });
+    await blocked.promise;
+    const h = await open();
+    t.after(() => h.context.close());
+    await h.page.setViewportSize({ width, height: 900 });
+    await h.page.addInitScript(() => {
+      const w = window as unknown as { __chatRevealed: boolean };
+      w.__chatRevealed = false;
+      new MutationObserver(() => {
+        if (document.getElementById('room-chat')?.getClientRects().length) w.__chatRevealed = true;
+      }).observe(document, { childList: true, attributes: true, subtree: true });
+    });
+    await goto(h, link);
+    assert.ok(await h.page.isVisible('#room-join-password'));
+    await h.page.fill('#room-join-name', 'Bob');
+    await h.page.fill('#room-join-password', 'wrong password');
+    await h.page.click('#room-join-submit');
+    await h.page.waitForSelector('#room-waiting:not([hidden])');
+    await h.page.waitForFunction(() => document.getElementById('room-waiting-status')?.textContent?.startsWith('Waiting for'));
+    assert.ok(await h.page.isHidden('#room-chat'));
+    assert.ok(await h.page.isHidden('#room-destroy'));
+    assert.ok(await h.page.isDisabled('#room-text'));
+    assert.ok(await h.page.isDisabled('#room-send'));
+    assert.ok(!(await h.page.textContent('#room-waiting'))?.includes('Private garden'));
+    assert.ok(await h.page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), 'waiting screen fits the viewport');
+    const pending = await h.page.evaluate(() => {
+      for (const value of Object.values(sessionStorage)) {
+        const s = JSON.parse(value) as { member?: string; slot?: number; roster?: string | null; chain?: unknown };
+        if (s.member) return s;
+      }
+      throw new Error('no pending session');
+    });
+    assert.equal(pending.roster, null);
+    assert.equal(pending.chain, null);
+    const headers = { 'Nullbin-Member-Token': pending.member! };
+    const base = `${apiOrigin}/api/v1/rooms/${roomID}`;
+    assert.equal((await h.context.request.delete(base, { headers })).status(), 404, 'server denies self-destruct');
+    assert.equal((await h.context.request.post(`${base}/members/${pending.slot}/admit`, { headers: { 'Nullbin-Owner-Token': pending.member! } })).status(), 404, 'pending visitor cannot approve themselves');
+    const announcement = h.sent.find((s) => s.method === 'POST' && s.path.endsWith('/records'))!.body!;
+    assert.equal((await h.context.request.post(`${base}/records`, { headers: { ...headers, 'Content-Type': 'application/octet-stream' }, data: announcement })).status(), 201, 'lost announcement reply can be retried');
+    const changed = Buffer.from(announcement);
+    changed[changed.length - 1] = changed[changed.length - 1]! ^ 1;
+    assert.equal((await h.context.request.post(`${base}/records`, { headers: { ...headers, 'Content-Type': 'application/octet-stream' }, data: changed })).status(), 403, 'server denies further records');
+
+    assert.equal(await h.page.evaluate(() => (window as unknown as { __chatRevealed: boolean }).__chatRevealed), false, 'chat never appeared before reload');
+    await h.page.reload();
+    await h.page.waitForSelector('#room-waiting:not([hidden])');
+    assert.ok(await h.page.isHidden('#room-chat'), 'reload cannot skip admission');
+    held.resolve();
+    await a.page.unrouteAll({ behavior: 'wait' });
+    await h.page.waitForSelector('#problem:not([hidden])', { timeout: 45000 });
+    assert.equal(await h.page.textContent('#problem-title'), 'You weren’t let in');
+    assert.equal(await h.page.evaluate(() => (window as unknown as { __chatRevealed: boolean }).__chatRevealed), false, 'chat never appeared, even for one frame');
+    assert.equal(await h.page.evaluate(() => sessionStorage.length), 0);
+    assert.ok(await a.page.isVisible('#room-chat'), 'failed self-destruct left the real room open');
+    await h.check(/status of 404/);
+    await h.context.close();
+  }
+  // A successful admission whose reply is lost must recover across an
+  // owner reload, without exposing the chat before the signed admit.
+  await a.page.click('#room-invite-open');
+  await a.page.fill('#room-invite-label', 'Cleo');
+  await a.page.click('#room-invite-create');
+  await a.page.waitForSelector('#room-invite-result:not([hidden])');
+  const goodLink = (await a.page.textContent('#room-invite-link'))!;
+  await a.page.click('#room-invite-close');
+  let approvals = 0;
+  await a.page.route('**/members/*/admit', async (route) => {
+    const response = await route.fetch();
+    if (++approvals === 1) await route.fulfill({ status: 503, body: '{"error":"reply lost"}', contentType: 'application/json' });
+    else await route.fulfill({ response });
+  });
+  const good = await open();
+  t.after(() => good.context.close());
+  await goto(good, goodLink);
+  await good.page.fill('#room-join-name', 'Cleo');
+  await good.page.fill('#room-join-password', 'correct horse battery');
+  const lostReply = a.page.waitForResponse((r) => r.url().endsWith('/admit') && r.status() === 503);
+  await good.page.click('#room-join-submit');
+  await lostReply;
+  assert.ok(await good.page.isHidden('#room-chat'), 'a server promotion alone does not reveal the chat');
+  await a.page.reload();
+  await good.page.waitForSelector('#room-chat:not([hidden])', { timeout: 45000 });
+  assert.ok(approvals >= 2, 'owner retried the same admission after reloading');
+  await good.page.fill('#room-text', 'Admission recovered');
+  await good.page.press('#room-text', 'Enter');
+  await a.page.waitForFunction(() => document.getElementById('room-messages')?.textContent?.includes('Admission recovered'), undefined, { timeout: 30000 });
+  await good.check();
+  await a.check(/status of 503/);
 });
 
 test('the menu: one link per service, the current one marked; phones get a full-page menu', async () => {

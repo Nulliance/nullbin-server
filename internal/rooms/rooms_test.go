@@ -407,7 +407,13 @@ func TestAnyMemberCanSelfDestructButNotOthers(t *testing.T) {
 		t.Fatalf("a removed member destroys: %v", err)
 	}
 	_ = n2
-	// A member can.
+	// Only after the owner approves the pending member.
+	if _, err := s.Post(c.ID, m, record(100, 1)); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Admit(c.ID, c.OwnerToken, 1); err != nil {
+		t.Fatal(err)
+	}
 	if err := s.Destroy(c.ID, m); err != nil {
 		t.Fatal(err)
 	}

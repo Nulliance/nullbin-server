@@ -17,6 +17,7 @@
 
 import {
   ApiError,
+  admitMember,
   createInvite,
   createRoom,
   destroyRoom,
@@ -580,7 +581,7 @@ function joinFlow(sodium: Sodium, id: string, roomKey: Uint8Array, inviteToken: 
     if (opens === null) {
       done();
       form.removeAttribute('aria-busy');
-      error.textContent = 'You’re in, but the chat could not be reached to check the invite. Press Join to try again, and keep this tab open: the invite is used up.';
+      error.textContent = 'The chat could not be reached to check the invite. Press Join to try again, and keep this tab open: the invite is used up.';
       show(error);
       return;
     }
@@ -721,7 +722,6 @@ const initial = (name: string) => (Array.from(name.trim())[0] ?? '?').toUpperCas
 const DIALOGS = ['room-invite-dialog', 'room-members-dialog', 'room-destroy-dialog'];
 
 function openChat(sodium: Sodium, id: string, session: Session): void {
-  document.body.classList.add('nb-in-room');
   /**
    * For the creator: whether a join proves it came from the invite link for
    * its place (and, in a chat with a password, that it knew the password),
@@ -739,12 +739,28 @@ function openChat(sodium: Sodium, id: string, session: Session): void {
       if (pwKey) sodium.memzero(pwKey);
     }
   };
-  reveal(el('room-chat'));
+  // A transport token is only a pending place. Keep the conversation and
+  // all its controls hidden until the creator's signed admit is verified.
+  const chat = el('room-chat');
+  const waiting = el('room-waiting');
+  const waitingStatus = el('room-waiting-status');
+  show(chat, false);
+  if (session.slot === 0) {
+    document.body.classList.add('nb-in-room');
+    reveal(chat);
+  } else {
+    document.body.classList.remove('nb-in-room');
+    el('room').setAttribute('aria-labelledby', 'room-waiting-title');
+    waitingStatus.textContent = 'The person who invited you checks your invite while the chat is open in their tab. Keep this tab open.';
+    reveal(waiting);
+    el('room-waiting-title').focus();
+  }
   const roomKey = unb64(sodium, session.key);
   const key = controlKey(sodium, roomKey);
   sodium.memzero(roomKey);
   const signSecret = unb64(sodium, session.sign);
   const signPublic = signSecret.slice(32); // an Ed25519 secret key ends with its public key
+  el('room-waiting-code').textContent = session.slot === 0 ? '' : safetyCode(sodium, signPublic);
   const boxPair = (secret: string): BoxKey => {
     const secretKey = unb64(sodium, secret);
     return { secretKey, publicKey: sodium.crypto_scalarmult_base(secretKey) };
@@ -852,6 +868,9 @@ function openChat(sodium: Sodium, id: string, session: Session): void {
     channel = null;
     for (const d of DIALOGS) el<HTMLDialogElement>(d).close();
     log.replaceChildren();
+    show(waiting, false);
+    el('room-waiting-code').replaceChildren();
+    waitingStatus.replaceChildren();
     nodes.clear();
     text.value = '';
     mode = null;
@@ -1092,7 +1111,14 @@ function openChat(sodium: Sodium, id: string, session: Session): void {
     } satisfies ControlRecord;
     admits.set(slot, record);
     try {
-      await exclusive(() => control(record));
+      await exclusive(async () => {
+        if (state.removed.has(slot)) return;
+        // The server cannot read the proof. Only this owner-authorized
+        // request, after proofOk, promotes the pending token. Do it before
+        // publishing the signed admit so the joiner is ready to chat.
+        await admitMember(id, owner!, slot);
+        if (!state.removed.has(slot)) await control(record);
+      });
       soon = true;
     } catch {
       admitting.delete(slot); // tried again on the next check
@@ -1912,10 +1938,10 @@ function openChat(sodium: Sodium, id: string, session: Session): void {
           const creator = state.members.get(0)?.name || 'the chat’s creator';
           text.placeholder = `Waiting for ${creator} to let you in…`;
           waitingSince ??= Date.now();
-          const code = safetyCode(sodium, signPublic);
           status.textContent = Date.now() - waitingSince < WAIT_HINT_MS
-            ? `Waiting for ${creator} to let you in. Their tab does it while the chat is open. Your safety code is ${code}.`
-            : `Still waiting. The creator’s tab lets people in while the chat is open there. If they say you’re in already, someone else may have used your invite: ask them to check Members for your safety code, ${code}.`;
+            ? `Waiting for ${creator} to let you in. Their tab does it while the chat is open.`
+            : 'Still waiting. The creator’s tab lets people in while the chat is open there. If they say you’re in already, someone else may have used your invite: ask them to check Members for your safety code below.';
+          waitingStatus.textContent = status.textContent;
           show(status);
         } else {
           await exclusive(rejoin); // our join announcement was lost: send it again
@@ -1944,6 +1970,7 @@ function openChat(sodium: Sodium, id: string, session: Session): void {
       } else {
         status.textContent = 'Can’t reach the server right now. Retrying…';
       }
+      if (!waiting.hidden) waitingStatus.textContent = status.textContent;
       show(status);
     }
     if (ended) return;
@@ -2017,6 +2044,13 @@ function openChat(sodium: Sodium, id: string, session: Session): void {
   updateSend();
   function unlockComposer(): void {
     if (ended) return;
+    show(waiting, false);
+    el('room').setAttribute('aria-labelledby', 'room-title');
+    document.body.classList.add('nb-in-room');
+    if (chat.hidden) {
+      reveal(chat);
+      title.focus();
+    }
     composerLocked = false;
     text.disabled = false;
     text.placeholder = 'Write a message…';
@@ -2215,7 +2249,7 @@ function initMembers(sodium: Sodium, id: string, session: Session, state: RoomSt
           m ? `${verified ? 'Verified · ' : ''}${slot === 0 ? 'Created the chat · ' : ''}${as ? `Used the invite made for ${as} · ` : ''}Code ${m.code}` :
             states?.get(slot) === 'expired' ? 'Invite expired unused' :
               state.badProof.has(slot) ? 'Joined with a link that didn’t match the invite: can’t be let in' :
-                states?.get(slot) === 'joined' ? 'Joined, not let in yet' : 'Invited, hasn’t joined yet');
+                states?.get(slot) === 'pending' || states?.get(slot) === 'joined' ? 'Waiting to be let in' : 'Invited, hasn’t joined yet');
       if (!m && state.badProof.has(slot)) detail.classList.add('nb-tone-warn');
       if (started && !announced) detail.classList.add('nb-tone-warn');
       detail.title = m ? 'Compare this code with the one they see, in person or on a call.' : '';

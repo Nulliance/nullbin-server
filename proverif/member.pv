@@ -1,6 +1,6 @@
 (* The attacker runs the server, holds the room key and has place 3's
    invite link, so it is an admitted member itself. Run with
-     proverif -lib formal/room formal/member.pv *)
+     proverif -lib proverif/room proverif/member.pv *)
 
 (* G3: only the honest joiners' keys are admitted for places 1 and 2, and
    a tab takes no other keys as theirs. *)
@@ -31,5 +31,5 @@ process
   new is3: bitstring;
   out(c, spk(sk0));
   out(c, is3);
-  ( Admit(sk0, s1, is1) | Admit(sk0, s2, is2) | Admit(sk0, s3, is3)
-  | Member(s1, is1, spk(sk0)) | Member(s2, is2, spk(sk0)) )
+  ( Admit(sk0, s1, v1, is1) | Admit(sk0, s2, v1, is2) | Admit(sk0, s3, v1, is3)
+  | Member(s1, v1, is1, spk(sk0)) | Member(s2, v1, is2, spk(sk0)) )

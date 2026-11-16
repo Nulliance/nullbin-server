@@ -1305,7 +1305,7 @@ every warning it raised. Run it longer with
 `NB_ROOM_FUZZ_ROUNDS=2000 node --test web/test/room-fuzz.test.ts`.
 The room protocol is specified in [ROOM_PROTOCOL.md](ROOM_PROTOCOL.md),
 with a [ProVerif](https://bblanche.gitlabpages.inria.fr/proverif/) model of
-its core in `formal/` (section 10 there says how to run it).
+its core in `proverif/` (section 10 there says how to run it).
 
 Browser tests need Chrome (set `CHROME_PATH` to choose one). They cover
 every feature under the real security policy, in both layouts. CI also

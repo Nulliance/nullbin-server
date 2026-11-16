@@ -359,31 +359,40 @@ only the creator's key, or a copy of a member's own keys, can.
 
 ## 10. Formal model
 
-`formal/` holds a model of the protocol's core for
+`proverif/` holds a model of the protocol's core for
 [ProVerif](https://bblanche.gitlabpages.inria.fr/proverif/) 2.05, which
 looks for attacks on an unbounded number of sessions. The attacker runs the
 server (it sees, drops, replays and reorders every record and stamps any
-place as sender) and always holds the room key. Two scenarios:
+place as sender) and always holds the room key. Three scenarios:
 
 - `outsider.pv`: the attacker holds only the room key (an unused invite).
 - `member.pv`: the attacker also holds an invite, so it is an admitted
   member that receives chains like anyone else.
+- `password.pv`: the chat has a password (v2 join proofs); the attacker
+  holds Alice's invite link, leaked before she used it, but not the
+  password.
 
 Run them with:
 
 ```bash
-proverif -lib formal/room formal/outsider.pv
-proverif -lib formal/room formal/member.pv
+proverif -lib proverif/room proverif/outsider.pv
+proverif -lib proverif/room proverif/member.pv
+proverif -lib proverif/room proverif/password.pv
 ```
 
-| Property | outsider | member |
-|---|---|---|
-| G3: only the honest joiners' keys are admitted for their places | holds | holds |
-| G3: a tab takes no other keys as an honest member's | (implied) | holds |
-| G2: a message read as X's was sent by X, to that reader | holds | holds |
-| G1: a message between two honest members stays secret | holds | holds (from non-members: the attacker member is left out of that chain here, while in the code every member gets every chain) |
-| G4: it stays secret after the reader's device is taken later | holds | holds |
-| G6: the roster key (all names) stays secret | holds | (the attacker is a member) |
+(Without a local install: build an image from `ocaml/opam` with
+`opam install proverif.2.05`, and run it with the repository mounted.)
+
+| Property | outsider | member | password |
+|---|---|---|---|
+| G3: only the honest joiners' keys are admitted for their places | holds | holds | holds, although the attacker has Alice's link |
+| G3: a tab takes no other keys as an honest member's | (implied) | holds | holds |
+| G2: a message read as X's was sent by X, to that reader | holds | holds | holds |
+| G1: a message between two honest members stays secret | holds | holds (from non-members: the attacker member is left out of that chain here, while in the code every member gets every chain) | holds |
+| G4: it stays secret after the reader's device is taken later | holds | holds | holds |
+| G6: the roster key (all names) stays secret | holds | (the attacker is a member) | holds |
+| The password stays secret | | | holds |
+| The password resists offline guessing (`weaksecret`) | | | no, as R25 says: a used link and the join made with it let anyone guess offline, one Argon2id per guess |
 
 Each file also asks whether the honest run happens (Bob reads Alice's
 message, members are admitted); ProVerif must find that it does ("false",
@@ -391,19 +400,20 @@ with a trace), or the other results would be empty. To check that the
 model can see attacks at all, each of these changes to it, made one at a
 time, makes ProVerif report one: admitting without checking the invite
 proof, accepting admits not signed by the creator, sealing to a receiving
-key from an unsigned join, keeping an old receiving key, and accepting
+key from an unsigned join, keeping an old receiving key, accepting
 messages not signed by their sender (which only a model where chains are
-shared, as here, can catch).
+shared, as here, can catch), and, in `password.pv`, a creator that checks
+proofs without the password key or accepts a v1 proof in a chat with a
+password (the link holder is then admitted).
 
-What the model leaves out: the optional password (the v2 join proof), the
-member limit and invite lifetimes, which were added after the model and
-have not been modelled (the unit and browser tests cover them); each chain
-goes to two members and carries one
-message (stepping it is modelled only for forward secrecy); the creator
-does not send; removal, receiving-key numbers, padding, schemas, record ids
-and the warnings of section 8 are not modelled (the unit tests and the room
-fuzzer, `web/test/room-fuzz.test.ts`, cover those). Primitives are ideal: a
-proof about the model is not a proof about the code.
+What the model leaves out: the member limit and invite lifetimes (enforced
+by the server and by the tabs' bookkeeping, which the unit and browser
+tests cover); each chain goes to two members and carries one message
+(stepping it is modelled only for forward secrecy); the creator does not
+send; removal, receiving-key numbers, padding, schemas, record ids and the
+warnings of section 8 are not modelled (the unit tests and the room
+fuzzer, `web/test/room-fuzz.test.ts`, cover those). Primitives are ideal,
+Argon2id included: a proof about the model is not a proof about the code.
 
 ## 11. Known limits
 

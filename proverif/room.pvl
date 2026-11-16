@@ -1,15 +1,17 @@
 (* A ProVerif model of the Null Chat protocol's core (ROOM_PROTOCOL.md):
    the creator's invites and admits, joining with an invite proof, chain key
-   deliveries and messages. Shared by member.pv and outsider.pv; run with
-     proverif -lib formal/room formal/member.pv
-     proverif -lib formal/room formal/outsider.pv
+   deliveries and messages. Shared by the scenarios; run with
+     proverif -lib proverif/room proverif/outsider.pv
+     proverif -lib proverif/room proverif/member.pv
+     proverif -lib proverif/room proverif/password.pv
 
    The attacker is the server: it controls every record (sees, drops,
    replays, reorders, stamps any place as sender) and always holds the room
    key, so control records are modelled in the clear. Places 1 and 2 are
    honest members (Alice and Bob); place 3's invite is either unused
    (outsider.pv) or in the attacker's hands, so the attacker is a member too
-   (member.pv).
+   (member.pv). In password.pv the chat has a password, and the attacker
+   holds an honest member's invite link but not the password.
 
    Abstractions: each chain goes to two members (honest ones, or the
    attacker), with one message on it (stepping the chain is modelled for
@@ -43,6 +45,13 @@ fun msgKey(bitstring): bitstring.
 fun nextKey(bitstring): bitstring.
 fun keyhash(bitstring, bitstring): bitstring.
 
+(* Argon2id of the chat's password, salted by the room: one-way. *)
+fun pwKey(bitstring): bitstring.
+
+(* Join proof labels: v1 is keyed by the invite secret alone; v2, in a chat
+   with a password, by the invite secret and the password key together. *)
+const v1, v2: bitstring.
+
 (* Record types and places. *)
 const tJoin, tAdmit, tKeys, tMsg, tName: bitstring.
 const s0, s1, s2, s3: bitstring.
@@ -58,12 +67,14 @@ event Sent(bitstring, bitstring, bitstring).    (* sender, recipient, text *)
 event Received(bitstring, bitstring, bitstring). (* reader, sender, text *)
 
 (* The creator admits one join per place, ever, and only with a valid
-   proof under that place's invite secret. The admit carries the roster key
-   sealed to the joiner's receiving key, bound to the place. *)
-let Admit(sk0: skey, j: bitstring, is: bitstring) =
+   proof under that place's proof key (the invite secret, and in a chat with
+   a password the password key too) and label. A join whose proof fails ends
+   the place: one try per invite. The admit carries the roster key sealed to
+   the joiner's receiving key, bound to the place. *)
+let Admit(sk0: skey, j: bitstring, ver: bitstring, prfk: bitstring) =
   in(c, (=j, =tJoin, kj: pkey, bj: bpkey, prf: bitstring, sigj: bitstring));
   if verify(sigj, (j, tJoin, kj, bj, prf), kj) then
-  if prf = keyhash((j, kj, bj), is) then
+  if prf = keyhash((ver, j, kj, bj), prfk) then
   event Admitted(j, kj, bj);
   let adm = (tAdmit, j, kj, seal((roster, j), bj)) in
   out(c, (s0, adm, sign((s0, adm), sk0))).
@@ -118,12 +129,12 @@ let Read(b: bitstring, skb: skey, bb: bskey, pk0: pkey) =
   else if x2 = b then ReadOn(b, skb, bb, a, ka, e2, commit).
 
 (* An honest joiner for place j: new keys, a join proving it holds the
-   invite secret, then it reads, and sends on fresh chains to anyone the
+   proof key, then it reads, and sends on fresh chains to anyone the
    creator admitted. Alice also sends the secret message, to place 2 only. *)
-let Member(j: bitstring, is: bitstring, pk0: pkey) =
+let Member(j: bitstring, ver: bitstring, prfk: bitstring, pk0: pkey) =
   new skj: skey;
   new bj: bskey;
-  let prf = keyhash((j, spk(skj), bpk(bj)), is) in
+  let prf = keyhash((ver, j, spk(skj), bpk(bj)), prfk) in
   event Joining(j, spk(skj), bpk(bj));
   out(c, (j, tJoin, spk(skj), bpk(bj), prf, sign((j, tJoin, spk(skj), bpk(bj), prf), skj)));
   (
@@ -132,5 +143,4 @@ let Member(j: bitstring, is: bitstring, pk0: pkey) =
   | (if j = s1 then Deliver(j, skj, pk0, s2, s2, secretMsg))
   ).
 
-(* Who was admitted, and who reads what, are checked in member.pv and
-   outsider.pv. *)
+(* Who was admitted, and who reads what, are checked in the scenarios. *)

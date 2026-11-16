@@ -1,6 +1,6 @@
 (* The attacker runs the server and holds the room key (any invite link
    carries it) but no invite secret: place 3's invite was never used. Run with
-     proverif -lib formal/room formal/outsider.pv *)
+     proverif -lib proverif/room proverif/outsider.pv *)
 
 (* G3: nobody but the honest joiners is admitted, for any place. *)
 query k: pkey, b: bpkey; event(Admitted(s1, k, b)) ==> event(Joining(s1, k, b)).
@@ -29,5 +29,5 @@ process
   new is2: bitstring;
   new is3: bitstring;
   out(c, spk(sk0));
-  ( Admit(sk0, s1, is1) | Admit(sk0, s2, is2) | Admit(sk0, s3, is3)
-  | Member(s1, is1, spk(sk0)) | Member(s2, is2, spk(sk0)) )
+  ( Admit(sk0, s1, v1, is1) | Admit(sk0, s2, v1, is2) | Admit(sk0, s3, v1, is3)
+  | Member(s1, v1, is1, spk(sk0)) | Member(s2, v1, is2, spk(sk0)) )

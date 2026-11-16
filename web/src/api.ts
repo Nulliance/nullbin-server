@@ -350,8 +350,8 @@ const ROOM_SLOTS = 20;
 const validSlot = (n: unknown, min: number): n is number => typeof n === 'number' && Number.isInteger(n) && n >= min && n < ROOM_SLOTS;
 
 /** Makes a single-use invite (owner only). */
-export async function createInvite(id: string, ownerToken: string): Promise<{ token: string; slot: number }> {
-  const resp = await fetch(apiURL(`/api/v1/rooms/${id}/invites`), {
+export async function createInvite(id: string, ownerToken: string, ttl: number): Promise<{ token: string; slot: number }> {
+  const resp = await fetch(apiURL(`/api/v1/rooms/${id}/invites?ttl=${ttl}`), {
     ...base, signal: AbortSignal.timeout(REQUEST_MS),
     method: 'POST',
     headers: { 'Nullbin-Owner-Token': ownerToken },

@@ -84,7 +84,7 @@ before(async () => {
     }
     frontend = createServer((req, res) => {
       const pathname = new URL(req.url ?? '/', origin).pathname;
-      const name = pathname === '/' || /^\/(p|d|r)\/[0-9a-f]{32}$/.test(pathname) ? '/index.html' : pathname;
+      const name = pathname === '/' || pathname === '/chat' || /^\/(p|d|r)\/[0-9a-f]{32}$/.test(pathname) ? '/index.html' : pathname;
       const file = files.get(name);
       for (const [k, v] of Object.entries(frontendHeaders(apiOrigin))) res.setHeader(k, v);
       res.setHeader('Cache-Control', name.startsWith('/assets/') ? 'public, max-age=31536000, immutable' : 'no-store');
@@ -1199,7 +1199,7 @@ test('Null Chat: create, invite once, chat, reply, react, edit, unsend, remove, 
   // Ada creates the room from the home page tab.
   const a = await open();
   await goto(a, `${origin}/`);
-  await a.page.click('#tab-room');
+  await a.page.click('.nb-nav [data-nav="chat"]');
   // The paste form fades out, then the room form fades in.
   await a.page.waitForSelector('#room-create-form', { state: 'visible' });
   assert.equal(await a.page.isVisible('#create-form'), false);
@@ -1386,7 +1386,7 @@ test('Null Chat security options: a password, a member limit, short invites and 
   // Ada makes a chat for two, with five-minute invites and a password.
   const a = await open();
   await goto(a, `${origin}/`);
-  await a.page.click('#tab-room');
+  await a.page.click('.nb-nav [data-nav="chat"]');
   await a.page.waitForSelector('#room-create-form', { state: 'visible' });
   await a.page.fill('#room-you', 'Ada');
   for (const bad of ['1', '21', '2.5', '']) {
@@ -1396,7 +1396,6 @@ test('Null Chat security options: a password, a member limit, short invites and 
   }
   assert.deepEqual(a.apiCalls, [], 'nothing is created with a member limit out of range');
   await a.page.fill('#room-max', '2');
-  await a.page.selectOption('#room-invite-ttl', '300');
   await a.page.check('#room-password-switch');
   await a.page.fill('#room-password', 'short');
   await a.page.click('#room-create-submit');
@@ -1410,9 +1409,12 @@ test('Null Chat security options: a password, a member limit, short invites and 
   for (const s of a.sent) assert.ok(!(s.body?.toString('latin1') ?? '').includes(PASSWORD), `${s.method} ${s.path} carries the password`);
   assert.ok(!(await a.page.evaluate(() => JSON.stringify(sessionStorage))).includes(PASSWORD), 'the password is not stored');
 
-  // An invite says it lasts five minutes and needs the password; revoking
-  // it from the same dialog stops the link at once.
-  await openInvite(a, 'Mallory');
+  // An invite made to last five minutes says so and needs the password;
+  // revoking it from the same dialog stops the link at once.
+  await a.page.click('#room-invite-open');
+  await a.page.fill('#room-invite-label', 'Mallory');
+  await a.page.selectOption('#room-invite-ttl', '300');
+  await a.page.click('#room-invite-create');
   await a.page.waitForSelector('#room-invite-result:not([hidden])');
   assert.equal(await a.page.textContent('#room-invite-ttl-text'), '5 minutes');
   assert.ok(await a.page.isVisible('#room-invite-password-note'));
@@ -1456,6 +1458,48 @@ test('Null Chat security options: a password, a member limit, short invites and 
   await b.context.close();
   await a.check();
   await a.context.close();
+});
+
+test('the menu: one link per service, the current one marked; phones get a full-page menu', async () => {
+  const h = await open();
+  await goto(h, `${origin}/chat`);
+  // /chat opens the chat form directly, with its link marked.
+  await h.page.waitForSelector('#room-create-form', { state: 'visible' });
+  assert.equal(await h.page.isVisible('#create-form'), false);
+  assert.equal(await h.page.getAttribute('.nb-nav [data-nav="chat"]', 'aria-current'), 'page');
+  assert.equal(await h.page.getAttribute('.nb-nav [data-nav="paste"]', 'aria-current'), null);
+  // Switching in place changes the address; Back switches back.
+  await h.page.click('.nb-nav [data-nav="paste"]');
+  await h.page.waitForSelector('#create-form', { state: 'visible' });
+  assert.equal(new URL(h.page.url()).pathname, '/');
+  assert.equal(await h.page.getAttribute('.nb-nav [data-nav="paste"]', 'aria-current'), 'page');
+  await h.page.goBack();
+  await h.page.waitForSelector('#room-create-form', { state: 'visible' });
+  assert.equal(new URL(h.page.url()).pathname, '/chat');
+  // The theme is a bare icon with a name for assistive technology.
+  assert.equal(await h.page.textContent('#theme-toggle'), '');
+  assert.ok(await h.page.getAttribute('#theme-toggle', 'aria-label'));
+  // Phones: the links fold into a menu that covers the page.
+  await h.page.setViewportSize({ width: 390, height: 844 });
+  assert.equal(await h.page.isVisible('.nb-nav'), false);
+  await h.page.click('#nav-menu');
+  await h.page.waitForSelector('#nav-overlay[open]');
+  assert.equal(await h.page.getAttribute('#nav-menu', 'aria-expanded'), 'true');
+  const box = await h.page.locator('#nav-overlay').boundingBox();
+  assert.ok(box && box.width >= 390 - 1 && box.height >= 844 - 1, 'the menu covers the page');
+  assert.equal(await h.page.getAttribute('#nav-overlay [data-nav="chat"]', 'aria-current'), 'page');
+  await h.page.keyboard.press('Escape');
+  await h.page.waitForSelector('#nav-overlay:not([open])', { state: 'attached' });
+  assert.equal(await h.page.getAttribute('#nav-menu', 'aria-expanded'), 'false');
+  // From a page of another kind the links simply lead to each service.
+  await h.page.setViewportSize({ width: 1280, height: 800 });
+  await goto(h, `${origin}/p/${'0'.repeat(32)}`);
+  assert.equal(await h.page.getAttribute('.nb-nav [data-nav="paste"]', 'aria-current'), 'true');
+  await h.page.click('.nb-nav [data-nav="chat"]');
+  await h.page.waitForURL(`${origin}/chat`);
+  await h.page.waitForSelector('#room-create-form', { state: 'visible' });
+  await h.check(/status of 404/);
+  await h.context.close();
 });
 
 test('Null Chat links that are incomplete, or opened in another tab, explain what to do', async () => {

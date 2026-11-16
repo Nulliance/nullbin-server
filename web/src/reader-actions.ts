@@ -23,7 +23,6 @@ function clearView(): void {
 }
 
 export function initReaderActions(text: string, url: string, shareable: boolean, attachment: CloneAttachment | null): void {
-  el('nav-new').hidden = true;
   initShareActions('view', url, shareable);
   const clone = el<HTMLButtonElement>('view-clone');
   clone.disabled = attachment !== null && !attachment.available;

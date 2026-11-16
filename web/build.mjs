@@ -219,10 +219,10 @@ await writeFile(path.join(staticDir, 'assets', cssName), cssBytes);
 if (siteOrigin !== '') await writeFile(path.join(staticDir, 'assets', previewName), previewBytes);
 const headers = frontendHeaders(apiOrigin);
 let headersFile = '/*\n' + Object.entries(headers).map(([k, v]) => `  ${k}: ${v}\n`).join('');
-for (const page of ['/', '/index.html', '/p/*', '/d/*', '/r/*', '/version.json']) headersFile += `${page}\n  Cache-Control: no-store\n`;
+for (const page of ['/', '/index.html', '/chat', '/p/*', '/d/*', '/r/*', '/version.json']) headersFile += `${page}\n  Cache-Control: no-store\n`;
 headersFile += '/assets/*\n  Cache-Control: public, max-age=31536000, immutable\n';
 await writeFile(path.join(staticDir, '_headers'), headersFile);
-await writeFile(path.join(staticDir, '_redirects'), '/p/* /index.html 200\n/d/* /index.html 200\n/r/* /index.html 200\n');
+await writeFile(path.join(staticDir, '_redirects'), '/chat /index.html 200\n/p/* /index.html 200\n/d/* /index.html 200\n/r/* /index.html 200\n');
 await writeFile(path.join(staticDir, 'version.json'), JSON.stringify({
   version,
   api_origin: apiOrigin || 'same-origin',

@@ -4,6 +4,7 @@
 import { initCreate } from './create.ts';
 import { el, show, showProblem } from './dom.ts';
 import { initDelete } from './remove.ts';
+import { initNav } from './nav.ts';
 import { initRoom, initRoomCreate } from './room.ts';
 import { initTheme } from './theme.ts';
 import { initView } from './view.ts';
@@ -44,11 +45,15 @@ const room = /^\/r\/([0-9a-f]{32})$/.exec(path);
 // A room's page starts in its narrower column, so nothing jumps once it opens.
 if (room) document.body.classList.add('nb-room-mode');
 
+const home = !misconfigured && (path === '/' || path === '/chat');
+// Every page has the menu; on the home page it also switches forms in place.
+if (!home) initNav();
+
 if (misconfigured) {
   showProblem('This copy of Nullbin is set up wrongly', 'The website is missing security headers it needs, or is shown inside another page, so it will not open or create anything. If you run this site, serve it with the headers from its build (see the README).');
-} else if (path === '/') {
+} else if (home) {
   initCreate();
-  initRoomCreate();
+  initNav(initRoomCreate(path === '/chat' ? 'chat' : 'paste'));
 } else if (room?.[1]) {
   initRoom(room[1], fragment).catch(() => showProblem('This Null Chat can’t be opened', 'Something went wrong while opening it. Try the link again.'));
 } else if (view?.[1]) {

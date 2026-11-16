@@ -159,7 +159,7 @@ Records are deduplicated by `from` and `id` (joins also by key).
 | `t` | Fields | Who may post | Accepted when |
 |---|---|---|---|
 | `join` | `key`, `box`, `name`; creator: `namekey`; others: `proof` | the joiner, at their place | signed by `key`; `box` (and `namekey`) not low-order; place 0 carries `namekey`, others do not; place not removed, no member there yet. Place 0: accepted, and must match a pinned creator key (else *conflict*). Others: a member at once if the creator already admitted that `key` (else rejected); otherwise kept waiting for an admit |
-| `room` | `name` (boxed), `ends`, `pw` (boolean), `max` (2 to 20), `ttl` (300, 900 or 3600) | creator | first one only |
+| `room` | `name` (boxed), `ends`, `pw` (boolean), `max` (2 to 20), `ttl` (300, 900 or 3600: the longest any invite may work) | creator | first one only |
 | `invite` | `slot`, `label` (boxed), `check`, `exp` (ms) | creator | first per place |
 | `admit` | `slot`, `key`, `roster`, `name` (boxed) | creator | first per place; a second with another `key` raises *conflict*; ignored for removed places; refused (*over limit*) if the places admitted and not removed, the creator's included, already reach `max` |
 | `remove` | `slot` (not 0) | creator | always (permanent) |
@@ -196,7 +196,7 @@ so its size does not depend on what was read.
 ### 7.1 Creating a room
 
 1. The creator's tab asks the server for a room (`POST /api/v1/rooms`, with
-   its member limit and invite lifetime) and gets its id, the owner token
+   its member limit and the longest invite lifetime) and gets its id, the owner token
    and the creator's member token (place 0).
 2. It generates RK, RO, NK, S_0 and B_0,0, and, if the chat has a
    password, derives PK.
@@ -208,13 +208,17 @@ so its size does not depend on what was read.
 1. The creator's tab refuses if the members and still-usable invites
    already reach `max`. It asks for an invite (`POST /{id}/invites`): the
    server, which counts the same way, returns a single-use invite token and
-   a fresh place j (never reused).
-2. It generates IS_j, stores it in its session with `exp` = now + `ttl`,
+   a fresh place j (never reused). The creator chooses this invite's
+   lifetime (300, 900 or 3600 seconds, at most the room's `ttl`), and the
+   server stops the token after it.
+2. It generates IS_j, stores it in its session with `exp` = now + that
+   lifetime,
    and posts an `invite` record for place j: label boxed under RO, `check`
    (section 5) and `exp`. If posting fails, the next attempt resends the
    same record for the same place.
 3. It shows the link (section 4). The server refuses the invite after
-   `ttl`. **Revoking** an unused invite is a removal (7.7) of its place.
+   its lifetime. **Revoking** an unused invite is a removal (7.7) of its
+   place.
 
 ### 7.3 Joining and admitting
 
@@ -437,7 +441,7 @@ short list, so comparing safety codes is the real check.
 | Receiving-key rotation / grace | 3 minutes / 2 minutes |
 | Left-out warning | after 2 minutes |
 | Stale-key and end-time slack | 10 minutes |
-| Invite lifetime | 5 minutes, 15 minutes or 1 hour (signed); joins seen 10 minutes late are refused |
+| Invite lifetime | chosen per invite: 5 minutes, 15 minutes or 1 hour (its expiry signed); joins seen 10 minutes late are refused |
 | Member limit | 2 to 20 (signed), the creator included |
 | Password | 1 to 1,024 bytes; Argon2id, moderate limits |
 | Names, labels | 40 characters (160 bytes padded) |

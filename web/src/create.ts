@@ -79,7 +79,6 @@ export function initCreate(draft?: { text: string; file: File | null }): void {
   const progress = new Progress('create');
 
   showSection('create');
-  show(el('nav-new'));
   bindResultCopy();
   if (/Mac|iPhone|iPad/.test(navigator.userAgent)) el('kbd-mod').textContent = '⌘';
   text.focus({ preventScroll: true }); // keep the page at the top, where the tabs are

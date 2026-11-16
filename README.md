@@ -1,13 +1,14 @@
 # Nullbin
 
-Share text and files with a private link. Nullbin encrypts everything in
-your browser before uploading it, so the server only ever stores data it
-cannot read. The key is the part of the link after `#`, which browsers never
-send to the server.
+Private services you can host yourself, encrypted in the browser so the
+server only ever stores data it cannot read. No accounts, no database.
 
-Passwords, file attachments, encrypted comments, expiry, and burn after
-reading are all built in, and so are **Null Chats**: temporary end-to-end
-encrypted group chats. There are no accounts and no database.
+- **Paste**: share text and files with a private link. The key is the part
+  of the link after `#`, which browsers never send to the server.
+  Passwords, file attachments, encrypted comments, expiry and burn after
+  reading are built in.
+- **Null Chat**: a temporary end-to-end encrypted group chat, kept only in
+  the server's memory, that deletes itself.
 
 ## Start here
 
@@ -18,9 +19,12 @@ encrypted group chats. There are no accounts and no database.
 | Host it for others | [Choose a setup](#choose-a-setup), then [Option A](#option-a-one-server-recommended) or [Option B](#option-b-separate-hosting) |
 | Update, check or manage my server | [Run your server](#run-your-server) |
 | Fix a problem | [Troubleshooting](#troubleshooting) |
-| Understand what is protected | [How your data is protected](#how-your-data-is-protected) |
+| Understand what is protected | [How your data is protected](#how-your-data-is-protected), then the full [threat model](THREAT_MODEL.md) |
+| Review the Null Chat protocol | [ROOM_PROTOCOL.md](ROOM_PROTOCOL.md), with its [ProVerif model](proverif/) |
 | Look up limits, settings, the API or the encryption | [Reference](#reference) |
 | Report a security problem | [SECURITY.md](SECURITY.md): email hi@jacobzymet.com, never a public issue |
+| Contribute or make a release | [CONTRIBUTING.md](CONTRIBUTING.md) |
+| See the license | [AGPL-3.0](LICENSE), and [third-party notices](THIRD_PARTY_NOTICES) |
 
 ## Using Nullbin
 
@@ -68,8 +72,9 @@ a warning above it.
 
 ### Null Chats
 
-A Null Chat is a group chat that deletes itself. Choose **Null Chat** at
-the top of the home page, enter your name, optionally a chat name, and
+A Null Chat is a group chat that deletes itself. Choose **Null Chat** in
+the menu at the top (or open `/chat`), enter your name, optionally a chat
+name, and
 choose:
 
 - **Self-destructs after**: 5 minutes to 1 week.
@@ -78,9 +83,6 @@ choose:
   a one-to-one chat stays one-to-one even if the server is tampered with.
   Invites that can still be used count, as do members; removed people,
   revoked and expired invites do not.
-- **Invite links work for**: 5 minutes, 15 minutes (the default) or 1 hour.
-  The server refuses an invite after that, and the creator's tab refuses a
-  join it first sees more than ten minutes after, whatever the server does.
 - **Password** (optional): joining also takes it, so a leaked invite link
   alone gets nobody in. Send it a different way from the links. It never
   leaves your browser: the tab keeps only a key derived from it (Argon2id).
@@ -89,8 +91,11 @@ choose:
 Then **Create Null Chat**.
 
 - **Invite** people one at a time: type who the invite is for, then copy the
-  link and send it to that person. Each invite works once, and only for the
-  time chosen: once used, expired or revoked, the link opens nothing.
+  link and send it to that person. Choose how long the link works: 5
+  minutes, 15 minutes (the default) or an hour. Each invite works once, and
+  only for that long: once used, expired or revoked, the link opens nothing.
+  The server refuses an expired invite, and your tab refuses a join it first
+  sees more than ten minutes after the expiry, whatever the server does.
   **Revoke this invite** (in the invite window, or **Revoke invite** in
   Members) stops a link at once. Keep the room open
   while people join: your tab lets them in, and until it does they see that
@@ -1131,15 +1136,18 @@ the room still exists):
 
 - `POST /api/v1/rooms` with `{"expires_in": 300 | 1800 | 3600 | 10800 | 43200 | 86400 | 259200 | 604800}`,
   and optionally `"max_members"` (2 to 20, default 20) and `"invite_ttl"`
-  (300, 900 or 3600 seconds, default 3600), returns
+  (300, 900 or 3600 seconds, default 3600: the longest any invite may
+  work), returns
   `201` with `id`, `owner_token`, `member_token` and `slot` 0 (the creator);
   `429` when this client network already has 10 live rooms.
-- `POST /{id}/invites` (with `Nullbin-Owner-Token`) returns `201` with a
+- `POST /{id}/invites?ttl=300|900|3600` (with `Nullbin-Owner-Token`;
+  `ttl`, how long this invite works, is optional and at most the room's
+  `invite_ttl`, which is also its default) returns `201` with a
   single-use `invite_token` and its `slot`; `409` when 20 slots are used, or
   when members and still-usable invites reach `max_members`.
 - `POST /{id}/join` (with `Nullbin-Invite-Token`) returns `200` with a new
   `member_token` and the `slot`; `410` if that invite was used, revoked
-  (removed) or is older than the room's `invite_ttl`.
+  (removed) or older than its `ttl`.
 - `POST /{id}/records` (with `Nullbin-Member-Token`, `application/octet-stream`,
   41 bytes to 16 KiB) stores one record and stamps it with the sender's slot.
   `409` after 1,000 records or 4 MiB, or when the creator's network holds
@@ -1234,7 +1242,7 @@ break the security policy. Cloudflare's guides:
 
 Serve the output folder from the site root, over HTTPS, and:
 
-- serve `index.html` for `/p/<id>`, `/d/<id>` and `/r/<id>`, without
+- serve `index.html` for `/chat`, `/p/<id>`, `/d/<id>` and `/r/<id>`, without
   changing the URL;
 - send the headers in `_headers`, including the Content-Security-Policy.
   Without the framing and isolation headers the site refuses to open or

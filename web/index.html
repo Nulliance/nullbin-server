@@ -9,15 +9,15 @@
 <meta name="google" content="notranslate">
 <meta name="color-scheme" content="light dark">
 <title>Nullbin</title>
-<!-- Link previews in chat apps. The same for every page: the server never
-     sees what a paste contains. The build adds the preview image when it
+<!-- Link previews in chat apps. The same for every page (pastes, chat
+     invites): the server never sees what a link holds. The build adds the preview image when it
      knows the site's address (NULLBIN_SITE_ORIGIN). -->
-<meta name="description" content="Open this link to see the paste. Anyone you share the full link with can open it too.">
+<meta name="description" content="Something was shared with you privately on Nullbin. It is encrypted in your browser: only people with the full link can open it.">
 <meta name="theme-color" content="#2f5bd3">
 <meta property="og:type" content="website">
 <meta property="og:site_name" content="Nullbin">
-<meta property="og:title" content="Encrypted paste on Nullbin">
-<meta property="og:description" content="Open this link to see the paste. Anyone you share the full link with can open it too.">
+<meta property="og:title" content="Shared privately on Nullbin">
+<meta property="og:description" content="Something was shared with you privately on Nullbin. It is encrypted in your browser: only people with the full link can open it.">
 <meta name="twitter:card" content="summary">
 <link rel="icon" type="image/png" sizes="64x64" href="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAEAAAABABAMAAABYR2ztAAAAMFBMVEX////+/v79/f38/Pz7+/v29vbb29u7u7uBgYFBQUEkJCQICAgDAwMCAgIBAQEAAACIBOOzAAADN0lEQVR42u1V32sUVxT+7t2N0dbN3mgsLavJXZe+2CbZEi19kDUogUKpjVKo+CDS+lrIQ82/0JeCreKD9MFiFfWlwR+IoMZWEWTbZpKJ9EGb7mQXfZDdzJ0sdGucuacPszM7MxL/APE+zbl8c853v3Pudxnh5YvjNWCpArCYUGTwYifSHEqAVl+Vp1OaYgD96Nvv7DByn33ZPW3HAG4La90wMk6y4mkjHaVQuzfmhKx17sbuuwMydgr1t2tcUu3AblxZ+HyXiAGksnPKCtJdLHWNmYhycFfyGD1mBMGewjsuUSyDrgFBBbXw65bJeSBKcvm+hjXYVqp2qXj/ZioutfWwH6pB7TOYmW/MRC/YosTylPZFz1x+PNILREnqlXGBdFsp4/vt/lckg9ZXVdg1Pbv+iJloN18igIgBgH7vZzXCEC9h/CCPgq25bRNR41pft18rStLukoxcpQBUy0M8OVH0/lx1H8OQUoDOmXpyPgHQ3lXWyyEUAOq5XBv2tztKMvLGGHytzb9kbW8qATDvlHYwgjUsAfZH/4fOhuRU20IwDVXPwtt2XO+oBtwCHZ/v23T7+bhgb3jktdKbfqn4+yHA/a+r2106LFPr3I7OUR34DHEsCskI6JnL7HeSN2u2vPOrJgRA8DafoZBCCGCWKFgQ0MSdP8WDAZEA6Jx5T0pglui3ajnf3CsTAOq52/xUyHcdetNy5/QeJ3m7l29ltiqIDxiKGDzTUSFUcvH30nBto9fLNezprDOABIA2LyoJgAHKKecfHEolADpzlt/iPqD+r81fcBhnOssJYPBg1X/qmawlAdXyzsl5gPHPBC5mIVUC4OXMZQmANYUAaz4pRYyIiIhmWml/Ro2JUSC1ruMilAaAhcGjpbf9AREA+j9piliJRuHHE4E0wgKyBSvqfOTReYy0b4F9joG/Nd1xMgKRcX18Q/5gw5+rVgqpiJERcehtF67YA2N+Bc3yGDpSjZnrP+fSoi/4yX2WLoyeNihawpgY7UPgTPRoArEKlAaQqh/4OmhO38etj+aLsRIzJ/HFVJhUE3kxwwbplVNTkaR1bSQAVCGvsrrlMwLNbJSrPyrslXh5/wdIjI5gLqYs0gAAAABJRU5ErkJggg==">
 <link rel="stylesheet" href="/assets/app.css" integrity="__CSS_INTEGRITY__">
@@ -57,6 +57,7 @@
   <symbol id="i-edit" viewBox="0 0 24 24"><path d="M4 20h4l10.5-10.5-4-4L4 16z"/><path d="M13.5 6.5l4 4"/></symbol>
   <symbol id="i-chevron" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></symbol>
   <symbol id="i-link" viewBox="0 0 24 24"><path d="M10 13.5a4.5 4.5 0 0 0 6.4.5l3-3a4.5 4.5 0 0 0-6.4-6.4l-1.2 1.2"/><path d="M14 10.5a4.5 4.5 0 0 0-6.4-.5l-3 3a4.5 4.5 0 0 0 6.4 6.4l1.2-1.2"/></symbol>
+  <symbol id="i-menu" viewBox="0 0 24 24"><path d="M4 7h16M4 12h16M4 17h16"/></symbol>
   <symbol id="i-qr" viewBox="0 0 24 24"><path d="M3 3h6v6H3zM15 3h6v6h-6zM3 15h6v6H3zM15 15h3v3h3v3h-6zM12 3v9H3M12 15v6M15 12h6M21 12v3"/></symbol>
 </svg>
 
@@ -65,10 +66,30 @@
 <header class="nb-top">
   <div class="nb-shell nb-top-row">
     <a class="nb-brand" href="/" aria-label="Nullbin home">Nullbin</a>
-    <nav class="nb-top-actions" aria-label="Main navigation"><a id="nav-new" href="/" class="btn nb-btn-secondary">New paste</a>
-    <button id="theme-toggle" type="button" class="btn nb-icon-btn" aria-pressed="false" aria-label="Dark theme"><svg class="nb-i" aria-hidden="true"><use id="theme-icon" href="#i-moon"/></svg><span>Theme</span></button></nav>
+    <nav class="nb-nav" aria-label="Services">
+      <a class="nb-nav-link" data-nav="paste" href="/"><svg class="nb-i" aria-hidden="true"><use href="#i-new"/></svg><span>Paste</span></a>
+      <a class="nb-nav-link" data-nav="chat" href="/chat"><svg class="nb-i" aria-hidden="true"><use href="#i-chat"/></svg><span>Null Chat</span></a>
+    </nav>
+    <div class="nb-top-end">
+      <button id="theme-toggle" type="button" class="nb-bare-btn" aria-pressed="false" aria-label="Dark theme"><svg class="nb-i" aria-hidden="true"><use id="theme-icon" href="#i-moon"/></svg></button>
+      <button id="nav-menu" type="button" class="nb-bare-btn nb-menu-btn" aria-haspopup="dialog" aria-controls="nav-overlay" aria-expanded="false" aria-label="Menu"><svg class="nb-i" aria-hidden="true"><use href="#i-menu"/></svg></button>
+    </div>
   </div>
 </header>
+
+<!-- Phones: the services in a full-page menu. -->
+<dialog id="nav-overlay" class="nb-nav-overlay" aria-label="Menu">
+  <div class="nb-shell nb-top-row">
+    <a class="nb-brand" href="/" aria-label="Nullbin home">Nullbin</a>
+    <div class="nb-top-end">
+      <button id="nav-close" type="button" class="nb-bare-btn" aria-label="Close menu"><svg class="nb-i" aria-hidden="true"><use href="#i-x"/></svg></button>
+    </div>
+  </div>
+  <nav class="nb-shell nb-overlay-links" aria-label="Services">
+    <a class="nb-nav-link" data-nav="paste" href="/"><svg class="nb-i" aria-hidden="true"><use href="#i-new"/></svg><span><strong>Paste</strong><small>Share text and files, encrypted in your browser</small></span></a>
+    <a class="nb-nav-link" data-nav="chat" href="/chat"><svg class="nb-i" aria-hidden="true"><use href="#i-chat"/></svg><span><strong>Null Chat</strong><small>A private group chat that deletes itself</small></span></a>
+  </nav>
+</dialog>
 
 <main id="main" class="nb-shell nb-main" tabindex="-1">
   <noscript>
@@ -76,19 +97,13 @@
   </noscript>
   <p id="loading" class="nb-meta nb-loading" role="status"><span class="spinner-border spinner-border-sm" aria-hidden="true"></span>Loading</p>
 
-  <!-- New paste or Null Chat: one studio. A switch picks what to make; both
+  <!-- New paste or Null Chat: one studio. The menu picks what to make; both
        share the same frame, with the work on the left and its settings and
        action in a panel on the right (under it on narrow screens). -->
   <section id="create" aria-labelledby="create-title" hidden>
     <h1 id="create-title" class="visually-hidden">Create</h1>
-    <div class="nb-studio-head">
-      <div class="nb-mode-tabs" role="tablist" aria-label="What to create">
-        <button id="tab-paste" type="button" class="nb-tab" role="tab" aria-selected="true" aria-controls="create-form"><svg class="nb-i" aria-hidden="true"><use href="#i-new"/></svg><span>Paste</span></button>
-        <button id="tab-room" type="button" class="nb-tab" role="tab" aria-selected="false" aria-controls="room-create-form" tabindex="-1"><svg class="nb-i" aria-hidden="true"><use href="#i-users"/></svg><span>Null Chat</span></button>
-      </div>
-    </div>
 
-    <form id="room-create-form" class="nb-studio" role="tabpanel" aria-labelledby="tab-room" novalidate hidden>
+    <form id="room-create-form" class="nb-studio" aria-label="New Null Chat" novalidate hidden>
       <div class="nb-studio-main nb-card nb-room-intro">
         <h2 class="nb-room-title">Start a Null Chat</h2>
         <p class="nb-room-lede">An end-to-end encrypted group chat. Messages are encrypted in your browser, so only the people you invite can read them, not even the server. When time’s up, it deletes itself.</p>
@@ -107,7 +122,7 @@
           <li><span class="nb-opt-icon"><svg class="nb-i" aria-hidden="true"><use href="#i-lock"/></svg></span><span><strong>End-to-end encrypted.</strong> The server only passes along messages it can’t read.</span></li>
           <li><span class="nb-opt-icon"><svg class="nb-i" aria-hidden="true"><use href="#i-refresh"/></svg></span><span><strong>Forward secrecy.</strong> Every message has its own key, deleted once it’s used.</span></li>
           <li><span class="nb-opt-icon"><svg class="nb-i" aria-hidden="true"><use href="#i-check"/></svg></span><span><strong>Safety codes.</strong> Compare codes with each other to be sure no one is listening in, the server included.</span></li>
-          <li><span class="nb-opt-icon"><svg class="nb-i" aria-hidden="true"><use href="#i-user-plus"/></svg></span><span><strong>Invite only.</strong> Each invite link lets one person in, for a short time you choose, and you can revoke it.</span></li>
+          <li><span class="nb-opt-icon"><svg class="nb-i" aria-hidden="true"><use href="#i-user-plus"/></svg></span><span><strong>Invite only.</strong> Each invite link lets one person in, works for as long as you choose (5 minutes to an hour), and can be revoked.</span></li>
           <li><span class="nb-opt-icon"><svg class="nb-i" aria-hidden="true"><use href="#i-flame"/></svg></span><span><strong>Never on disk.</strong> Chats live only in the server’s memory, so a restart also ends them.</span></li>
           <li><span class="nb-opt-icon"><svg class="nb-i" aria-hidden="true"><use href="#i-key"/></svg></span><span><strong>Tied to this tab.</strong> If you close it, you’ll need a new invite to get back in.</span></li>
         </ul>
@@ -134,15 +149,6 @@
           </div>
           <span id="room-max-help" class="visually-hidden">From 2 to 20. Everyone’s app refuses anyone past this limit, not only the server.</span>
         </div>
-        <div class="nb-panel-field">
-          <label for="room-invite-ttl"><svg class="nb-i" aria-hidden="true"><use href="#i-user-plus"/></svg>Invite links work for</label>
-          <select id="room-invite-ttl" class="form-select" aria-describedby="room-invite-ttl-help">
-            <option value="300">5 minutes</option>
-            <option value="900" selected>15 minutes</option>
-            <option value="3600">1 hour</option>
-          </select>
-          <span id="room-invite-ttl-help" class="visually-hidden">An invite nobody used by then stops working, so a link that leaks later lets nobody in.</span>
-        </div>
         <div class="nb-opts">
           <div class="nb-opt">
             <label class="nb-opt-row"><span class="nb-opt-icon"><svg class="nb-i" aria-hidden="true"><use href="#i-key"/></svg></span><span class="nb-opt-text"><span id="room-password-label" class="nb-opt-title">Password</span><span id="room-password-help" class="nb-opt-desc">Invites also need it, so a leaked link alone gets nobody in.</span></span><input id="room-password-switch" class="nb-switch" type="checkbox" role="switch" aria-labelledby="room-password-label" aria-describedby="room-password-help" aria-controls="room-password-row"></label>
@@ -164,7 +170,7 @@
       </div>
     </form>
 
-    <form id="create-form" class="nb-studio" role="tabpanel" aria-labelledby="tab-paste" novalidate>
+    <form id="create-form" class="nb-studio" aria-label="New paste" novalidate>
       <div id="error-banner" class="nb-note nb-tone-danger nb-studio-note" role="alert" tabindex="-1" hidden></div>
 
       <!-- The editor comes first, so keyboard and reading order run from the
@@ -462,7 +468,7 @@
         </div>
         <div class="nb-chat-tools">
           <button id="room-invite-open" type="button" class="btn nb-btn-primary nb-chat-invite" aria-haspopup="dialog" aria-controls="room-invite-dialog" hidden><svg class="nb-i" aria-hidden="true"><use href="#i-user-plus"/></svg><span>Invite</span></button>
-          <button id="room-destroy" type="button" class="nb-chat-tool nb-chat-tool-danger" aria-haspopup="dialog" aria-controls="room-destroy-dialog" title="Self-destruct this chat" aria-label="Self-destruct this chat"><svg class="nb-i" aria-hidden="true"><use href="#i-flame"/></svg></button>
+          <button id="room-destroy" type="button" class="btn nb-btn-secondary nb-chat-destroy" aria-haspopup="dialog" aria-controls="room-destroy-dialog" title="End this chat for everyone, now"><svg class="nb-i" aria-hidden="true"><use href="#i-flame"/></svg><span>Self-destruct</span></button>
         </div>
       </header>
       <ol id="room-messages" class="nb-chat-log" aria-label="Messages" aria-live="polite"></ol>
@@ -554,6 +560,13 @@
   <form id="room-invite-form" novalidate>
     <label for="room-invite-label" class="form-label">Who is this invite for?</label>
     <input id="room-invite-label" class="form-control" maxlength="40" autocomplete="off" spellcheck="false" autocorrect="off" autocapitalize="off" placeholder="For example, Alex">
+    <label for="room-invite-ttl" class="form-label mt-3">Link works for</label>
+    <select id="room-invite-ttl" class="form-select" aria-describedby="room-invite-ttl-help">
+      <option value="300">5 minutes</option>
+      <option value="900" selected>15 minutes</option>
+      <option value="3600">1 hour</option>
+    </select>
+    <p id="room-invite-ttl-help" class="nb-meta mt-1 mb-0">Unused by then, it stops working: a link that leaks later lets nobody in.</p>
     <button id="room-invite-create" type="submit" class="btn nb-btn-primary w-100 mt-3">Create invite link</button>
   </form>
   <div id="room-invite-result" hidden>

@@ -157,7 +157,19 @@ func (s *Server) handleRoomInvite(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	token, n, err := s.cfg.Rooms.Invite(id, r.Header.Get(OwnerTokenHeader))
+	// Each invite may choose its own lifetime (?ttl=300, 900 or 3600
+	// seconds), up to the room's longest; without it, that longest.
+	var ttl time.Duration
+	if v := r.URL.Query().Get("ttl"); v != "" {
+		n, err := strconv.ParseInt(v, 10, 64)
+		d, ok := rooms.InviteTTLs[n]
+		if err != nil || !ok {
+			writeError(w, http.StatusBadRequest, "ttl must be one of 300, 900, 3600")
+			return
+		}
+		ttl = d
+	}
+	token, n, err := s.cfg.Rooms.InviteFor(id, r.Header.Get(OwnerTokenHeader), ttl)
 	if err != nil {
 		s.roomError(w, "room invite", err)
 		return

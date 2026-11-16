@@ -77,7 +77,7 @@ var InviteTTLs = map[int64]time.Duration{
 type Options struct {
 	Expires    time.Duration // how long the room lives
 	MaxMembers int           // MinMembers to MaxSlots, the creator included
-	InviteTTL  time.Duration // how long an unused invite works: one of InviteTTLs
+	InviteTTL  time.Duration // the longest an unused invite may work: one of InviteTTLs
 }
 
 var (
@@ -120,6 +120,7 @@ type slot struct {
 	invite  [sha256.Size]byte // hash of the invite token (kept after use)
 	member  [sha256.Size]byte // hash of the member token, once joined
 	invited time.Time         // when the invite was made
+	ttl     time.Duration     // how long it works: the creator's choice for this invite
 }
 
 // Record is one stored encrypted record and the slot that posted it.
@@ -131,7 +132,8 @@ type Record struct {
 type room struct {
 	expires time.Time
 	// The creator's choices: at most this many places open at once (the
-	// creator's included), and how long an invite works.
+	// creator's included), and the longest any invite may work (each invite
+	// chooses its own, up to that).
 	maxMembers int
 	inviteTTL  time.Duration
 	owner      [sha256.Size]byte
@@ -379,15 +381,25 @@ func (s *Store) open(r *room, i int) bool {
 	case slotJoined:
 		return true
 	case slotInvited:
-		return s.now().Before(r.slots[i].invited.Add(r.inviteTTL))
+		return s.now().Before(r.slots[i].invited.Add(r.slots[i].ttl))
 	}
 	return false
 }
 
 // Invite reserves a free slot for one new member and returns its
-// single-use invite token. A room at its member limit (counting members
-// and invites that still work) gets ErrRoomFull.
+// single-use invite token, which works for the room's longest invite
+// lifetime. A room at its member limit (counting members and invites that
+// still work) gets ErrRoomFull.
 func (s *Store) Invite(id, ownerToken string) (token string, n int, err error) {
+	return s.InviteFor(id, ownerToken, 0)
+}
+
+// InviteFor is Invite with the invite's own lifetime: one of InviteTTLs, at
+// most the room's longest (0 means that longest).
+func (s *Store) InviteFor(id, ownerToken string, ttl time.Duration) (token string, n int, err error) {
+	if ttl < 0 || ttl > InviteTTL {
+		return "", 0, ErrInvalid
+	}
 	owner := present(ownerToken)
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -401,13 +413,19 @@ func (s *Store) Invite(id, ownerToken string) (token string, n int, err error) {
 			used++
 		}
 	}
+	if ttl == 0 {
+		ttl = r.inviteTTL
+	}
+	if ttl > r.inviteTTL {
+		return "", 0, ErrInvalid
+	}
 	if used >= r.maxMembers {
 		return "", 0, ErrRoomFull
 	}
 	for i := 1; i < MaxSlots; i++ {
 		if r.slots[i].state == slotFree {
 			token = newToken()
-			r.slots[i] = slot{state: slotInvited, invite: hash(token), invited: s.now()}
+			r.slots[i] = slot{state: slotInvited, invite: hash(token), invited: s.now(), ttl: ttl}
 			return token, i, nil
 		}
 	}
@@ -437,7 +455,7 @@ func (s *Store) Join(id, inviteToken string) (memberToken string, n int, err err
 	if r.slots[found].state != slotInvited {
 		return "", 0, ErrInviteUsed
 	}
-	if !s.now().Before(r.slots[found].invited.Add(r.inviteTTL)) {
+	if !s.now().Before(r.slots[found].invited.Add(r.slots[found].ttl)) {
 		return "", 0, ErrInviteExpired
 	}
 	memberToken = newToken()
@@ -528,7 +546,7 @@ func (s *Store) Members(id, ownerToken string) (map[int]MemberState, error) {
 		switch sl.state {
 		case slotInvited:
 			out[i] = StateInvited
-			if !s.now().Before(sl.invited.Add(r.inviteTTL)) {
+			if !s.now().Before(sl.invited.Add(sl.ttl)) {
 				out[i] = StateExpired
 			}
 		case slotJoined:

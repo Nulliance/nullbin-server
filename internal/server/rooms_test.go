@@ -304,3 +304,19 @@ func TestRoomCreateOptions(t *testing.T) {
 		t.Fatalf("second invite in a one-to-one room: %d", resp.StatusCode)
 	}
 }
+
+func TestRoomInviteLifetimeOverHTTP(t *testing.T) {
+	e := roomEnv(t)
+	c := createRoom(t, e)
+	owner := map[string]string{"Nullbin-Owner-Token": c.OwnerToken}
+	for _, bad := range []string{"60", "abc", "-300", "7200"} {
+		if resp, _ := e.do(t, "POST", "/api/v1/rooms/"+c.ID+"/invites?ttl="+bad, nil, owner); resp.StatusCode != http.StatusBadRequest {
+			t.Errorf("ttl=%s: %d", bad, resp.StatusCode)
+		}
+	}
+	for _, ok := range []string{"300", "900", "3600"} {
+		if resp, data := e.do(t, "POST", "/api/v1/rooms/"+c.ID+"/invites?ttl="+ok, nil, owner); resp.StatusCode != http.StatusCreated {
+			t.Errorf("ttl=%s: %d %s", ok, resp.StatusCode, data)
+		}
+	}
+}

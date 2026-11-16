@@ -269,38 +269,30 @@ function newSession(sodium: Sodium, roomKey: Uint8Array, slot: number, member: s
 
 // --- The home page tab ---
 
-export function initRoomCreate(): void {
-  const tabs = [el<HTMLButtonElement>('tab-paste'), el<HTMLButtonElement>('tab-room')];
-  const panels = [el('create-form'), el('room-create-form')];
-  let selected = 0;
+/**
+ * The home page's chat form. The page shows the paste form at "/" and this
+ * one at "/chat"; the returned function switches between them in place
+ * (the menu calls it), the old form fading out and the new one in.
+ */
+export function initRoomCreate(start: 'paste' | 'chat'): (service: 'paste' | 'chat') => void {
+  const panels = { paste: el('create-form'), chat: el('room-create-form') };
+  let selected: 'paste' | 'chat' = 'paste';
   let swaps = 0;
-  const select = (i: number, focus: boolean) => {
-    if (i === selected) {
-      if (focus) tabs[i]!.focus();
-      return;
-    }
-    const from = panels[selected]!;
-    selected = i;
-    tabs.forEach((t, j) => {
-      t.setAttribute('aria-selected', String(i === j));
-      t.tabIndex = i === j ? 0 : -1;
-    });
-    // The old panel fades out, then the new one fades in. Switching back
-    // while that runs wins at once.
+  const select = (service: 'paste' | 'chat') => {
+    if (service === selected) return;
+    const from = panels[selected];
+    selected = service;
+    // Switching back while the fade runs wins at once.
     swaps++;
     const mine = swaps;
-    swap(from, panels[i]!, () => (mine === swaps ? mine : -1));
-    if (focus) tabs[i]!.focus();
+    swap(from, panels[service], () => (mine === swaps ? mine : -1));
   };
-  tabs.forEach((t, i) => {
-    t.addEventListener('click', () => select(i, false));
-    t.addEventListener('keydown', (e) => {
-      if (e.key === 'ArrowRight' || e.key === 'ArrowLeft') {
-        e.preventDefault();
-        select((i + 1) % 2, true);
-      }
-    });
-  });
+  if (start === 'chat') {
+    // Shown at once on load, with nothing fading.
+    show(panels.paste, false);
+    show(panels.chat);
+    selected = 'chat';
+  }
 
   const form = el<HTMLFormElement>('room-create-form');
   const you = el<HTMLInputElement>('room-you');
@@ -372,14 +364,15 @@ export function initRoomCreate(): void {
     }
     const expiresIn = Number(el<HTMLSelectElement>('room-expiry').value);
     const maxMembers = maxInput.value.trim() === '' ? NaN : Number(maxInput.value);
-    const inviteTtl = Number(el<HTMLSelectElement>('room-invite-ttl').value);
+    // Each invite chooses how long it works when it is made; this is the
+    // longest any of them may, signed with the chat's settings.
+    const inviteTtl = 3600;
     if (!Number.isInteger(maxMembers) || maxMembers < MIN_MEMBERS || maxMembers > MAX_SLOTS) {
       maxInput.classList.add('is-invalid');
       maxInput.setAttribute('aria-invalid', 'true');
       maxInput.focus();
       return;
     }
-    if (!INVITE_TTLS.includes(inviteTtl)) return;
     const done = busy(el<HTMLButtonElement>('room-create-submit'), 'Creating…');
     form.setAttribute('aria-busy', 'true');
     // Every secret made here is wiped at the end, whatever fails on the way.
@@ -447,6 +440,7 @@ export function initRoomCreate(): void {
       form.removeAttribute('aria-busy');
     }
   });
+  return select;
 }
 
 // --- Opening a room: an invite, or this tab's session ---
@@ -2405,7 +2399,7 @@ function initOwner(sodium: Sodium, id: string, session: Session, owner: string, 
   // An invite whose place the server gave but whose signed record did not
   // get posted. The next Create finishes it, with the same record, instead
   // of taking another place (places are never given out twice).
-  let unfinished: { slot: number; token: string; secret: Uint8Array; who: string; record: ControlRecord; at: number } | null = null;
+  let unfinished: { slot: number; token: string; secret: Uint8Array; who: string; record: ControlRecord; at: number; ttl: number } | null = null;
   form.addEventListener('submit', async (ev) => {
     ev.preventDefault();
     if (form.getAttribute('aria-busy') === 'true') return;
@@ -2432,12 +2426,16 @@ function initOwner(sodium: Sodium, id: string, session: Session, owner: string, 
     form.setAttribute('aria-busy', 'true');
     try {
       // An unfinished invite near the end of its lifetime is let go.
-      if (unfinished && Date.now() - unfinished.at > settings.ttl * 1000 * 5 / 6) {
+      if (unfinished && Date.now() - unfinished.at > unfinished.ttl * 1000 * 5 / 6) {
         sodium.memzero(unfinished.secret);
         unfinished = null;
       }
+      // This invite's own lifetime, chosen in the invite window: never
+      // longer than the chat's signed longest.
+      const chosen = Number(el<HTMLSelectElement>('room-invite-ttl').value);
+      const ttl = INVITE_TTLS.includes(chosen) && chosen <= settings.ttl ? chosen : settings.ttl;
       if (!unfinished) {
-        const invite = await createInvite(id, owner);
+        const invite = await createInvite(id, owner, ttl);
         // Every invite gets a new place. A place we already used (a server
         // handing it out twice, to let someone take it) is refused.
         const slot = invite.slot;
@@ -2453,9 +2451,9 @@ function initOwner(sodium: Sodium, id: string, session: Session, owner: string, 
           sodium.memzero(secret);
           return;
         }
-        // It stops working at the chat's signed invite lifetime: the server
-        // enforces it, and this tab refuses joins that come much later.
-        const exp = Date.now() + settings.ttl * 1000;
+        // It stops working when its own lifetime ends, signed here: the
+        // server enforces it, and this tab refuses joins that come much later.
+        const exp = Date.now() + ttl * 1000;
         session.invites.push({ slot, secret: b64(sodium, secret), exp });
         saveSession(id, session);
         // The label shows later whom each invite was for. It is encrypted.
@@ -2464,7 +2462,7 @@ function initOwner(sodium: Sodium, id: string, session: Session, owner: string, 
         try { boxed = boxName(sodium, rk, who, id, 'label', slot); }
         catch (e) { sodium.memzero(secret); throw e; }
         finally { sodium.memzero(rk); }
-        unfinished = { slot, token: invite.token, secret, who, record: { t: 'invite', id: newRecordId(sodium), time: Date.now(), slot, label: boxed, check: inviteCheck(sodium, secret, id, slot), exp }, at: Date.now() };
+        unfinished = { slot, token: invite.token, secret, who, record: { t: 'invite', id: newRecordId(sodium), time: Date.now(), slot, label: boxed, check: inviteCheck(sodium, secret, id, slot), exp }, at: Date.now(), ttl };
       }
       const u = unfinished;
       await control(u.record);
@@ -2480,7 +2478,7 @@ function initOwner(sodium: Sodium, id: string, session: Session, owner: string, 
         sodium.memzero(u.secret);
       }
       el('room-invite-who').textContent = u.who || 'one person';
-      el('room-invite-ttl-text').textContent = ttlText(settings.ttl);
+      el('room-invite-ttl-text').textContent = ttlText(u.ttl);
       show(el('room-invite-password-note'), session.password !== null);
       shown = u.slot;
       show(form, false);

@@ -614,3 +614,35 @@ func TestPlacesAreNeverReused(t *testing.T) {
 		t.Fatalf("a twentieth place: %v", err)
 	}
 }
+
+func TestEachInviteChoosesItsLifetime(t *testing.T) {
+	s, clk := newStore(t)
+	c, err := s.CreateWith(Options{Expires: time.Hour, MaxMembers: MaxSlots, InviteTTL: 15 * time.Minute}, someone)
+	if err != nil {
+		t.Fatal(err)
+	}
+	short, ns, err := s.InviteFor(c.ID, c.OwnerToken, 5*time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	long, _, err := s.InviteFor(c.ID, c.OwnerToken, 0) // the room's longest
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Longer than the room allows, or not a lifetime at all.
+	for _, bad := range []time.Duration{time.Hour, -time.Second, 2 * time.Hour} {
+		if _, _, err := s.InviteFor(c.ID, c.OwnerToken, bad); !errors.Is(err, ErrInvalid) {
+			t.Fatalf("%v: %v", bad, err)
+		}
+	}
+	clk.t = clk.t.Add(5 * time.Minute)
+	if _, _, err := s.Join(c.ID, short); !errors.Is(err, ErrInviteExpired) {
+		t.Fatalf("the five-minute invite: %v", err)
+	}
+	if st, _ := s.Members(c.ID, c.OwnerToken); st[ns] != StateExpired {
+		t.Fatalf("members: %v", st)
+	}
+	if _, _, err := s.Join(c.ID, long); err != nil {
+		t.Fatalf("the fifteen-minute invite: %v", err)
+	}
+}

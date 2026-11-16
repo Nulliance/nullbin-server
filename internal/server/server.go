@@ -173,6 +173,7 @@ func New(cfg Config) *Server {
 	// to show from the path.
 	if !cfg.APIOnly {
 		mux.Handle("GET /{$}", s.route(0, s.pages, s.page))
+		mux.Handle("GET /chat", s.route(0, s.pages, s.page)) // a new Null Chat
 		mux.Handle("GET /p/{id}", s.route(0, s.pages, s.pageWithID))
 		mux.Handle("GET /d/{id}", s.route(0, s.pages, s.pageWithID))
 		mux.Handle("GET /assets/app.js", s.route(0, s.pages, s.static(cfg.Assets.JS, "text/javascript; charset=utf-8")))

@@ -11,7 +11,9 @@ import { hasHiddenChars } from './hidden.ts';
 import { loadSodium } from './sodium.ts';
 
 
-export function initDiscussion(pasteId: string, keys: DiscussionKeys): void {
+export function initDiscussion(pasteId: string, keys: DiscussionKeys): () => void {
+  let disposed = false;
+  const listening = new AbortController();
   const list = el<HTMLOListElement>('comment-list');
   const form = el<HTMLFormElement>('comment-form');
   const name = el<HTMLInputElement>('comment-name');
@@ -27,7 +29,7 @@ export function initDiscussion(pasteId: string, keys: DiscussionKeys): void {
   let replyTo: Comment | null = null;
 
   const setReply = (c: Comment | null) => {
-    if (posting) return;
+    if (disposed || posting) return;
     replyTo = c;
     el('reply-name').textContent = c ? displayName(c) : '';
     show(replyBar, c !== null);
@@ -39,9 +41,10 @@ export function initDiscussion(pasteId: string, keys: DiscussionKeys): void {
   el('reply-cancel').addEventListener('click', () => {
     setReply(null);
     text.focus();
-  });
+  }, { signal: listening.signal });
 
   const render = () => {
+    if (disposed) return;
     const roots = buildThread(comments);
     list.replaceChildren(...roots.map((n) => renderNode(n, setReply)));
     const n = comments.length;
@@ -51,11 +54,14 @@ export function initDiscussion(pasteId: string, keys: DiscussionKeys): void {
   };
 
   const loadComments = async (quiet: boolean) => {
+    if (disposed) return;
     const done = busy(refresh, 'Refreshing…');
     show(loadError, false);
     try {
       const sodium = await loadSodium();
+      if (disposed) return;
       const blobs = await fetchComments(pasteId, keys.token);
+      if (disposed) return;
       const ok: Comment[] = [];
       for (const b of blobs) {
         const c = decryptComment(sodium, keys.key, pasteId, b);
@@ -69,8 +75,9 @@ export function initDiscussion(pasteId: string, keys: DiscussionKeys): void {
         hidden === 0 ? '' : `${hidden} ${hidden === 1 ? 'comment' : 'comments'} could not be verified with this paste’s key and ${hidden === 1 ? 'is' : 'are'} hidden.`;
       show(note, hidden > 0);
       render();
-      if (!quiet) announce(`${comments.length} ${comments.length === 1 ? 'comment' : 'comments'}.`);
+      if (!quiet) announce(`${comments.length} ${comments.length === 1 ? 'comment' : 'comments'}.`, listening.signal);
     } catch (e) {
+      if (disposed) return;
       loadError.textContent =
         e instanceof ApiError && e.status === 404 ? 'Comments are no longer available.' : 'Comments could not be loaded. Try Refresh.';
       show(loadError);
@@ -82,6 +89,7 @@ export function initDiscussion(pasteId: string, keys: DiscussionKeys): void {
   const load = async (quiet = false) => {
     // A post must fetch a fresh list even if an earlier refresh is in flight.
     if (loading) await loading;
+    if (disposed) return;
     loading = loadComments(quiet);
     try {
       await loading;
@@ -90,24 +98,24 @@ export function initDiscussion(pasteId: string, keys: DiscussionKeys): void {
     }
   };
 
-  refresh.addEventListener('click', () => void load());
+  refresh.addEventListener('click', () => void load(), { signal: listening.signal });
 
   text.addEventListener('input', () => {
     text.classList.remove('is-invalid');
     text.setAttribute('aria-invalid', 'false');
     show(error, false);
-  });
+  }, { signal: listening.signal });
 
   form.addEventListener('keydown', (e) => {
     if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
       e.preventDefault();
       form.requestSubmit();
     }
-  });
+  }, { signal: listening.signal });
 
   form.addEventListener('submit', async (ev) => {
     ev.preventDefault();
-    if (posting) return;
+    if (disposed || posting) return;
     show(error, false);
     text.classList.remove('is-invalid');
     if (text.value.trim() === '') {
@@ -126,20 +134,24 @@ export function initDiscussion(pasteId: string, keys: DiscussionKeys): void {
     posting = true;
     try {
       const sodium = await loadSodium();
+      if (disposed) return;
       const { bytes, comment } = encryptComment(sodium, keys.key, pasteId, {
         parent: replyTo?.id ?? null,
         name: name.value,
         text: text.value,
       });
       await postComment(pasteId, keys.token, bytes as Uint8Array<ArrayBuffer>);
+      if (disposed) return;
       text.value = '';
       replyTo = null;
       el('reply-name').textContent = '';
       show(replyBar, false);
       await load(true);
+      if (disposed) return;
       toast('Comment posted');
       document.getElementById(`c-${comment.id}`)?.scrollIntoView({ block: 'nearest' });
     } catch (e) {
+      if (disposed) return;
       error.textContent = describe(e);
       show(error);
     } finally {
@@ -147,12 +159,23 @@ export function initDiscussion(pasteId: string, keys: DiscussionKeys): void {
       form.removeAttribute('aria-busy');
       done();
       controls.forEach((control, i) => (control.disabled = disabled[i] ?? false));
-      text.focus();
+      if (!disposed) text.focus();
     }
-  });
+  }, { signal: listening.signal });
 
   reveal(el('comments'));
   void load(true);
+  return () => {
+    disposed = true;
+    listening.abort();
+    keys.key.fill(0);
+    comments = [];
+    replyTo = null;
+    list.replaceChildren();
+    name.value = '';
+    text.value = '';
+    el('reply-name').replaceChildren();
+  };
 }
 
 function displayName(c: Comment): string {

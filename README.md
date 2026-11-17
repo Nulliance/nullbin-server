@@ -1118,7 +1118,10 @@ with additional data `nullbin room msg v1 <room> <slot> <generation> <index>`.
 The creator's signed `room` record carries the room's name and the time it
 ends; the countdown never runs past it, and the app says so when the server
 claims an end more than ten minutes later (clocks differ), or when the
-record is missing. The plaintext
+record is missing. The earliest signed end this tab has seen is kept in
+its session, so reloading cannot extend it even if the server omits that
+record. Leaving a create or join page clears its inputs and keys and
+stops pending responses from continuing setup. The plaintext
 is `length (4) || JSON || Ed25519 signature (64) || zeros`, padded like
 pastes but with a 1 KiB minimum for control records and 2 KiB for messages
 (their receipts take about 1.2 KiB), so every message of up to about 600

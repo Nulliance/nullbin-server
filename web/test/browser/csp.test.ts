@@ -2436,3 +2436,256 @@ test('room expiry uses the signed end on the first batch and clears locally with
     await h.context.close();
   }
 });
+
+test('cloning a discussion disposes its pending refresh and clears comment drafts', async () => {
+  const { share } = await createPaste({ text: 'Original discussion text.', discussion: true });
+  const h = await open();
+  let releaseRefresh: () => void = () => {};
+  const held = new Promise<void>((resolve) => { releaseRefresh = resolve; });
+  let refreshArrived: () => void = () => {};
+  const arrived = new Promise<void>((resolve) => { refreshArrived = resolve; });
+  try {
+    await goto(h, share);
+    await h.page.waitForSelector('#comments-empty:not([hidden])');
+    await h.page.fill('#comment-name', 'Private commenter');
+    await h.page.fill('#comment-text', 'Private comment that must stay cleared after Clone.');
+    await h.page.click('#comment-submit');
+    await h.page.waitForSelector('#comment-list > .nb-comment');
+    await h.page.click('#comment-list > .nb-comment .nb-link-btn');
+    await h.page.fill('#comment-text', 'Private unfinished reply');
+    const endpoint = `${apiOrigin}/api/v1/pastes/${new URL(share).pathname.split('/').pop()}/comments`;
+    await h.page.route(endpoint, async (route) => {
+      const response = await route.fetch();
+      refreshArrived();
+      await held;
+      await route.fulfill({ response });
+    });
+    await h.page.click('#comments-refresh');
+    await arrived;
+    await h.page.click('#view-clone');
+    await h.page.waitForSelector('#create:not([hidden])');
+    assert.equal(await h.page.inputValue('#text'), 'Original discussion text.');
+    assert.equal(await h.page.locator('#comment-list > .nb-comment').count(), 0);
+    assert.equal(await h.page.inputValue('#comment-name'), '');
+    assert.equal(await h.page.inputValue('#comment-text'), '');
+    assert.equal(await h.page.textContent('#reply-name'), '');
+    releaseRefresh();
+    // The refresh's finally block is reached after its response has been
+    // consumed; this avoids a timing-based assertion about a pending fetch.
+    await h.page.waitForFunction(() => !document.getElementById('comments-refresh')!.hasAttribute('aria-busy'));
+    assert.equal(await h.page.locator('#comment-list > .nb-comment').count(), 0, 'late authenticated comments cannot refill the cleared view');
+    assert.equal(await h.page.textContent('#comment-list'), '');
+    assert.equal(await h.page.inputValue('#comment-name'), '');
+    assert.equal(await h.page.inputValue('#comment-text'), '');
+    assert.ok(await h.page.isHidden('#view'));
+    assert.ok(await h.page.locator('#text').evaluate((element) => element === document.activeElement), 'a completed refresh does not steal focus from the draft');
+    const calls = h.apiCalls.length;
+    await h.page.evaluate(async () => {
+      document.getElementById('comments-refresh')!.click();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    assert.equal(h.apiCalls.length, calls, 'disposed refresh controls cannot start another request');
+    await h.check();
+  } finally {
+    releaseRefresh();
+    await h.context.close();
+  }
+});
+
+// Gate lifecycle regressions use delayed real API responses. A synthetic
+// pagehide keeps the document inspectable while exercising departure cleanup.
+test('room creation cannot resume after departure during a delayed response', async (t) => {
+  await restartAPI();
+  t.after(() => restartAPI());
+  for (const stage of ['create', 'first-record', 'last-record'] as const) {
+    const h = await open();
+    t.after(() => h.context.close());
+    const reached = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    const delivered = Promise.withResolvers<void>();
+    t.after(() => release.resolve());
+    let records = 0;
+    await h.page.route('**/api/v1/rooms**', async (route) => {
+      const req = route.request();
+      const pathname = new URL(req.url()).pathname;
+      const record = req.method() === 'POST' && pathname.endsWith('/records');
+      if (record) records++;
+      const hold = req.method() === 'POST' && (stage === 'create'
+        ? pathname === '/api/v1/rooms'
+        : record && records === (stage === 'first-record' ? 1 : 2));
+      if (!hold) { await route.continue(); return; }
+      const response = await route.fetch();
+      reached.resolve();
+      await release.promise;
+      await route.fulfill({ response });
+      delivered.resolve();
+    });
+    await goto(h, `${origin}/chat`);
+    await h.page.fill('#room-you', 'Departing creator');
+    await h.page.fill('#room-name', 'Private name');
+    await h.page.check('#room-password-switch');
+    await h.page.fill('#room-password', 'private password');
+    await h.page.click('#room-create-submit');
+    await reached.promise;
+    const writes = h.sent.filter((s) => s.method === 'POST').length;
+    await h.page.evaluate(() => window.dispatchEvent(new PageTransitionEvent('pagehide', { persisted: true })));
+    for (const id of ['room-you', 'room-name', 'room-password']) assert.equal(await h.page.inputValue(`#${id}`), '', `${stage}: ${id} cleared`);
+    release.resolve();
+    await delivered.promise;
+    await h.page.waitForFunction(() => !document.getElementById('room-create-form')!.hasAttribute('aria-busy'));
+    assert.equal(h.page.url(), `${origin}/chat`, `${stage}: no late navigation`);
+    assert.equal(await h.page.evaluate(() => sessionStorage.length), 0, `${stage}: no late session`);
+    assert.equal(h.sent.filter((s) => s.method === 'POST').length, writes, `${stage}: no follow-up record`);
+    assert.equal(await h.page.isVisible('#room-chat'), false);
+    await h.check();
+    await h.context.close();
+  }
+});
+
+test('room joining cannot resume or keep a tentative session after departure', async (t) => {
+  await restartAPI();
+  t.after(() => restartAPI());
+  const creator = await open();
+  t.after(() => creator.context.close());
+  await goto(creator, `${origin}/chat`);
+  await creator.page.fill('#room-you', 'Creator');
+  await creator.page.check('#room-password-switch');
+  await creator.page.fill('#room-password', 'private password');
+  await creator.page.click('#room-create-submit');
+  await creator.page.waitForSelector('#room-chat:not([hidden])');
+  await creator.page.waitForFunction(() => !(document.getElementById('room-text') as HTMLTextAreaElement).disabled);
+  for (const stage of ['join', 'check', 'post'] as const) {
+    await creator.page.click('#room-invite-open');
+    await creator.page.fill('#room-invite-label', `Departing ${stage}`);
+    await creator.page.click('#room-invite-create');
+    await creator.page.waitForSelector('#room-invite-result:not([hidden])');
+    const link = (await creator.page.textContent('#room-invite-link'))!;
+    await creator.page.click('#room-invite-close');
+    const h = await open();
+    t.after(() => h.context.close());
+    const reached = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    const delivered = Promise.withResolvers<void>();
+    t.after(() => release.resolve());
+    await h.page.route('**/api/v1/rooms/**', async (route) => {
+      const req = route.request();
+      const url = new URL(req.url());
+      const hold = stage === 'join' ? req.method() === 'POST' && url.pathname.endsWith('/join')
+        : stage === 'check' ? req.method() === 'GET' && url.pathname.endsWith('/records')
+          : req.method() === 'POST' && url.pathname.endsWith('/records');
+      if (!hold) { await route.continue(); return; }
+      const response = await route.fetch();
+      reached.resolve();
+      await release.promise;
+      await route.fulfill({ response });
+      delivered.resolve();
+    });
+    await goto(h, link);
+    await h.page.waitForSelector('#room-join:not([hidden])');
+    await h.page.fill('#room-join-name', `Departing ${stage}`);
+    await h.page.fill('#room-join-password', 'private password');
+    await h.page.click('#room-join-submit');
+    await reached.promise;
+    const requests = h.sent.length;
+    if (stage === 'post') assert.equal(await h.page.evaluate(() => sessionStorage.length), 1, 'posting uses a tentative session');
+    await h.page.evaluate(() => window.dispatchEvent(new PageTransitionEvent('pagehide', { persisted: true })));
+    assert.equal(await h.page.inputValue('#room-join-name'), '');
+    assert.equal(await h.page.inputValue('#room-join-password'), '');
+    assert.equal(await h.page.evaluate(() => sessionStorage.length), 0, `${stage}: tentative keys cleared`);
+    release.resolve();
+    await delivered.promise;
+    // Drain browser tasks after the held response body, including JSON parsing.
+    await h.page.evaluate(async () => { for (let i = 0; i < 5; i++) await new Promise((r) => setTimeout(r, 0)); });
+    assert.equal(h.sent.length, requests, `${stage}: no later fetch or record`);
+    assert.equal(await h.page.evaluate(() => sessionStorage.length), 0, `${stage}: session stays cleared`);
+    assert.equal(await h.page.isVisible('#room-chat'), false);
+    assert.equal(await h.page.isVisible('#room-waiting'), false);
+    await h.check();
+    await h.context.close();
+  }
+});
+
+test('saved signed room expiry survives reload when the API hides settings and extends its countdown', async (t) => {
+  await restartAPI();
+  t.after(() => restartAPI());
+  const h = await open();
+  t.after(() => h.context.close());
+  await h.page.addInitScript(() => {
+    const original = Date.now.bind(Date);
+    let offset = 0;
+    Date.now = () => original() + offset;
+    Object.assign(window, { __advanceSavedExpiry: (ms: number) => { offset = ms; } });
+  });
+  await goto(h, `${origin}/chat`);
+  await h.page.fill('#room-you', 'Expiry creator');
+  await h.page.selectOption('#room-expiry', '300');
+  await h.page.click('#room-create-submit');
+  await h.page.waitForSelector('#room-chat:not([hidden])');
+  await h.page.waitForFunction(() => !(document.getElementById('room-text') as HTMLTextAreaElement).disabled);
+  const saved = await h.page.evaluate(() => {
+    const entry = Object.entries(sessionStorage).find(([key]) => key.startsWith('nullbin.room.'))!;
+    return { key: entry[0], session: JSON.parse(entry[1]) as { ends: number } };
+  });
+  assert.ok(Number.isSafeInteger(saved.session.ends) && saved.session.ends > Date.now(), 'verified expiry is saved');
+  await h.page.route('**/api/v1/rooms/*/records?*', async (route) => {
+    const url = new URL(route.request().url());
+    const response = await route.fetch();
+    const data = await response.json();
+    // Return only the creator join, with valid indexes. The signed room
+    // settings record is deliberately omitted from every restored fetch.
+    const records = url.searchParams.get('after') === '0' ? data.records.slice(0, 1) : [];
+    await route.fulfill({ response, body: JSON.stringify({ records, next: 1, expires_in: 86400 }) });
+  });
+  await h.page.reload();
+  await h.page.waitForFunction(() => /^Self-destructs in [45]m/.test(document.getElementById('room-expires')?.textContent ?? ''));
+  assert.equal(await h.page.evaluate((key) => JSON.parse(sessionStorage.getItem(key)!).ends, saved.key), saved.session.ends, 'API countdown cannot replace the saved end');
+  const posts = h.sent.filter((s) => s.method === 'POST' && s.path.endsWith('/records')).length;
+  await h.page.evaluate(() => {
+    (window as unknown as { __advanceSavedExpiry: (ms: number) => void }).__advanceSavedExpiry(301000);
+    document.dispatchEvent(new Event('visibilitychange'));
+  });
+  await h.page.waitForSelector('#problem:not([hidden])');
+  assert.equal(await h.page.textContent('#problem-title'), 'This Null Chat has expired');
+  assert.equal(await h.page.evaluate(() => sessionStorage.length), 0);
+  assert.equal(await h.page.textContent('#room-messages'), '');
+  assert.equal(h.sent.filter((s) => s.method === 'POST' && s.path.endsWith('/records')).length, posts, 'expired restored chat cannot send');
+  await h.check();
+});
+
+test('joining refuses already expired signed settings before posting or saving keys', async (t) => {
+  await restartAPI();
+  t.after(() => restartAPI());
+  const creator = await open();
+  t.after(() => creator.context.close());
+  await goto(creator, `${origin}/chat`);
+  await creator.page.fill('#room-you', 'Expiry creator');
+  await creator.page.selectOption('#room-expiry', '300');
+  await creator.page.click('#room-create-submit');
+  await creator.page.waitForSelector('#room-chat:not([hidden])');
+  await creator.page.waitForFunction(() => !(document.getElementById('room-text') as HTMLTextAreaElement).disabled);
+  await creator.page.click('#room-invite-open');
+  await creator.page.fill('#room-invite-label', 'Late joiner');
+  await creator.page.click('#room-invite-create');
+  await creator.page.waitForSelector('#room-invite-result:not([hidden])');
+  const link = (await creator.page.textContent('#room-invite-link'))!;
+  const h = await open();
+  t.after(() => h.context.close());
+  // The API remains live; only this joining page has passed the end
+  // authenticated by the creator's room record.
+  await h.page.addInitScript(() => {
+    const original = Date.now.bind(Date);
+    Date.now = () => original() + 301000;
+  });
+  await goto(h, link);
+  await h.page.waitForSelector('#room-join:not([hidden])');
+  await h.page.fill('#room-join-name', 'Late joiner');
+  await h.page.click('#room-join-submit');
+  await h.page.waitForSelector('#problem:not([hidden])');
+  assert.equal(await h.page.textContent('#problem-title'), 'This Null Chat has expired');
+  assert.equal(await h.page.evaluate(() => sessionStorage.length), 0);
+  assert.equal(await h.page.inputValue('#room-join-name'), '');
+  assert.equal(h.sent.filter((s) => s.method === 'POST' && s.path.endsWith('/records')).length, 0, 'an expired join never announces keys');
+  assert.equal(await h.page.isVisible('#room-chat'), false);
+  await h.check();
+});

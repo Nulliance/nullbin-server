@@ -95,6 +95,7 @@ async function open(id: string, key: Uint8Array, burn: boolean, recipient: Uint8
   let limited = burn || recipient !== null;
   let left = false;
   let discussionKey: Uint8Array | null = null;
+  let disposeDiscussion = () => {};
   let readsKnown: number | null = null;
   const leave = () => {
     void reader?.cancel();
@@ -102,6 +103,7 @@ async function open(id: string, key: Uint8Array, burn: boolean, recipient: Uint8
     closeShareDialog();
     if (!limited) return;
     left = true;
+    disposeDiscussion();
     if (discussionKey) discussionKey.fill(0);
     // The share link (with its key) leaves the page too.
     el('view-email').removeAttribute('href');
@@ -232,7 +234,7 @@ async function open(id: string, key: Uint8Array, burn: boolean, recipient: Uint8
 
   if (meta.text.length > 0 || !opened.file) renderText(meta.text);
   const attachment = file ? renderFile(file, meta.filename, meta.size, meta.mime, () => reader!.cancel()) : null;
-  initReaderActions(meta.text, shareURL, !burn || readsRemaining > 0, attachment);
+  initReaderActions(meta.text, shareURL, !burn || readsRemaining > 0, attachment, () => disposeDiscussion());
   if (!burn && file) {
     // Leaving the page wipes the attachment. If the browser restores the page
     // from its back/forward cache, keep the text but say the file is gone
@@ -251,7 +253,7 @@ async function open(id: string, key: Uint8Array, burn: boolean, recipient: Uint8
   el('view-title').focus();
   announce(opened.file ? 'Paste decrypted. A file is attached.' : 'Paste decrypted.');
 
-  if (opened.discussion) initDiscussion(id, opened.discussion);
+  if (opened.discussion) disposeDiscussion = initDiscussion(id, opened.discussion);
 }
 
 function renderText(text: string): void {

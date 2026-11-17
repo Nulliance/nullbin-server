@@ -16,6 +16,8 @@ export const MAX_BURN_READS = 1000;
 /** Deadlines, so a server that stops answering cannot leave the page waiting forever. */
 const REQUEST_MS = 60_000;
 const CHUNK_MS = 6 * 60_000; // the server allows a chunk 5 minutes
+const JSON_BYTES = 128 * 1024;
+const COMMENTS_JSON_BYTES = 9 * 1024 * 1024;
 const COMMENTS_MS = 6 * 60_000; // the server allows a full discussion (about 9 MB) about 5.5 minutes
 
 const base: RequestInit = {
@@ -36,10 +38,10 @@ export class ApiError extends Error {
   }
 }
 
-async function errorFrom(resp: Response, maxBytes?: number): Promise<ApiError> {
+async function errorFrom(resp: Response, maxBytes = JSON_BYTES): Promise<ApiError> {
   let body: Record<string, unknown> = {};
   try {
-    const v: unknown = maxBytes === undefined ? await resp.json() : await boundedJSON(resp, maxBytes);
+    const v: unknown = await boundedJSON(resp, maxBytes);
     if (typeof v === 'object' && v !== null && !Array.isArray(v)) body = v as Record<string, unknown>;
   } catch {
     // not JSON
@@ -80,7 +82,7 @@ export async function createPaste(expiresIn: number, burn: boolean, totalSize: n
     body: JSON.stringify(body),
   });
   if (resp.status !== 201) throw await errorFrom(resp);
-  const v = (await resp.json()) as Record<string, unknown>;
+  const v = (await boundedJSON(resp, JSON_BYTES)) as Record<string, unknown>;
   const { id, upload_token: up, delete_token: del } = v;
   if (typeof id !== 'string' || !ID.test(id) || typeof up !== 'string' || !TOKEN.test(up) || typeof del !== 'string' || !TOKEN.test(del)) {
     throw new Error('The server sent an invalid response.');
@@ -143,7 +145,7 @@ export async function finalizePaste(id: string, uploadToken: string): Promise<Da
     await sleep(Number.isFinite(after) && after > 0 ? Math.min(after, 30) * 1000 : 1000 * 2 ** attempt);
   }
   if (resp.status !== 200) throw await errorFrom(resp);
-  const v = (await resp.json()) as Record<string, unknown>;
+  const v = (await boundedJSON(resp, JSON_BYTES)) as Record<string, unknown>;
   const d = typeof v['expires_at'] === 'string' ? new Date(v['expires_at']) : null;
   return d && !Number.isNaN(d.getTime()) ? d : null;
 }
@@ -205,7 +207,7 @@ export async function fetchRecipients(id: string, deleteToken: string): Promise<
     headers: { 'Nullbin-Delete-Token': deleteToken },
   });
   if (resp.status !== 200) throw await errorFrom(resp);
-  const v = (await resp.json()) as Record<string, unknown>;
+  const v = (await boundedJSON(resp, JSON_BYTES)) as Record<string, unknown>;
   const list = v['recipients'];
   if (!Array.isArray(list) || list.length < 2 || list.length > 20) throw new Error('The server sent an invalid response.');
   const count = (n: unknown) => typeof n === 'number' && Number.isSafeInteger(n) && n >= 0;
@@ -306,14 +308,15 @@ export async function fetchComments(id: string, commentToken: string): Promise<U
     headers: { 'Nullbin-Comment-Token': commentToken },
   });
   if (resp.status !== 200) throw await errorFrom(resp);
-  const v = (await resp.json()) as Record<string, unknown>;
+  const v = (await boundedJSON(resp, COMMENTS_JSON_BYTES, COMMENTS_MS)) as Record<string, unknown>;
   const list = v['comments'];
-  if (!Array.isArray(list) || list.length > 1000) throw new Error('The server sent an invalid response.');
+  if (!Array.isArray(list) || list.length > 200) throw new Error('The server sent an invalid response.');
   const out: Uint8Array[] = [];
   for (const item of list) {
     if (typeof item !== 'string' || item.length > 64 * 1024) continue;
     try {
-      out.push(Uint8Array.from(atob(item), (c) => c.charCodeAt(0)));
+      const bytes = Uint8Array.from(atob(item), (c) => c.charCodeAt(0));
+      if (bytes.byteLength <= 32 * 1024) out.push(bytes);
     } catch {
       // Not base64: skip it. It could never decrypt anyway.
     }
@@ -327,10 +330,10 @@ export async function fetchComments(id: string, commentToken: string): Promise<U
 const ROOM_RECORDS = 1000;
 const ROOM_RECORD_BYTES = 16 * 1024;
 const ROOM_READ_BYTES = 64 * 1024;
-const ROOM_JSON_BYTES = 128 * 1024;
+const ROOM_JSON_BYTES = JSON_BYTES;
 
 /** Bound decoded bytes before JSON parsing, even without Content-Length. */
-async function boundedJSON(resp: Response, limit: number): Promise<unknown> {
+async function boundedJSON(resp: Response, limit: number, timeout = REQUEST_MS): Promise<unknown> {
   if (Number(resp.headers.get('Content-Length')) > limit) {
     await resp.body?.cancel().catch(() => {});
     throw new Error('The server sent an oversized response.');
@@ -339,9 +342,15 @@ async function boundedJSON(resp: Response, limit: number): Promise<unknown> {
   const reader = resp.body.getReader();
   const chunks: Uint8Array[] = [];
   let size = 0;
+  let timedOut = false;
+  const timer = setTimeout(() => {
+    timedOut = true;
+    void reader.cancel().catch(() => {});
+  }, timeout);
   try {
     for (;;) {
       const { value, done } = await reader.read();
+      if (timedOut) throw new Error('The server response timed out.');
       if (done) break;
       size += value.byteLength;
       if (size > limit) {
@@ -351,6 +360,7 @@ async function boundedJSON(resp: Response, limit: number): Promise<unknown> {
       chunks.push(value);
     }
   } finally {
+    clearTimeout(timer);
     reader.releaseLock();
   }
   const bytes = new Uint8Array(size);

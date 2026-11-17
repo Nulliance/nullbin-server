@@ -1337,18 +1337,26 @@ function openChat(sodium: Sodium, id: string, session: Session): void {
   }
   log.append(empty);
 
-  // Scrolling: the page scrolls, like every other page. Stay at the newest
-  // message unless the reader scrolled up.
+  // Desktop keeps page scrolling; phones give the conversation its own
+  // scroll area between the header and composer.
   const page = document.scrollingElement ?? document.documentElement;
   const chatEl = el('room-chat');
   const topBar = document.querySelector<HTMLElement>('.nb-top');
   const head = chatEl.querySelector<HTMLElement>('.nb-chat-head')!;
   const dock = chatEl.querySelector<HTMLElement>('.nb-chat-dock')!;
+  const mobile = window.matchMedia('(max-width: 767.98px), (max-width: 1199.98px) and (pointer: coarse)');
+  const viewport = window.visualViewport;
   let atBottom = true;
   let pending = 0;
-  const nearBottom = () => page.scrollHeight - page.scrollTop - window.innerHeight < 80;
+  const nearBottom = () => mobile.matches
+    ? log.scrollHeight - log.scrollTop - log.clientHeight < 80
+    : page.scrollHeight - page.scrollTop - window.innerHeight < 80;
+  const scrollBottom = (behavior: ScrollBehavior = 'instant') => {
+    if (mobile.matches) log.scrollTo({ top: log.scrollHeight, behavior });
+    else window.scrollTo({ top: page.scrollHeight, behavior });
+  };
   const toBottom = () => {
-    window.scrollTo({ top: page.scrollHeight, behavior: 'instant' });
+    scrollBottom();
     atBottom = true;
   };
   const updateJump = () => {
@@ -1357,24 +1365,61 @@ function openChat(sodium: Sodium, id: string, session: Session): void {
     show(jumpCount, pending > 0);
     jump.setAttribute('aria-label', pending > 0 ? `Go to the latest messages, ${pending} new` : 'Go to the latest messages');
   };
-  window.addEventListener('scroll', () => {
+  const onScroll = (ev: Event) => {
+    if (ev.currentTarget !== (mobile.matches ? log : window)) return;
     atBottom = nearBottom();
     if (atBottom) pending = 0;
     updateJump();
     closeMenu(false);
-  }, { passive: true, signal: listening.signal });
-  // The sticky header and dates sit under the site's bar; and a reply bar,
-  // a growing message box or a turned phone must not hide the newest message.
-  const sizes = new ResizeObserver(() => {
-    // The site's bar stays at the top only on wider screens.
+  };
+  window.addEventListener('scroll', onScroll, { passive: true, signal: listening.signal });
+  log.addEventListener('scroll', onScroll, { passive: true, signal: listening.signal });
+
+  // Mobile keyboards can resize only the visual viewport, leaving dvh and
+  // the layout viewport unchanged. Follow its height AND its pan offset.
+  // Only geometry goes into CSS; no draft, key or room data is involved.
+  // Leave pinch zoom to the browser rather than reflowing on every zoom.
+  let layoutFrame = 0;
+  const clearViewport = () => {
+    document.body.style.removeProperty('--nb-room-height');
+    document.body.style.removeProperty('--nb-room-top');
+    document.body.classList.remove('nb-room-keyboard');
+  };
+  const layout = () => {
+    layoutFrame = 0;
+    if (!mobile.matches) clearViewport();
+    else if (!viewport || Math.abs(viewport.scale - 1) < .01) {
+      const height = viewport?.height ?? window.innerHeight;
+      const top = viewport?.offsetTop ?? 0;
+      document.body.style.setProperty('--nb-room-height', `${Math.max(1, height)}px`);
+      document.body.style.setProperty('--nb-room-top', `${Math.max(0, top)}px`);
+      const editing = document.activeElement?.matches('input, textarea') ?? false;
+      document.body.classList.toggle('nb-room-keyboard', editing && document.documentElement.clientHeight - height > 100);
+    }
     const barStays = topBar !== null && getComputedStyle(topBar).position === 'sticky';
     chatEl.style.setProperty('--nb-top-h', `${barStays ? topBar.offsetHeight : 0}px`);
     chatEl.style.setProperty('--nb-head-h', `${head.offsetHeight}px`);
     if (atBottom) toBottom();
-  });
+  };
+  const scheduleLayout = () => {
+    if (!layoutFrame) layoutFrame = window.requestAnimationFrame(layout);
+  };
+  const sizes = new ResizeObserver(scheduleLayout);
   for (const n of [log, dock, head, topBar]) if (n) sizes.observe(n);
+  for (const name of ['resize', 'scroll']) viewport?.addEventListener(name, scheduleLayout, { passive: true, signal: listening.signal });
+  window.addEventListener('resize', scheduleLayout, { passive: true, signal: listening.signal });
+  mobile.addEventListener('change', scheduleLayout, { signal: listening.signal });
+  document.addEventListener('focusin', scheduleLayout, { signal: listening.signal });
+  document.addEventListener('focusout', scheduleLayout, { signal: listening.signal });
+  listening.signal.addEventListener('abort', () => {
+    window.cancelAnimationFrame(layoutFrame);
+    clearViewport();
+    chatEl.style.removeProperty('--nb-top-h');
+    chatEl.style.removeProperty('--nb-head-h');
+  }, { once: true });
+  scheduleLayout();
   jump.addEventListener('click', () => {
-    window.scrollTo({ top: page.scrollHeight, behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' });
+    scrollBottom(window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth');
     pending = 0;
     updateJump();
   });
@@ -2063,6 +2108,7 @@ function openChat(sodium: Sodium, id: string, session: Session): void {
   const grow = () => {
     if (CSS.supports('field-sizing', 'content')) return;
     text.style.height = 'auto';
+    // CSS also caps this against the visible room height on a phone.
     text.style.height = `${Math.min(text.scrollHeight, 168)}px`;
   };
   text.addEventListener('input', () => {
@@ -2128,6 +2174,7 @@ function openChat(sodium: Sodium, id: string, session: Session): void {
       stopContext();
       return;
     }
+    if (!desktop) text.focus({ preventScroll: true });
     sending = true;
     updateSend();
     composer.setAttribute('aria-busy', 'true');
@@ -2150,7 +2197,7 @@ function openChat(sodium: Sodium, id: string, session: Session): void {
       sending = false;
       updateSend();
       composer.removeAttribute('aria-busy');
-      if (!ended) text.focus({ preventScroll: true });
+      if (!ended && desktop) text.focus({ preventScroll: true });
     }
   });
 

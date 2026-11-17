@@ -2171,3 +2171,151 @@ test('large text previews are bounded and downloads preserve the complete text',
   await h.check();
   await h.context.close();
 });
+
+test('mobile Null Chats keep the composer and controls inside the visible viewport', async (t) => {
+  await restartAPI();
+  t.after(() => restartAPI());
+  const h = await open({ hasTouch: true });
+  t.after(() => h.context.close());
+  await h.page.setViewportSize({ width: 320, height: 740 });
+  // Headless Chrome cannot open a real OS keyboard. Model the important
+  // case: the visual viewport shrinks and pans but the layout does not.
+  await h.page.addInitScript(() => {
+    let height: number | null = null;
+    let top = 0;
+    let scale = 1;
+    const viewport = new EventTarget();
+    Object.defineProperties(viewport, {
+      height: { get: () => height ?? innerHeight },
+      offsetTop: { get: () => top },
+      scale: { get: () => scale },
+    });
+    Object.defineProperty(window, 'visualViewport', { value: viewport });
+    Object.assign(window, {
+      __roomViewport: (nextHeight: number | null, nextTop = 0, nextScale = 1) => {
+        height = nextHeight;
+        top = nextTop;
+        scale = nextScale;
+        viewport.dispatchEvent(new Event('resize'));
+        viewport.dispatchEvent(new Event('scroll'));
+      },
+    });
+  });
+  const viewport = async (height: number | null, top = 0, scale = 1) => {
+    await h.page.evaluate(({ height, top, scale }) => {
+      (window as unknown as { __roomViewport: (h: number | null, t: number, s: number) => void }).__roomViewport(height, top, scale);
+    }, { height, top, scale });
+    await h.page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+  };
+  const checkLayout = async (top: number, bottom: number) => {
+    const result = await h.page.evaluate(() => {
+      const rect = (selector: string) => {
+        const r = document.querySelector(selector)!.getBoundingClientRect();
+        return { top: r.top, bottom: r.bottom, left: r.left, right: r.right, height: r.height, width: r.width };
+      };
+      const log = document.getElementById('room-messages')!;
+      return {
+        head: rect('.nb-chat-head'), log: rect('#room-messages'),
+        composer: rect('#room-composer'), send: rect('#room-send'),
+        invite: rect('#room-invite-open'), members: rect('#room-members-open'), destroy: rect('#room-destroy'),
+        overflow: document.documentElement.scrollWidth > innerWidth,
+        scrollable: getComputedStyle(log).overflowY === 'auto',
+        fontSize: parseFloat(getComputedStyle(document.getElementById('room-text')!).fontSize),
+      };
+    });
+    assert.equal(result.overflow, false, 'no horizontal page overflow');
+    assert.equal(result.scrollable, true, 'only the conversation scrolls');
+    assert.ok(result.head.top >= top - 1 && result.log.height > 30, 'header and conversation remain visible');
+    assert.ok(result.log.bottom <= result.composer.top + 1, 'messages never sit behind the composer');
+    assert.ok(result.composer.bottom <= bottom + 1, 'composer stays above the keyboard');
+    assert.ok(result.fontSize >= 16, 'typing does not trigger iOS input zoom');
+    for (const control of [result.send, result.invite, result.members, result.destroy]) {
+      assert.ok(control.height >= 44 && control.width >= 44, 'chat controls have 44px tap targets');
+      assert.ok(control.left >= 0 && control.right <= h.page.viewportSize()!.width, 'controls fit the screen');
+    }
+  };
+  await goto(h, `${origin}/chat`);
+  await h.page.fill('#room-you', 'Mobile tester');
+  await h.page.fill('#room-name', 'A long chat name that must fit on a narrow phone');
+  await h.page.click('#room-create-submit');
+  await h.page.waitForSelector('#room-chat:not([hidden])');
+  await h.page.waitForFunction(() => !(document.getElementById('room-text') as HTMLTextAreaElement).disabled);
+  await viewport(null);
+  await checkLayout(0, 740);
+  for (const width of [360, 390, 767, 844]) {
+    await h.page.setViewportSize({ width, height: 740 });
+    await viewport(null);
+    await checkLayout(0, 740);
+  }
+  await h.page.setViewportSize({ width: 390, height: 740 });
+  await h.page.fill('#room-text', 'Mobile keyboard message');
+  await viewport(350, 110);
+  await checkLayout(110, 460);
+  assert.ok(await h.page.isHidden('body > .nb-top'), 'site navigation gives the keyboard more room');
+  await h.page.click('#room-send');
+  await h.page.waitForFunction(() => document.getElementById('room-messages')?.textContent?.includes('Mobile keyboard message'));
+  await checkLayout(110, 460);
+  // A multiline draft has a bounded height, even above a short keyboard viewport.
+  await h.page.fill('#room-text', 'draft line\n'.repeat(30));
+  await viewport(310, 70);
+  await checkLayout(70, 380);
+  await h.page.fill('#room-text', '');
+  await viewport(null);
+  // Populate enough DOM rows to exercise scrolling without filling the
+  // encrypted room's record quota with layout fixtures.
+  await h.page.evaluate(() => {
+    const log = document.getElementById('room-messages')!;
+    for (let i = 0; i < 40; i++) {
+      const li = document.createElement('li');
+      li.className = 'nb-sys';
+      li.textContent = `Layout fixture ${i}: ${'long text '.repeat(8)}`;
+      log.prepend(li);
+    }
+    log.scrollTop = log.scrollHeight;
+  });
+  await h.page.waitForFunction(() => {
+    const log = document.getElementById('room-messages')!;
+    return log.scrollHeight - log.scrollTop - log.clientHeight < 2;
+  });
+  await viewport(350, 0);
+  await h.page.waitForFunction(() => {
+    const log = document.getElementById('room-messages')!;
+    return log.scrollHeight - log.scrollTop - log.clientHeight < 2;
+  });
+  await h.page.evaluate(() => { document.getElementById('room-messages')!.scrollTop = 100; });
+  await h.page.waitForSelector('#room-jump:not([hidden])');
+  await viewport(400, 20);
+  assert.ok(await h.page.$eval('#room-messages', (log) => Math.abs(log.scrollTop - 100) < 2), 'keyboard changes preserve the place in older messages');
+  await h.page.click('#room-jump');
+  await h.page.waitForFunction(() => {
+    const log = document.getElementById('room-messages')!;
+    return log.scrollHeight - log.scrollTop - log.clientHeight < 2;
+  });
+  // Keep zoom accessible: do not shrink/reflow the app to a zoomed viewport.
+  const heightBeforeZoom = await h.page.$eval('body', (body) => body.style.getPropertyValue('--nb-room-height'));
+  await viewport(200, 25, 2);
+  assert.equal(await h.page.$eval('body', (body) => body.style.getPropertyValue('--nb-room-height')), heightBeforeZoom);
+  await viewport(null);
+  await h.page.setViewportSize({ width: 844, height: 390 });
+  await viewport(null);
+  await checkLayout(0, 390);
+  // Dialogs remain reachable above a keyboard, including their close action.
+  await h.page.click('#room-invite-open');
+  await h.page.fill('#room-invite-label', 'Invite label');
+  await viewport(250, 30);
+  const dialog = await h.page.locator('#room-invite-dialog').boundingBox();
+  assert.ok(dialog && dialog.y >= 30 && dialog.y + dialog.height <= 280, 'invite dialog fits above the keyboard');
+  await h.page.click('#room-invite-close');
+  await viewport(null);
+  await h.page.click('#room-destroy');
+  await h.page.click('#room-destroy-confirm');
+  await h.page.waitForSelector('#problem:not([hidden])');
+  await viewport(240, 40);
+  assert.ok(await h.page.evaluate(() => !document.body.classList.contains('nb-in-room') &&
+    !document.body.classList.contains('nb-room-keyboard') &&
+    !document.body.style.getPropertyValue('--nb-room-height') &&
+    !document.body.style.getPropertyValue('--nb-room-top')), 'ending clears viewport state and listeners');
+  assert.equal(await h.page.locator('#room-messages li').count(), 0, 'ending still clears the conversation');
+  await h.check();
+});
+

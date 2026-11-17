@@ -49,16 +49,22 @@ export function joinerOk(cps: string[], i: number): boolean {
 // a visible job, plus a byte-order mark at the start and Windows line breaks.
 
 // HIDDEN, with tabs and line breaks allowed.
-const HIDDEN_IN_TEXT = new RegExp(HIDDEN.source.replace('(?![\\u200C', '(?![\\t\\n\\r\\u200C'), 'u');
+const HIDDEN_IN_TEXT = new RegExp(HIDDEN.source.replace('(?![\\u200C', '(?![\\t\\n\\r\\u200C') + '|[\\p{Co}\\u2800]', 'u');
 
-/** Reports whether text contains characters that can disguise what it says. */
+// Dense text must not run millions of context checks on the UI thread.
+// Past this budget, warn conservatively instead of silently skipping it.
+export const MAX_JOINER_CHECKS = 4096;
+
+/** Reports hidden characters, or excessive joiners requiring caution. */
 export function hasHiddenChars(text: string): boolean {
   const s = (text.startsWith('\uFEFF') ? text.slice(1) : text).replace(FLAG_TAGS, '\u{1F3F4}');
   if (HIDDEN_IN_TEXT.test(s)) return true;
   // Each joiner or variation selector is judged by its neighbours alone, so
   // a long paste is never copied into an array of code points.
   const re = /[\u200C\u200D\uFE0E\uFE0F]/g;
+  let checked = 0;
   for (let m = re.exec(s); m !== null; m = re.exec(s)) {
+    if (++checked > MAX_JOINER_CHECKS) return true;
     const i = m.index;
     const pair = i >= 2 && /[\uDC00-\uDFFF]/.test(s[i - 1]!) && /[\uD800-\uDBFF]/.test(s[i - 2]!);
     const before = i === 0 ? null : pair ? s.slice(i - 2, i) : s[i - 1]!;
@@ -76,5 +82,5 @@ export function hasHiddenChars(text: string): boolean {
  * those characters are legitimate.
  */
 export function stripHiddenChars(text: string): string {
-  return text.replace(/(?![\u200C\u200D])[\p{Cf}\p{Cc}\p{Zl}\p{Zp}\p{Default_Ignorable_Code_Point}\u115F\u1160\u3164\uFFA0\u2800]/gu, '');
+  return text.replace(/(?![\u200C\u200D])[\p{Cf}\p{Cc}\p{Co}\p{Cs}\p{Zl}\p{Zp}\p{Default_Ignorable_Code_Point}\u115F\u1160\u3164\uFFA0\u2800]/gu, '');
 }

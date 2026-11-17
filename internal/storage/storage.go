@@ -207,12 +207,14 @@ type upload struct {
 
 // Store is a filesystem-backed paste store. It is safe for concurrent use.
 type Store struct {
-	root        *os.Root
-	quotaMu     sync.Mutex
-	limits      Limits
-	used        int64
-	pending     int
-	allocations map[string]*allocation
+	root         *os.Root
+	quotaMu      sync.Mutex
+	limits       Limits
+	used         int64
+	pending      int
+	allocations  map[string]*allocation
+	skipped      int           // unsafe/unreadable entries found at startup; counts only
+	chunkCommits chan struct{} // bounds chunk fsyncs, never held while reading the body
 
 	mu     sync.Mutex
 	busy   map[string]bool // pending uploads with an operation in progress
@@ -263,13 +265,14 @@ func OpenWithLimits(dir string, limits Limits) (*Store, error) {
 		}
 	}
 	s := &Store{
-		limits:      limits,
-		allocations: make(map[string]*allocation),
-		root:        root,
-		busy:        make(map[string]bool),
-		claims:      make(map[string]bool),
-		now:         time.Now,
-		minChunk:    MinChunkBytes,
+		limits:       limits,
+		allocations:  make(map[string]*allocation),
+		chunkCommits: make(chan struct{}, 16),
+		root:         root,
+		busy:         make(map[string]bool),
+		claims:       make(map[string]bool),
+		now:          time.Now,
+		minChunk:     MinChunkBytes,
 	}
 	if err := s.rebuildAllocations(); err != nil {
 		root.Close()
@@ -519,6 +522,10 @@ func (s *Store) AppendChunk(id string, n int, uploadToken string, body io.Reader
 		err = ErrChunkTooSmall
 	}
 	if err == nil {
+		// Only completed bodies enter this gate. Slow senders never hold a
+		// durability slot; at most 16 chunk fsync/metadata commits run at once.
+		s.chunkCommits <- struct{}{}
+		defer func() { <-s.chunkCommits }()
 		err = f.Sync()
 	}
 	if err != nil {
@@ -1628,3 +1635,6 @@ func (s *Store) openRegular(name string, flag int) (*os.File, error) {
 	}
 	return s.root.OpenFile(name, flag, 0)
 }
+
+// SkippedEntries reports only the number of unsafe/unreadable startup entries.
+func (s *Store) SkippedEntries() int { return s.skipped }

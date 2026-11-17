@@ -446,7 +446,7 @@ func (s *Server) handleCreate(w http.ResponseWriter, r *http.Request) {
 		s.pending.cancel(ip)
 	}
 	if errors.Is(err, storage.ErrQuota) {
-		writeError(w, http.StatusInsufficientStorage, "storage capacity reached")
+		writeError(w, http.StatusInsufficientStorage, "paste or storage capacity reached")
 		return
 	}
 	if errors.Is(err, storage.ErrUploadLimit) {
@@ -514,7 +514,7 @@ func (s *Server) handleChunk(w http.ResponseWriter, r *http.Request) {
 	case errors.Is(err, storage.ErrChunkTooSmall):
 		writeError(w, http.StatusBadRequest, "chunk too small: every chunk but the last must be at least 4 MiB")
 	case errors.Is(err, storage.ErrQuota):
-		writeError(w, http.StatusInsufficientStorage, "storage capacity reached")
+		writeError(w, http.StatusInsufficientStorage, "paste or storage capacity reached")
 	case errors.Is(body.err, errTooSlow), errors.Is(body.err, os.ErrDeadlineExceeded):
 		writeError(w, http.StatusRequestTimeout, "upload too slow")
 	case body.err != nil:
@@ -547,7 +547,7 @@ func (s *Server) handleFinalize(w http.ResponseWriter, r *http.Request) {
 	case errors.Is(err, storage.ErrIncomplete):
 		writeError(w, http.StatusBadRequest, "upload incomplete")
 	case errors.Is(err, storage.ErrQuota):
-		writeError(w, http.StatusInsufficientStorage, "storage capacity reached")
+		writeError(w, http.StatusInsufficientStorage, "paste or storage capacity reached")
 	default:
 		s.internalError(w, "finalize", err)
 	}
@@ -735,7 +735,7 @@ func (s *Server) handleAddComment(w http.ResponseWriter, r *http.Request) {
 	case errors.Is(err, storage.ErrTooLarge):
 		writeError(w, http.StatusRequestEntityTooLarge, "comment too large")
 	case errors.Is(err, storage.ErrQuota):
-		writeError(w, http.StatusInsufficientStorage, "storage capacity reached")
+		writeError(w, http.StatusInsufficientStorage, "paste or storage capacity reached")
 	case errors.Is(err, storage.ErrDiscussionFull):
 		writeError(w, http.StatusConflict, "this discussion is full")
 	case errors.Is(err, storage.ErrConflict):

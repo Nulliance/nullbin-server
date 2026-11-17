@@ -228,7 +228,10 @@ so its size does not depend on what was read.
    member token and its place, which must equal j (else it stops). This
    token can read ciphertext and post one immutable announcement. Exact
    retries reuse the stored record; other writes and self-destruct are
-   refused until the owner grants admission.
+   refused until the owner grants admission. The pending token expires at
+   the invite’s original deadline, whether or not it posted an announcement;
+   expiry frees capacity without reusing the slot. Admission must finish
+   before that deadline. Admitted members do not expire with their invite.
 3. It fetches the first records and checks that RK opens the creator's
    join, signed by the key in the link, with a name key. Until that check
    passes nothing is saved; if the room cannot be reached, it can retry.

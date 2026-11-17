@@ -55,7 +55,7 @@ export function showTextPreview(bytes: Uint8Array): boolean {
   if (hasHiddenChars(text)) {
     const warning = document.createElement('p');
     warning.className = 'nb-note nb-tone-warn';
-    warning.textContent = 'This file contains invisible or direction-changing characters. Check it carefully before copying or running it.';
+    warning.textContent = 'This file may contain invisible or direction-changing characters. Check it carefully before copying or running it.';
     box.append(warning);
   }
   box.append(pre);

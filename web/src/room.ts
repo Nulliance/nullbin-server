@@ -29,7 +29,7 @@ import {
   type SlotState,
 } from './api.ts';
 import { cleanName } from './comments.ts';
-import { announce, bindCopy, bindReveal, busy, copyText, el, formatCountdown, nextFrame, reveal, show, showProblem, showSection, swap } from './dom.ts';
+import { announce, bindCopy, bindReveal, busy, copyText, el, formatCountdown, nextFrame, reveal, show, showProblem, showSection, swap, toast } from './dom.ts';
 import { generatePassword, MIN_PASSWORD_LENGTH } from './create.ts';
 import { encodeInviteFragment, parseInviteFragment } from './link.ts';
 import {
@@ -549,6 +549,14 @@ function joinFlow(sodium: Sodium, id: string, roomKey: Uint8Array, inviteToken: 
       return;
     }
     nameInput.setAttribute('aria-invalid', 'false');
+    if (passwordHint && pwInput.value === '') {
+      show(pwField);
+      pwInput.setAttribute('aria-invalid', 'true');
+      error.textContent = 'Enter the chat’s password before joining.';
+      show(error);
+      pwInput.focus();
+      return;
+    }
     const done = busy(el<HTMLButtonElement>('room-join-submit'), 'Joining…');
     form.setAttribute('aria-busy', 'true');
     let joined: { memberToken: string; slot: number };
@@ -666,7 +674,8 @@ function joinFlow(sodium: Sodium, id: string, roomKey: Uint8Array, inviteToken: 
       return;
     }
     // A chat with a password: ask for it now if it was not given. The
-    // invite is used, so Join only repeats the check after this.
+    // invite is used, so Join only repeats the check after this. Pending
+    // places expire at the invite's original deadline.
     if (needsPassword && pwInput.value === '') {
       done();
       form.removeAttribute('aria-busy');
@@ -2274,6 +2283,7 @@ function openChat(sodium: Sodium, id: string, session: Session): void {
     if (value.length > MAX_MESSAGE_LENGTH) value = cleanText(value.slice(0, MAX_MESSAGE_LENGTH));
     if (ended || sending || composerLocked) return;
     if (value === '') {
+      if (text.value.trim() !== '') toast('Write a message with visible text.', 'warn');
       if (mode?.kind === 'edit') stopContext();
       return;
     }
@@ -2328,21 +2338,22 @@ function openChat(sodium: Sodium, id: string, session: Session): void {
   if (owner !== null) initOwner(sodium, id, session, owner, control, gone, signPublic, isEnded, state, listening.signal, revokePlace);
   // (Invites made in this tab add their secrets to the session; persist()
   // saves them with everything else.)
-  initDestroy(id, session, end, listening.signal);
+  initDestroy(id, session, end, () => state.members.has(session.slot) && !state.removed.has(session.slot), listening.signal);
 }
 
 /** Anyone in the room can self-destruct it, after confirming in a dialog. */
-function initDestroy(id: string, session: Session, end: (heading: string, text: string) => void, signal: AbortSignal): void {
+function initDestroy(id: string, session: Session, end: (heading: string, text: string) => void, admitted: () => boolean, signal: AbortSignal): void {
   const dialog = el<HTMLDialogElement>('room-destroy-dialog');
   const confirm = el<HTMLButtonElement>('room-destroy-confirm');
   const error = el('room-destroy-error');
   el('room-destroy').addEventListener('click', () => {
+    if (!admitted()) return;
     show(error, false);
     dialog.showModal();
   }, { signal });
   for (const b of ['room-destroy-close', 'room-destroy-cancel']) el(b).addEventListener('click', () => dialog.close(), { signal });
   confirm.addEventListener('click', async () => {
-    if (confirm.disabled) return;
+    if (confirm.disabled || !admitted()) return;
     show(error, false);
     const done = busy(confirm, 'Self-destructing…');
     try {
@@ -2402,7 +2413,7 @@ function initMembers(sodium: Sodium, id: string, session: Session, state: RoomSt
       const detail = make('span', 'nb-member-detail',
         announced ? (m ? `Removed${code}` : 'Invite revoked') : started ? `Removal not finished: they may still get messages${code}` :
           m ? `${verified ? 'Verified · ' : ''}${slot === 0 ? 'Created the chat · ' : ''}${as ? `Used the invite made for ${as} · ` : ''}Code ${m.code}` :
-            states?.get(slot) === 'expired' ? 'Invite expired unused' :
+            states?.get(slot) === 'expired' ? 'Invite or pending place expired' :
               state.badProof.has(slot) ? 'Joined with a link that didn’t match the invite: can’t be let in' :
                 states?.get(slot) === 'pending' || states?.get(slot) === 'joined' ? 'Waiting to be let in' : 'Invited, hasn’t joined yet');
       if (!m && state.badProof.has(slot)) detail.classList.add('nb-tone-warn');

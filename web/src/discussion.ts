@@ -197,12 +197,16 @@ function renderNode(node: ThreadNode, onReply: (c: Comment) => void): HTMLLIElem
   const who = document.createElement('span');
   who.className = 'nb-comment-name';
   who.textContent = displayName(c); // never innerHTML
+  const unverified = document.createElement('span');
+  unverified.className = 'nb-meta';
+  unverified.textContent = 'Unverified name';
+  unverified.title = 'Anyone with the paste link and password can use any name. Names do not verify identity or an official role.';
   const when = document.createElement('time');
   when.className = 'nb-meta';
   when.dateTime = new Date(c.time).toISOString();
   when.title = new Date(c.time).toLocaleString();
   when.textContent = relativeTime(c.time);
-  head.append(avatar, who, when);
+  head.append(avatar, who, unverified, when);
 
   const body = document.createElement('p');
   body.className = 'nb-comment-text';
@@ -212,7 +216,7 @@ function renderNode(node: ThreadNode, onReply: (c: Comment) => void): HTMLLIElem
     // The same warning the paste viewer shows, for the same reason.
     const warn = document.createElement('p');
     warn.className = 'nb-meta nb-comment-warn';
-    warn.textContent = 'This comment contains hidden characters that can make it look different from what copying it gives you.';
+    warn.textContent = 'This comment may contain hidden characters that can make it look different from what copying it gives you.';
     parts.push(warn);
   }
 

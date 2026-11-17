@@ -96,3 +96,83 @@ func TestAdmissionCannotReopenRemovedOrUnusedPlaces(t *testing.T) {
 		t.Fatalf("removed pending token reads: %v", err)
 	}
 }
+
+func TestAbandonedPendingPlacesExpireWithoutReopeningTokens(t *testing.T) {
+	for _, announced := range []bool{false, true} {
+		s, clk := newStore(t)
+		c, err := s.CreateWith(Options{Expires: 24 * time.Hour, MaxMembers: 2, InviteTTL: 5 * time.Minute}, someone)
+		if err != nil {
+			t.Fatal(err)
+		}
+		invite, slot, err := s.Invite(c.ID, c.OwnerToken)
+		if err != nil {
+			t.Fatal(err)
+		}
+		member, _, err := s.Join(c.ID, invite)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if announced {
+			if _, err := s.Post(c.ID, member, record(100, 1)); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if _, _, err := s.Invite(c.ID, c.OwnerToken); !errors.Is(err, ErrRoomFull) {
+			t.Fatalf("pending place not reserved: %v", err)
+		}
+		clk.t = clk.t.Add(5 * time.Minute)
+		states, _ := s.Members(c.ID, c.OwnerToken)
+		if states[slot] != StateExpired {
+			t.Fatalf("expired state: %v", states)
+		}
+		if _, _, _, err := s.Read(c.ID, member, 0); !errors.Is(err, ErrNotFound) {
+			t.Fatalf("expired token reads: %v", err)
+		}
+		if _, err := s.Post(c.ID, member, record(100, 1)); !errors.Is(err, ErrNotFound) {
+			t.Fatalf("expired token posts: %v", err)
+		}
+		if err := s.Admit(c.ID, c.OwnerToken, slot); !errors.Is(err, ErrNotFound) {
+			t.Fatalf("late admission: %v", err)
+		}
+		if _, _, err := s.Join(c.ID, invite); !errors.Is(err, ErrInviteUsed) {
+			t.Fatalf("invite reopened: %v", err)
+		}
+		if _, next, err := s.Invite(c.ID, c.OwnerToken); err != nil || next <= slot {
+			t.Fatalf("new invite: slot=%d err=%v", next, err)
+		}
+	}
+}
+
+func TestAdmissionBeforeDeadlineKeepsItsPlace(t *testing.T) {
+	s, clk := newStore(t)
+	c, _ := s.CreateWith(Options{Expires: 24 * time.Hour, MaxMembers: 2, InviteTTL: 5 * time.Minute}, someone)
+	invite, slot, _ := s.Invite(c.ID, c.OwnerToken)
+	member, _, _ := s.Join(c.ID, invite)
+	if _, err := s.Post(c.ID, member, record(100, 1)); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Admit(c.ID, c.OwnerToken, slot); err != nil {
+		t.Fatal(err)
+	}
+	clk.t = clk.t.Add(6 * time.Minute)
+	if _, _, _, err := s.Read(c.ID, member, 0); err != nil {
+		t.Fatalf("admitted member expired: %v", err)
+	}
+	if _, _, err := s.Invite(c.ID, c.OwnerToken); !errors.Is(err, ErrRoomFull) {
+		t.Fatalf("admitted member not counted: %v", err)
+	}
+}
+
+func TestJoinRechecksCapacityAfterClockMovesBackwards(t *testing.T) {
+	s, clk := newStore(t)
+	c, _ := s.CreateWith(Options{Expires: 24 * time.Hour, MaxMembers: 2, InviteTTL: 5 * time.Minute}, someone)
+	first, _, _ := s.Invite(c.ID, c.OwnerToken)
+	clk.t = clk.t.Add(5 * time.Minute)
+	if _, _, err := s.Invite(c.ID, c.OwnerToken); err != nil {
+		t.Fatal(err)
+	}
+	clk.t = clk.t.Add(-time.Minute)
+	if _, _, err := s.Join(c.ID, first); !errors.Is(err, ErrRoomFull) {
+		t.Fatalf("capacity invariant: %v", err)
+	}
+}

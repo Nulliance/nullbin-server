@@ -5,6 +5,8 @@ package assets
 import (
 	"embed"
 	"io/fs"
+
+	buildinputs "github.com/jacobzymet/nullbin-go"
 )
 
 //go:embed all:dist
@@ -14,6 +16,9 @@ var dist embed.FS
 func Load() (*Bundle, error) {
 	sub, err := fs.Sub(dist, "dist")
 	if err != nil {
+		return nil, err
+	}
+	if err := VerifySources(sub, buildinputs.Frontend); err != nil {
 		return nil, err
 	}
 	return LoadFS(sub)

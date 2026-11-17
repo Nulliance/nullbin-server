@@ -39,6 +39,7 @@ ENV CGO_ENABLED=0 GOTOOLCHAIN=local GOFLAGS=-mod=readonly
 COPY go.mod ./
 COPY cmd ./cmd
 COPY internal ./internal
+COPY sources.go package.json package-lock.json .npmrc tsconfig.json ./
 ARG VERSION
 ARG TARGETOS
 ARG TARGETARCH
@@ -52,6 +53,7 @@ RUN GOOS=$TARGETOS GOARCH=$TARGETARCH go build -tags=api -trimpath -buildvcs=fal
 
 # Optional combined binary, retained for local development and releases.
 FROM go-base AS go
+COPY web ./web
 COPY --from=web /src/internal/assets/dist/ ./internal/assets/dist/
 RUN GOOS=$TARGETOS GOARCH=$TARGETARCH go build -trimpath -buildvcs=false \
       -ldflags="-s -w -buildid= -X main.version=${VERSION:-dev}" \
@@ -77,6 +79,7 @@ FROM caddy:2.11.8-alpine@sha256:f6228111e5fafa1a5238258d0858e103f10599b8d1659a14
 RUN mkdir -m 0700 -p /state/data /state/config
 
 FROM gcr.io/distroless/static-debian13:nonroot@sha256:aafe993665bf6200db38a02c11a9351e782a84b6a45e7f33b6695638c88e3931 AS proxy
+LABEL org.opencontainers.image.title=nullbin
 COPY --from=caddy-dist /usr/bin/caddy /usr/bin/caddy
 # Certificates and Caddy's state, owned by the non-root user.
 COPY --from=caddy-dist --chown=65532:65532 /state/data /data
@@ -97,6 +100,7 @@ COPY deploy/caddy/ /etc/caddy/nullbin/
 
 # An API-only image: only Go source is needed to build this target.
 FROM gcr.io/distroless/static-debian13:nonroot@sha256:aafe993665bf6200db38a02c11a9351e782a84b6a45e7f33b6695638c88e3931 AS backend
+LABEL org.opencontainers.image.title=nullbin
 COPY --from=api-build /out/nullbin /nullbin
 COPY --from=go-base --chown=65532:65532 /out/data /data
 ENV NULLBIN_LISTEN_ADDR=:8080 NULLBIN_DATA_DIR=/data NULLBIN_API_ONLY=true
@@ -108,6 +112,7 @@ ENTRYPOINT ["/nullbin"]
 
 # --- runtime image (default target) ----------------------------------------
 FROM gcr.io/distroless/static-debian13:nonroot@sha256:aafe993665bf6200db38a02c11a9351e782a84b6a45e7f33b6695638c88e3931
+LABEL org.opencontainers.image.title=nullbin
 COPY --from=go /out/nullbin /nullbin
 COPY --from=go --chown=65532:65532 /out/data /data
 ENV NULLBIN_LISTEN_ADDR=:8080 \

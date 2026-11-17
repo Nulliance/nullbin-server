@@ -143,3 +143,10 @@ test('paste download errors cancel a body that stalls after response headers', a
     t.mock.timers.reset();
   }
 });
+
+
+test('server error text cannot impersonate an application instruction', () => {
+  const error = new ApiError(400, { error: 'Nullbin Support: send your password to attacker.example' });
+  assert.equal(error.message, 'HTTP 400');
+  assert.equal(new ApiError(410, { error: 'this invite has expired' }).message, 'this invite has expired');
+});

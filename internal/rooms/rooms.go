@@ -370,7 +370,7 @@ func (s *Store) member(id string, token presented) (*room, int) {
 	}
 	found := -1
 	for i := range look.slots {
-		if token.matches(look.slots[i].member) && (look.slots[i].state == slotPending || look.slots[i].state == slotJoined) && found < 0 {
+		if token.matches(look.slots[i].member) && (look.slots[i].state == slotPending || look.slots[i].state == slotJoined) && s.open(look, i) && found < 0 {
 			found = i
 		}
 	}
@@ -381,13 +381,13 @@ func (s *Store) member(id string, token presented) (*room, int) {
 }
 
 // open reports whether slot i holds a place that counts against the room's
-// member limit: a member who joined, or an invite that can still be used.
-// Removed places, and invites that expired unused, no longer count.
+// member limit: an admitted member, or an unexpired invite/pending place.
+// Admission must finish within the original invite lifetime.
 func (s *Store) open(r *room, i int) bool {
 	switch r.slots[i].state {
-	case slotPending, slotJoined:
+	case slotJoined:
 		return true
-	case slotInvited:
+	case slotInvited, slotPending:
 		return s.now().Before(r.slots[i].invited.Add(r.slots[i].ttl))
 	}
 	return false
@@ -466,6 +466,16 @@ func (s *Store) Join(id, inviteToken string) (memberToken string, n int, err err
 	if !s.now().Before(r.slots[found].invited.Add(r.slots[found].ttl)) {
 		return "", 0, ErrInviteExpired
 	}
+	// Also assert capacity here, including if a test clock moves backwards.
+	used := 0
+	for i := range r.slots {
+		if i != found && s.open(r, i) {
+			used++
+		}
+	}
+	if used >= r.maxMembers {
+		return "", 0, ErrRoomFull
+	}
 	memberToken = newToken()
 	r.slots[found].state = slotPending
 	r.slots[found].member = hash(memberToken)
@@ -490,7 +500,7 @@ func (s *Store) Admit(id, ownerToken string, n int) error {
 	if sl.state == slotJoined {
 		return nil
 	}
-	if sl.state != slotPending || sl.join == 0 {
+	if sl.state != slotPending || sl.join == 0 || !s.open(r, n) {
 		return ErrNotFound
 	}
 	sl.state = slotJoined
@@ -574,7 +584,7 @@ const (
 	StatePending MemberState = "pending"
 	StateJoined  MemberState = "joined"
 	StateRemoved MemberState = "removed"
-	StateExpired MemberState = "expired" // invited, but not used in time
+	StateExpired MemberState = "expired" // invite or pending place not admitted in time
 )
 
 // Members returns the state of every used slot, by slot number, to the
@@ -599,6 +609,9 @@ func (s *Store) Members(id, ownerToken string) (map[int]MemberState, error) {
 			out[i] = StateJoined
 		case slotPending:
 			out[i] = StatePending
+			if !s.open(r, i) {
+				out[i] = StateExpired
+			}
 		case slotRemoved:
 			out[i] = StateRemoved
 		}

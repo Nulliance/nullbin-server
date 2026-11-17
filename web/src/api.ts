@@ -27,11 +27,66 @@ const base: RequestInit = {
   referrerPolicy: 'no-referrer',
 };
 
+// Only application-defined error text can enter a trusted error banner.
+// Unknown server text is replaced by its status, even on split deployments.
+const API_ERRORS = new Set([
+  "a burn-after-reading paste cannot have a discussion",
+  "after must be a record index",
+  "burn_token is required only for burn-after-reading pastes and must be 43 base64url characters",
+  "chunk out of order",
+  "chunk too large",
+  "chunk too small: every chunk but the last must be at least 4 MiB",
+  "comment too large",
+  "comment too short",
+  "comment_token must be 43 base64url characters",
+  "content type must be application/json",
+  "content type must be application/octet-stream",
+  "could not read request body",
+  "empty chunk",
+  "expires_in must be one of 300, 1800, 3600, 10800, 43200, 86400, 259200, 604800",
+  "expires_in must be one of 300, 1800, 3600, 10800, 43200, 86400, 259200, 604800, 2592000",
+  "expires_in, burn_after_reading and total_size are required",
+  "header not allowed",
+  "internal error",
+  "invalid JSON",
+  "invalid chunk index",
+  "invalid request",
+  "invite_ttl must be one of 300, 900, 3600",
+  "max_reads requires burn_after_reading and must be an integer from 1 to 1000",
+  "method not allowed",
+  "no room for more burner rooms right now",
+  "not found",
+  "origin not allowed",
+  "paste busy, try again",
+  "paste or storage capacity reached",
+  "rate limited",
+  "recipients requires burn_after_reading, no burn_token, max_reads or comment_token, and 2 to 20 entries, each a distinct 43-character base64url token with an optional max_reads from 1 to 1000",
+  "request body too large",
+  "server busy",
+  "storage capacity reached",
+  "this discussion is full",
+  "this invite has expired",
+  "this invite was already used or removed",
+  "this link was revoked or has used all its opens",
+  "this room has used all its places",
+  "this room is full",
+  "too many active downloads",
+  "too many active uploads",
+  "too many live burner rooms from this network",
+  "too many unfinished uploads",
+  "total_size is too small",
+  "ttl must be one of 300, 900, 3600",
+  "upload busy",
+  "upload incomplete",
+  "upload too slow",
+  "waiting for the creator to let you in",
+]);
+
 export class ApiError extends Error {
   readonly status: number;
   readonly body: Record<string, unknown>;
   constructor(status: number, body: Record<string, unknown>) {
-    super(typeof body['error'] === 'string' ? body['error'] : `HTTP ${status}`);
+    super(typeof body['error'] === 'string' && API_ERRORS.has(body['error']) ? body['error'] : `HTTP ${status}`);
     this.name = 'ApiError';
     this.status = status;
     this.body = body;

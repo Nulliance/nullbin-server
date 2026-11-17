@@ -390,6 +390,10 @@ Option A and Option B.
 | Free disk space used by old builds | `sudo ./nullbin cleanup` |
 | List every command | `./nullbin help` |
 
+`cleanup` removes only dangling images labelled as Nullbin. It keeps other
+projects’ images, shared Docker build caches and all data volumes. Images
+from older releases without the label are kept too.
+
 None of these delete pastes, except `delete` for the one paste you name.
 
 ### Update
@@ -876,7 +880,7 @@ Forwarded addresses are trusted only from `NULLBIN_TRUSTED_PROXIES`.
 | Minimum download rate | 32 KiB/s on average after 2 minutes (for password and save dialogs). Time the server spends on its own bandwidth limits does not count. Every download also ends 1 minute plus 1 second per 32 KiB of paste after it starts. |
 | Download bandwidth | 4 MiB/s per client, 16 MiB/s in total |
 | Request size | 4 KiB to create a paste; 16 KiB of headers |
-| Disk writes at once | 64 creates, finalizes, deletes and comments; others wait up to 10 s |
+| Disk writes at once | 64 creates, finalizes, deletes and comments (others wait up to 10 s), plus 16 chunk durability commits. Slow upload bodies hold no durability slot. |
 | Timeouts | 10 s for headers, 60 s idle, 30 s for other requests, 5 minutes per upload chunk |
 
 An upload is charged 32 KiB when it starts and its bytes as they arrive,
@@ -886,14 +890,23 @@ before it finishes. Each comment is charged when it is posted, so an
 unused comment section costs nothing. A full budget returns `507`; too
 many uploads or transfers return `503` with `Retry-After`. This is
 Nullbin's own budget, not a disk quota: leave free disk space, or use a
-dedicated volume.
+dedicated volume. The paste limit counts published, pending and claimed
+entries together. Unknown directories are conservatively charged and kept
+until the operator removes them. Startup skips links/junctions and other
+non-directories without following them and reports their count. An unreadable
+directory is charged the entire storage budget so recovery remains possible
+while new writes fail closed. `nullbin stats` reports skipped entries and
+returns failure with incomplete totals when an entry cannot be measured.
 
 </details>
 
 <details>
 <summary><strong>API reference</strong>: endpoints, tokens, responses and link formats</summary>
 
-All endpoints are under `/api/v1`. Errors are JSON: `{"error": "..."}`.
+All endpoints are under `/api/v1`. Application errors are JSON: `{"error": "..."}`.
+The HTTP router can return plain-text `404`/`405` responses for unknown paths
+or unsupported methods. Clients must accept either format and use canonical
+paths: redundant slashes can redirect, which also affects CORS preflights.
 Every response carries the security headers. Unknown, expired and burned
 pastes, and wrong tokens, all return the same `404`.
 
@@ -1152,10 +1165,14 @@ the room still exists):
   when members and still-usable invites reach `max_members`.
 - `POST /{id}/join` (with `Nullbin-Invite-Token`) returns `200` with a pending
   `member_token` and the `slot`; `410` if that invite was used, revoked
-  (removed) or older than its `ttl`.
+  (removed) or older than its `ttl`. Pending places count against capacity
+  only until that same deadline: admission must finish before the original
+  invite expires, even if an announcement was posted. Expiry invalidates the
+  pending token and frees capacity; the numbered slot and invite stay used.
 - `POST /{id}/members/{n}/admit` (with `Nullbin-Owner-Token`) grants full
   server permissions after the creator's tab verifies the join proof.
-  Requires a pending place with a posted announcement; retries are safe.
+  Requires an unexpired pending place with a posted announcement; retries are safe.
+  Admitted members keep their place after the invite deadline.
 - `POST /{id}/records` (with `Nullbin-Member-Token`, `application/octet-stream`,
   41 bytes to 16 KiB) stores one record and stamps it with the sender's slot.
   Before admission, only one immutable announcement is allowed: an exact
@@ -1294,13 +1311,22 @@ go build -trimpath -o nullbin ./cmd/nullbin
 
 Then open `http://127.0.0.1:8080`.
 
+The combined binary checks a build manifest against its compiled-in frontend
+sources, lockfile and configuration, then checks the three bundle hashes. It
+refuses stale or incomplete assets even after a plain `go build`, without
+needing Git or the checkout at runtime. Explicit binary and frontend versions
+must agree; a default development binary adopts the frontend version. Run
+`npm run build` again after changing a frontend input. This adds public source
+bytes to the combined binary; API-only binaries omit them.
+
 Null Chats live in the server's memory, so outside Docker (whose files
 here already turn them off) run it with core dumps off: `ulimit -c 0` first
 on Linux and macOS, and on systemd `LimitCORE=0`.
 
 **Website only:** `NULLBIN_API_ORIGIN=https://api.example.com npm run build:frontend`
 builds `web/dist`. The API address is fixed at build time; links and API
-responses cannot change it.
+responses cannot change it. This command does not refresh the combined
+binary’s embedded bundle; use `npm run build` before building that binary.
 
 **Tests:**
 

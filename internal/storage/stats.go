@@ -24,6 +24,8 @@ type Stats struct {
 	Newer        int   // pastes written by a newer release, kept but not served
 	Entries      int   // everything counted against the paste limit
 	Charged      int64 // storage charged against the budget, as the server counts it
+	Skipped      int   // links and non-directory entries, never followed
+	Errors       int   // entries whose size could not be read; totals are incomplete
 }
 
 // ReadStats reads a data directory without changing it, so it can run while
@@ -38,24 +40,38 @@ func ReadStats(dir string, now time.Time) (Stats, error) {
 	// Only the read-only methods of this Store are used.
 	s := &Store{root: root, now: func() time.Time { return now }}
 	var st Stats
-	var ignored SweepStats
 
 	for _, parent := range []string{dirPending, dirPastes, dirClaimed} {
 		if fi, err := root.Lstat(parent); err != nil || !fi.IsDir() {
 			return Stats{}, errors.New("not a Nullbin data directory")
 		}
-		for _, name := range s.list(parent, &ignored) {
+		entries, err := fs.ReadDir(root.FS(), parent)
+		if err != nil {
+			return Stats{}, errors.New("cannot list storage entries")
+		}
+		for _, entry := range entries {
+			name := entry.Name()
 			valid := ValidID(name)
 			if parent == dirClaimed {
 				valid = validClaimName(name)
 			}
 			dir := path.Join(parent, name)
 			fi, err := root.Lstat(dir)
-			if err != nil || !fi.IsDir() {
-				continue // gone meanwhile, or not ours
+			if errors.Is(err, fs.ErrNotExist) {
+				continue
+			}
+			if err != nil {
+				st.Errors++
+				continue
+			}
+			if !fi.IsDir() {
+				st.Skipped++
+				continue
 			}
 			if charge, err := s.entryCharge(parent, dir); err == nil {
 				st.Charged = addCapped(st.Charged, charge)
+			} else {
+				st.Errors++
 			}
 			st.Entries++
 			if !valid {

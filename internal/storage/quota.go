@@ -178,9 +178,24 @@ func (s *Store) rebuildAllocations() error {
 		}
 		for _, entry := range entries {
 			dir := path.Join(parent, entry.Name())
-			reserved, err := s.entryCharge(parent, dir)
+			// Lstat also catches Windows junctions; never walk through a link.
+			fi, err := s.root.Lstat(dir)
+			if errors.Is(err, fs.ErrNotExist) {
+				continue
+			}
+			if err == nil && !fi.IsDir() {
+				s.skipped++
+				continue
+			}
+			reserved := int64(0)
+			if err == nil {
+				reserved, err = s.entryCharge(parent, dir)
+			}
 			if err != nil {
-				return err
+				// Keep recovery commands usable, but fail closed for new writes:
+				// an unreadable directory may consume the entire storage budget.
+				s.skipped++
+				reserved = max(entryOverhead, s.limits.MaxBytes)
 			}
 			if reserved > math.MaxInt64-s.used {
 				return ErrQuota

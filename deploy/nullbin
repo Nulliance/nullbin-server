@@ -303,6 +303,7 @@ main() {
   start() {
     local version changes
     version=$(installed)
+    [[ $version =~ ^[0-9A-Za-z][0-9A-Za-z.+_-]{0,63}$ ]] || die "invalid build version; use a release tag or a checkout with a simple version name"
     # Configurations from before v0.2.5 hold the old default of 64, which a
     # few client networks could fill with empty uploads.
     if as_owner grep -q -x -- 'MAX_PENDING=64' "$deploy/$config"; then
@@ -346,7 +347,7 @@ $changes" >&2
   latest_release() {
     local slug
     slug=$(repo_slug) || return 1
-    curl -fsSL "https://api.github.com/repos/$slug/releases/latest" |
+    curl -fsSL --proto '=https' --proto-redir '=https' --max-time 20 --max-filesize 1048576 "https://api.github.com/repos/$slug/releases/latest" |
       grep -o '"tag_name": *"[^"]*"' | head -n 1 | cut -d '"' -f 4
   }
 
@@ -416,7 +417,7 @@ $changes" >&2
     local slug code try
     slug=$(repo_slug) || { echo 000; return; }
     for try in 1 2 3; do
-      code=$(curl -s -o /dev/null -w '%{http_code}' --proto '=https' --max-time 20 "https://api.github.com/repos/$slug/releases/tags/$1" || true)
+      code=$(curl -s -o /dev/null -w '%{http_code}' --proto '=https' --proto-redir '=https' --max-filesize 1048576 --max-time 20 "https://api.github.com/repos/$slug/releases/tags/$1" || true)
       [[ $code == 200 || $code == 404 ]] && break
       [[ $try == 3 ]] || sleep 5
     done
@@ -600,10 +601,9 @@ Set them aside with: git -C $repo stash --include-untracked (and move ignored on
       return "$status"
       ;;
     cleanup)
-      # Unused images and the build cache only; never volumes, so never pastes.
-      docker image prune -f
-      docker builder prune -f
-      echo "Done. Pastes are never affected; the next update rebuilds a little more slowly."
+      # BuildKit's shared cache cannot be reliably scoped by image labels.
+      docker image prune -f --filter 'label=org.opencontainers.image.title=nullbin'
+      echo "Done. Removed unused Nullbin images. Shared build caches and paste volumes are kept."
       ;;
     *)
       usage

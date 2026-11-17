@@ -181,6 +181,22 @@ if (embeddedHTML.split('<meta http-equiv="Content-Security-Policy"').length !== 
 const htmlBytes = new TextEncoder().encode(embeddedHTML);
 
 if (!frontendOnly) {
+  // Match sources.go exactly. Go embeds these same inputs, so a plain Go
+  // rebuild after any source/lockfile edit cannot silently serve old JS.
+  const sources = {};
+  async function recordInput(name) {
+    const full = path.join(root, name);
+    const entries = await readdir(full, { withFileTypes: true }).catch((e) => e.code === 'ENOTDIR' ? null : Promise.reject(e));
+    if (entries === null) {
+      sources[name] = hex(await readFile(full));
+      return;
+    }
+    for (const entry of entries.sort((a, b) => a.name < b.name ? -1 : a.name > b.name ? 1 : 0)) {
+      if (entry.isSymbolicLink()) fail('frontend build inputs must not be symbolic links');
+      await recordInput(`${name}/${entry.name}`);
+    }
+  }
+  for (const name of ['package.json', 'package-lock.json', '.npmrc', 'tsconfig.json', 'web/build.mjs', 'web/frontend.mjs', 'web/index.html', 'web/src', 'web/styles', 'web/fonts', 'web/vendor', 'web/images']) await recordInput(name);
   await mkdir(outDir, { recursive: true });
   for (const name of await readdir(outDir)) {
     if (name !== '.gitkeep') await rm(path.join(outDir, name), { recursive: true });
@@ -188,7 +204,11 @@ if (!frontendOnly) {
   await writeFile(path.join(outDir, 'app.js'), jsBytes);
   await writeFile(path.join(outDir, 'app.css'), cssBytes);
   await writeFile(path.join(outDir, 'index.html'), htmlBytes);
+  await writeFile(path.join(outDir, 'build.json'), JSON.stringify({ version, sources, files: {
+    'index.html': hex(htmlBytes), 'app.js': hex(jsBytes), 'app.css': hex(cssBytes),
+  } }) + '\n');
 }
+if (frontendOnly && !outBase) console.warn('build:frontend does not refresh the Go embedded bundle; run npm run build before go build.');
 
 // Standalone frontend: copy this directory to a static host. Public assets
 // have content-hashed names; index.html always requests a fresh version.

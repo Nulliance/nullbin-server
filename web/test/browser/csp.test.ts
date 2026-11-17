@@ -1433,6 +1433,11 @@ test('Null Chat security options: a password, a member limit, short invites and 
 
   // A chat for two takes one more invite, and Ada's own tab refuses a third.
   const wrongLink = await invite(a, 'Bob');
+  const missingPassword = await tryJoin(wrongLink, 'Bob', '');
+  await missingPassword.page.waitForSelector('#room-join-error:not([hidden])');
+  assert.equal(missingPassword.sent.filter((request) => request.path.endsWith('/join')).length, 0, 'empty password never consumes the hinted invite');
+  await missingPassword.check();
+  await missingPassword.context.close();
   await openInvite(a, 'Cleo');
   await a.page.waitForSelector('#room-invite-error:not([hidden])');
   assert.match((await a.page.textContent('#room-invite-error')) ?? '', /allows 2 people/);
@@ -1525,6 +1530,15 @@ test('Null Chat pending admission: no chat flash, self-destruct or record floodi
     });
     assert.equal(pending.roster, null);
     assert.equal(pending.chain, null);
+    const destroys = h.sent.filter((request) => request.method === 'DELETE').length;
+    await h.page.evaluate(() => {
+      document.getElementById('room-destroy')!.click();
+      document.getElementById('room-destroy-confirm')!.click();
+    });
+    assert.equal(await h.page.locator('#room-destroy-dialog').evaluate((dialog) => (dialog as HTMLDialogElement).open), false);
+    assert.equal(h.sent.filter((request) => request.method === 'DELETE').length, destroys, 'hidden controls cannot attempt pending self-destruct');
+    assert.ok(await h.page.isVisible('#room-waiting'));
+    assert.notEqual(await h.page.evaluate(() => sessionStorage.length), 0, 'hidden controls preserve the pending session');
     const headers = { 'Nullbin-Member-Token': pending.member! };
     const base = `${apiOrigin}/api/v1/rooms/${roomID}`;
     assert.equal((await h.context.request.delete(base, { headers })).status(), 404, 'server denies self-destruct');
@@ -1734,6 +1748,7 @@ test('discussion without a password: anyone with the link reads and comments, no
   await h.page.click('#comment-submit');
   await h.page.waitForSelector('.nb-comment');
   assert.equal(await h.page.textContent('.nb-comment .nb-comment-text'), 'Hello from the link alone.');
+  assert.ok(await h.page.locator('.nb-comment-head').getByText('Unverified name', { exact: true }).isVisible());
   // A second reader with the same link sees the comment after decrypting it.
   const h2 = await open();
   await goto(h2, share);

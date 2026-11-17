@@ -60,6 +60,9 @@ func showStats(environ []string, out io.Writer) int {
 	}
 	free, total, ok := storage.DiskSpace(cfg.DataDir)
 	fmt.Fprint(out, formatStats(st, cfg, free, total, ok))
+	if st.Errors > 0 {
+		return 1
+	}
 	return 0
 }
 
@@ -71,6 +74,12 @@ func formatStats(st storage.Stats, cfg config, free, total int64, diskKnown bool
 	line("  encrypted size:    %s", humanBytes(st.PasteBytes))
 	line("Comments:            %d (%s)", st.Comments, humanBytes(st.CommentBytes))
 	line("Unfinished uploads:  %d", st.Pending)
+	if st.Skipped > 0 {
+		line("Skipped entries:     %d links or non-directories (inspect the data directory)", st.Skipped)
+	}
+	if st.Errors > 0 {
+		line("Read errors:         %d entries; totals are incomplete", st.Errors)
+	}
 	if st.Removable > 0 {
 		line("Waiting for cleanup: %d expired or used-up pastes (removed within a minute)", st.Removable)
 	}
@@ -130,6 +139,9 @@ func deletePaste(environ []string, id string, out io.Writer) int {
 		return 1
 	}
 	defer store.Close()
+	if n := store.SkippedEntries(); n > 0 {
+		fmt.Fprintf(out, "Skipped or conservatively charged %d unsafe/unreadable storage entries; inspect the data directory.\n", n)
+	}
 	switch err := store.Remove(id); {
 	case err == nil:
 		fmt.Fprintln(out, "Deleted.")
@@ -205,6 +217,13 @@ func run() int {
 			logger.Printf("startup: %v", err)
 			return 1
 		}
+		if version != "dev" && version != bundle.Version {
+			logger.Printf("startup: frontend and binary versions disagree; rebuild both with the same version")
+			return 1
+		}
+		if version == "dev" {
+			version = bundle.Version
+		}
 	}
 	store, err := storage.OpenWithLimits(cfg.DataDir, storage.Limits{MaxBytes: cfg.MaxStorage, MaxPending: cfg.MaxPending, MaxPastes: cfg.MaxPastes})
 	if err != nil {
@@ -212,6 +231,9 @@ func run() int {
 		return 1
 	}
 	defer store.Close()
+	if n := store.SkippedEntries(); n > 0 {
+		logger.Printf("startup: skipped or conservatively charged %d unsafe/unreadable storage entries; inspect the data directory", n)
+	}
 
 	var roomStore *rooms.Store
 	if cfg.Rooms {

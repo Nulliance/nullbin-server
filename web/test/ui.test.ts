@@ -333,5 +333,14 @@ test('blank-looking characters cannot pad names, and line separators are flagged
     assert.equal(stripHiddenChars(`image/png${c(n)}`), 'image/png', n.toString(16));
   }
   assert.equal(hasHiddenChars(`a${c(0x2028)}b`), true, 'a line separator is flagged in text');
-  assert.equal(hasHiddenChars(`Braille ${c(0x2800)}${c(0x2801)}`), false, 'Braille text is not flagged');
+  assert.equal(hasHiddenChars(`Braille ${c(0x2800)}${c(0x2801)}`), true, 'Braille blank padding is flagged');
+  assert.equal(hasHiddenChars(`Braille ${c(0x2801)}`), false, 'visible Braille is not flagged');
+});
+
+
+test('hidden-character warnings include blank Braille, private use and excessive legitimate joiners', () => {
+  for (const point of [0x2800, 0xE000, 0xF0000, 0x100000]) assert.equal(hasHiddenChars(`a${String.fromCodePoint(point)}b`), true);
+  assert.equal(hasHiddenChars('ن\u200Cن'), false, 'ordinary Persian remains allowed');
+  assert.equal(hasHiddenChars('ن\u200Cن'.repeat(100_000)), true, 'dense legitimate joiners get a conservative warning');
+  assert.equal(hasHiddenChars('👨\u200D👩'.repeat(100_000)), true, 'dense emoji joins get a conservative warning');
 });

@@ -71,6 +71,7 @@ import {
 } from './room-crypto.ts';
 import { RoomState, type BoxKey, type Member, type Message, type RoomEvent } from './room-state.ts';
 import { loadSodium, type Sodium } from './sodium.ts';
+import { pageLifetime } from './page-lifetime.ts';
 
 /** Messages sent with one chain before it is replaced by a fresh one. */
 const ROTATE_AFTER = 50;
@@ -93,6 +94,7 @@ interface StoredChain {
 
 /** What this tab holds for one room. */
 interface Session {
+  ends: number | null; // earliest authenticated expiry observed by this tab
   key: string; // room key, base64url
   slot: number;
   member: string; // member token
@@ -172,7 +174,8 @@ function loadSession(sodium: Sodium, id: string): Session | null {
   const o = v as Record<string, unknown>;
   const slotOk = (n: unknown) => typeof n === 'number' && Number.isInteger(n) && n >= 0 && n < 20;
   const pending = o['pendingBox'] as Record<string, unknown> | null | undefined;
-  const ok = typeof o['key'] === 'string' && TOKEN.test(o['key']) && slotOk(o['slot']) &&
+  const ends = o['ends'];
+  const ok = (ends === undefined || ends === null || (typeof ends === 'number' && Number.isSafeInteger(ends) && ends > 0 && ends <= 8_640_000_000_000_000)) && typeof o['key'] === 'string' && TOKEN.test(o['key']) && slotOk(o['slot']) &&
     typeof o['name'] === 'string' && o['name'] !== '' && o['name'] === cleanName(o['name']) &&
     (pending === null || (typeof pending === 'object' && pending !== undefined && typeof pending['n'] === 'number' &&
       Number.isInteger(pending['n']) && pending['n'] >= 1 && pending['n'] <= MAX_COUNTER && bytesOf(sodium, pending['secret'], 32))) &&
@@ -216,6 +219,7 @@ function loadSession(sodium: Sodium, id: string): Session | null {
       const x = (typeof k === 'object' && k !== null ? k : {}) as Record<string, unknown>;
       return slotOk(x['slot']) && typeof x['n'] === 'number' && Number.isInteger(x['n']) && x['n'] >= 0 && x['n'] <= MAX_COUNTER && bytesOf(sodium, x['key'], 32);
     });
+  if (ok && ends === undefined) o['ends'] = null; // sessions from before expiry pinning
   return ok ? (o as unknown as Session) : null;
 }
 
@@ -262,10 +266,19 @@ function newIdentity(sodium: Sodium, name: string, names: { creator: { roster: U
 
 function newSession(sodium: Sodium, roomKey: Uint8Array, slot: number, member: string, owner: string | null, name: string, sign: Uint8Array, box: Uint8Array, creator: Uint8Array): Session {
   return {
-    key: b64(sodium, roomKey), slot, member, name, sign: b64(sodium, sign), boxes: [{ n: 0, secret: b64(sodium, box), retired: null }],
+    ends: null, key: b64(sodium, roomKey), slot, member, name, sign: b64(sodium, sign), boxes: [{ n: 0, secret: b64(sodium, box), retired: null }],
     boxRotate: false, boxRotated: Date.now(), pendingBox: null, owner, known: [{ slot: 0, key: b64(sodium, creator) }], removedSlots: [],
     invites: [], password: null, settings: null, joinProof: null, inviteCheck: null, chain: null, sentTo: [], sent: 0, rotate: false, peers: [], posted: [], peerBoxes: [], verified: [], roster: null, nameSecret: null,
   };
+}
+
+/** Drop reachable encoded secrets; JavaScript cannot zero immutable strings. */
+function wipeSession(session: Session): void {
+  Object.assign(session, {
+    ends: null, key: '', member: '', sign: '', owner: null, password: null, settings: null, roster: null, nameSecret: null,
+    boxes: [], pendingBox: null, chain: null, peers: [], invites: [], joinProof: null, inviteCheck: null,
+    known: [], peerBoxes: [], posted: [], verified: [], sentTo: [], name: '',
+  } satisfies Partial<Session>);
 }
 
 // --- The home page tab ---
@@ -298,6 +311,16 @@ export function initRoomCreate(start: 'paste' | 'chat'): (service: 'paste' | 'ch
   const form = el<HTMLFormElement>('room-create-form');
   const you = el<HTMLInputElement>('room-you');
   const error = el('room-create-error');
+  const secrets: Uint8Array[] = [];
+  let password = '';
+  let pendingSession: Session | null = null;
+  const life = pageLifetime(() => {
+    password = '';
+    for (const secret of secrets) secret.fill(0);
+    if (pendingSession) wipeSession(pendingSession);
+    for (const id of ['room-you', 'room-name', 'room-password']) el<HTMLInputElement>(id).value = '';
+    error.replaceChildren();
+  });
   // The password: like a paste's, generated or typed, shown only on request.
   const pwSwitch = el<HTMLInputElement>('room-password-switch');
   const pwRow = el('room-password-row');
@@ -338,7 +361,7 @@ export function initRoomCreate(start: 'paste' | 'chat'): (service: 'paste' | 'ch
   });
   form.addEventListener('submit', async (ev) => {
     ev.preventDefault();
-    if (form.getAttribute('aria-busy') === 'true') return;
+    if (!life.active() || form.getAttribute('aria-busy') === 'true') return;
     show(error, false);
     const name = cleanName(you.value);
     if (name === '' || !nameAllowed(name)) {
@@ -356,7 +379,7 @@ export function initRoomCreate(start: 'paste' | 'chat'): (service: 'paste' | 'ch
       el('room-name').focus();
       return;
     }
-    const password = pwSwitch.checked ? pw.value : '';
+    password = pwSwitch.checked ? pw.value : '';
     if (pwSwitch.checked && password.length < MIN_PASSWORD_LENGTH) {
       pw.classList.add('is-invalid');
       pw.setAttribute('aria-invalid', 'true');
@@ -377,15 +400,18 @@ export function initRoomCreate(start: 'paste' | 'chat'): (service: 'paste' | 'ch
     const done = busy(el<HTMLButtonElement>('room-create-submit'), 'Creating…');
     form.setAttribute('aria-busy', 'true');
     // Every secret made here is wiped at the end, whatever fails on the way.
-    const secrets: Uint8Array[] = [];
+    secrets.length = 0;
     try {
       const sodium = await loadSodium();
+      if (!life.active()) return;
       const created = await createRoom(expiresIn, maxMembers, inviteTtl);
+      if (!life.active()) return;
       // The password never leaves this tab: only its Argon2id key is kept,
       // to check joins. (Argon2id blocks the page for a moment.)
       let pwKey: Uint8Array | null = null;
       if (password !== '') {
         await nextFrame();
+        if (!life.active()) return;
         pwKey = roomPasswordKey(sodium, password, created.id);
         secrets.push(pwKey);
       }
@@ -399,6 +425,7 @@ export function initRoomCreate(start: 'paste' | 'chat'): (service: 'paste' | 'ch
       const me = newIdentity(sodium, name, { creator: { roster, nameKey: nameKeys.publicKey, roomId: created.id } });
       secrets.push(me.sign, me.box);
       const session = newSession(sodium, roomKey, 0, created.memberToken, created.ownerToken, name, me.sign, me.box, me.sign.subarray(32));
+      pendingSession = session;
       session.roster = b64(sodium, roster);
       session.nameSecret = b64(sodium, nameKeys.privateKey);
       session.password = pwKey ? b64(sodium, pwKey) : null;
@@ -409,8 +436,10 @@ export function initRoomCreate(start: 'paste' | 'chat'): (service: 'paste' | 'ch
       sodium.memzero(roomKey);
       // The room's name and when it ends, signed: members then check the
       // server's countdown against it.
+      const ends = Date.now() + expiresIn * 1000;
+      session.ends = ends;
       const named = sealControl(sodium, key, created.id, 0, me.sign,
-        { t: 'room', id: newRecordId(sodium), time: Date.now(), name: boxName(sodium, roster, roomName, created.id, 'room', 0), ends: Date.now() + expiresIn * 1000,
+        { t: 'room', id: newRecordId(sodium), time: Date.now(), name: boxName(sodium, roster, roomName, created.id, 'room', 0), ends,
           pw: password !== '', max: maxMembers, ttl: inviteTtl });
       sodium.memzero(roster);
       sodium.memzero(nameKeys.privateKey);
@@ -422,21 +451,31 @@ export function initRoomCreate(start: 'paste' | 'chat'): (service: 'paste' | 'ch
       try {
         // Join first: it carries the keys every reader checks against.
         await postRecord(created.id, created.memberToken, joinBytes as Uint8Array<ArrayBuffer>);
+        if (!life.active()) return;
+        if (Date.now() >= ends) throw new Error('This Null Chat expired before setup finished. Create a new one.');
         await postRecord(created.id, created.memberToken, named as Uint8Array<ArrayBuffer>);
       } finally {
         sodium.memzero(key);
         sodium.memzero(me.sign);
         sodium.memzero(me.box);
       }
+      if (!life.active()) return;
+      if (Date.now() >= ends) throw new Error('This Null Chat expired before setup finished. Create a new one.');
       saveSession(created.id, session);
       pw.value = '';
       window.location.assign(`/r/${created.id}`);
     } catch (e) {
+      if (!life.active()) return;
       for (const s of secrets) s.fill(0);
       error.textContent = roomError(e, 'The Null Chat could not be created. Check your connection and try again.');
       show(error);
       error.focus();
     } finally {
+      for (const secret of secrets) secret.fill(0);
+      secrets.length = 0;
+      password = '';
+      if (pendingSession) wipeSession(pendingSession);
+      pendingSession = null;
       done();
       form.removeAttribute('aria-busy');
     }
@@ -448,7 +487,10 @@ export function initRoomCreate(start: 'paste' | 'chat'): (service: 'paste' | 'ch
 
 export async function initRoom(id: string, fragment: string): Promise<void> {
   showSection('room');
+  const loading = pageLifetime(() => {});
   const sodium = await loadSodium();
+  if (!loading.active()) return;
+  loading.finish();
   const existing = loadSession(sodium, id);
   if (fragment && !existing) {
     const invite = parseInviteFragment(sodium, fragment);
@@ -473,6 +515,18 @@ function joinFlow(sodium: Sodium, id: string, roomKey: Uint8Array, inviteToken: 
   const form = el<HTMLFormElement>('room-join-form');
   const nameInput = el<HTMLInputElement>('room-join-name');
   const error = el('room-join-error');
+  const secrets = [roomKey, inviteSecret, creatorKey];
+  let sessionSaved = false;
+  let pendingSession: Session | null = null;
+  const clearGate = () => {
+    for (const secret of secrets) secret.fill(0);
+    if (pendingSession) wipeSession(pendingSession);
+    nameInput.value = '';
+    el<HTMLInputElement>('room-join-password').value = '';
+    error.replaceChildren();
+    if (sessionSaved) clearSession(id);
+  };
+  const life = pageLifetime(clearGate);
   // The chat's password, if it has one. The link only hints at it; the
   // creator's signed settings, read once the invite is used, decide.
   const pwField = el('room-join-password-field');
@@ -484,7 +538,7 @@ function joinFlow(sodium: Sodium, id: string, roomKey: Uint8Array, inviteToken: 
   let used: { memberToken: string; slot: number } | null = null;
   form.addEventListener('submit', async (ev) => {
     ev.preventDefault();
-    if (form.getAttribute('aria-busy') === 'true') return;
+    if (!life.active() || form.getAttribute('aria-busy') === 'true') return;
     show(error, false);
     const name = cleanName(nameInput.value);
     if (name === '' || !nameAllowed(name)) {
@@ -500,8 +554,10 @@ function joinFlow(sodium: Sodium, id: string, roomKey: Uint8Array, inviteToken: 
     let joined: { memberToken: string; slot: number };
     try {
       joined = used ?? await joinRoom(id, inviteToken);
+      if (!life.active()) return;
       used = joined;
     } catch (e) {
+      if (!life.active()) return;
       done();
       form.removeAttribute('aria-busy');
       if (e instanceof ApiError && e.status === 410 && e.message.includes('expired')) {
@@ -532,6 +588,7 @@ function joinFlow(sodium: Sodium, id: string, roomKey: Uint8Array, inviteToken: 
     // with a key that may be wrong. If the room cannot be reached, say so
     // and let Join try the check again.
     const key0 = controlKey(sodium, roomKey);
+    secrets.push(key0);
     let opens: boolean | null = null;
     let gone = false;
     let nameKey: Uint8Array | null = null;
@@ -539,11 +596,23 @@ function joinFlow(sodium: Sodium, id: string, roomKey: Uint8Array, inviteToken: 
     // them (a server hiding them), a join without one is refused by the
     // creator, which fails safe.
     let needsPassword = false;
+    let signedEnd: number | null = null;
+    const expired = () => {
+      if (signedEnd === null || Date.now() < signedEnd) return false;
+      clearGate();
+      life.finish();
+      done();
+      form.removeAttribute('aria-busy');
+      showProblem('This Null Chat has expired', 'Its time is up. This tab’s keys have been cleared.');
+      return true;
+    };
     try {
       for (let attempt = 0; opens === null && attempt < 3; attempt++) {
         if (attempt > 0) await new Promise((r) => setTimeout(r, 1500 * attempt));
+        if (!life.active()) return;
         try {
           const first = await fetchRecords(id, joined.memberToken, 0);
+          if (!life.active()) return;
           // The room key must open the creator's join, signed with the
           // creator's key from the link. It also carries the key our name
           // is sealed to.
@@ -560,6 +629,7 @@ function joinFlow(sodium: Sodium, id: string, roomKey: Uint8Array, inviteToken: 
             const o = openControl(sodium, key0, id, 0, r.data);
             if (o === null || o.record.t !== 'room' || !verifySignature(sodium, o, creatorKey)) continue;
             needsPassword = o.record.pw;
+            signedEnd = o.record.ends;
             break;
           }
         } catch (e) {
@@ -570,6 +640,8 @@ function joinFlow(sodium: Sodium, id: string, roomKey: Uint8Array, inviteToken: 
     } finally {
       sodium.memzero(key0);
     }
+    if (!life.active()) return;
+    if (expired()) return;
     if (gone) {
       done();
       form.removeAttribute('aria-busy');
@@ -610,8 +682,11 @@ function joinFlow(sodium: Sodium, id: string, roomKey: Uint8Array, inviteToken: 
     let pwKey: Uint8Array | null = null;
     if (needsPassword) {
       await nextFrame(); // Argon2id blocks the page for a moment
+      if (!life.active()) return;
+      if (expired()) return;
       try {
         pwKey = roomPasswordKey(sodium, pwInput.value, id);
+        secrets.push(pwKey);
       } catch {
         done();
         form.removeAttribute('aria-busy');
@@ -629,15 +704,23 @@ function joinFlow(sodium: Sodium, id: string, roomKey: Uint8Array, inviteToken: 
     let joinBytes: Uint8Array;
     try {
       me = newIdentity(sodium, name, { sealTo: nameKey }, { roomId: id, slot: joined.slot, secret: inviteSecret, password: pwKey });
+      secrets.push(me.sign, me.box);
       session = newSession(sodium, roomKey, joined.slot, joined.memberToken, null, name, me.sign, me.box, creatorKey);
+      pendingSession = session;
+      session.ends = signedEnd;
       session.joinProof = me.join.proof ?? null;
       session.inviteCheck = inviteCheck(sodium, inviteSecret, id, joined.slot);
       key = controlKey(sodium, roomKey);
+      secrets.push(key);
       // Our join is remembered as ours before it is posted (see post()).
       joinBytes = sealControl(sodium, key, id, joined.slot, me.sign, me.join);
       session.posted.push(signatureHash(sodium, openControl(sodium, key, id, joined.slot, joinBytes)!.signature));
+      if (!life.active()) return;
+      if (expired()) return;
       saveSession(id, session);
+      sessionSaved = true;
     } catch {
+      if (pendingSession) wipeSession(pendingSession);
       done();
       form.removeAttribute('aria-busy');
       showProblem('This Null Chat can’t be opened', 'Something went wrong while joining. Ask the person who invited you for a new invite.');
@@ -659,6 +742,11 @@ function joinFlow(sodium: Sodium, id: string, roomKey: Uint8Array, inviteToken: 
       done();
       form.removeAttribute('aria-busy');
     }
+    if (!life.active()) return;
+    if (expired()) return;
+    for (const secret of secrets) secret.fill(0);
+    life.finish();
+    pendingSession = null; // the live chat now owns this session
     show(gate, false);
     openChat(sodium, id, session);
   });
@@ -814,7 +902,7 @@ function openChat(sodium: Sodium, id: string, session: Session): void {
   const baseTitle = document.title; // the room's name stays out of the title, and so out of history
   const desktop = window.matchMedia('(hover: hover) and (pointer: fine)').matches;
   let after = 0;
-  let deadline: number | null = null;
+  let deadline: number | null = session.ends;
   let ended = false;
   let unread = 0;
   let timer = 0;
@@ -893,11 +981,7 @@ function openChat(sodium: Sodium, id: string, session: Session): void {
     // Drop this tab's copy of the session's secrets from the page as well as
     // from storage (persist() writes nothing once ended). JavaScript cannot
     // erase strings, but nothing keeps them reachable any more.
-    Object.assign(session, {
-      key: '', member: '', sign: '', owner: null, password: null, settings: null, roster: null, nameSecret: null,
-      boxes: [], pendingBox: null, chain: null, peers: [], invites: [], joinProof: null, inviteCheck: null,
-      known: [], peerBoxes: [], posted: [], verified: [], sentTo: [], name: '',
-    } satisfies Partial<Session>);
+    wipeSession(session);
     // The chat's elements are replaced by clean copies: every listener on
     // them (and with it this chat's closures) goes too.
     for (const e of [log, composer, jump]) e.replaceWith(e.cloneNode(true));
@@ -945,6 +1029,7 @@ function openChat(sodium: Sodium, id: string, session: Session): void {
 
   const persist = () => {
     if (ended) return;
+    if (state.ends !== null) session.ends = session.ends === null ? state.ends : Math.min(session.ends, state.ends);
     session.chain = chain ? { gen: chain.gen, index: chain.index, ck: b64(sodium, chain.ck) } : null;
     session.peers = [...state.chains].map(([slot, c]) => ({ slot, gen: c.gen, index: c.index, ck: b64(sodium, c.ck) }));
     // Pin who is who and who was removed: a later history that says
@@ -1962,7 +2047,7 @@ function openChat(sodium: Sodium, id: string, session: Session): void {
       // the creator's join: a history without it was cut.
       if (state.members.has(0) && state.ends === null && !warnedNoRoom && after > 1) {
         warnedNoRoom = true;
-        add(system('This chat’s signed settings are missing from what the server sent. The server may be hiding records; the countdown is only its word.'), false, false);
+        add(system(session.ends === null ? 'This chat’s signed settings are missing from what the server sent. The server may be hiding records; the countdown is only its word.' : 'This chat’s signed settings are missing from what the server sent. The previously saved expiry still applies.'), false, false);
       }
       for (const slot of state.staleFrom) {
         if (warnedForks.has(`stale:${slot}`)) continue;

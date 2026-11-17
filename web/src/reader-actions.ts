@@ -22,7 +22,7 @@ function clearView(): void {
   clearPreview();
 }
 
-export function initReaderActions(text: string, url: string, shareable: boolean, attachment: CloneAttachment | null): void {
+export function initReaderActions(text: string, url: string, shareable: boolean, attachment: CloneAttachment | null, disposeDiscussion: () => void = () => {}): void {
   initShareActions('view', url, shareable);
   const clone = el<HTMLButtonElement>('view-clone');
   clone.disabled = attachment !== null && !attachment.available;
@@ -35,6 +35,7 @@ export function initReaderActions(text: string, url: string, shareable: boolean,
     try {
       const file = attachment ? await attachment.load() : null;
       history.replaceState(null, '', '/');
+      disposeDiscussion();
       clearView();
       initCreate({ text, file });
       toast('Copied to a new draft');

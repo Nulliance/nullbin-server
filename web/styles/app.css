@@ -621,6 +621,15 @@ body.nb-in-room #room { display: flex; flex: 1; flex-direction: column; }
   body.nb-in-room .nb-m-avatar { width: 30px; height: 30px; font-size: 13px; }
 }
 
+/* Foldable cover screens get a deliberate second metadata line, rather
+   than squeezing labels or reducing their type and touch targets. */
+@media (max-width: 319.98px) {
+  body.nb-in-room .nb-chat-sub { display: grid; grid-template-columns: minmax(0, 1fr) auto; column-gap: 12px; }
+  body.nb-in-room .nb-chat-sub .nb-chip-ok { grid-column: 1; justify-self: start; }
+  body.nb-in-room .nb-chat-sub .nb-chip-btn { grid-column: 2; justify-self: end; }
+  body.nb-in-room .nb-chat-sub .nb-chip-warn { grid-column: 1 / -1; justify-self: start; margin: 0 0 4px; }
+}
+
 .nb-facts { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 8px 16px; margin: 0; }
 .nb-facts dt { font-weight: 500; }
 .nb-facts dd { margin: 0; }

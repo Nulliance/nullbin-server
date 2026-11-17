@@ -109,6 +109,10 @@ jobs:
           else
             go build -trimpath -o "$RUNNER_TEMP/nullbin" ./cmd/nullbin
           fi
+      # Check the responsive surface first for quick layout feedback.
+      - name: Mobile chat viewport regression
+        run: |
+          NB_TEST_BINARY="$RUNNER_TEMP/nullbin" NB_TEST_SCREENSHOTS_DIR="$RUNNER_TEMP/chat-screenshots" CHROME_PATH="$(command -v google-chrome)" node --test --test-name-pattern='mobile Null Chats keep' web/test/browser/csp.test.ts
       # Uses the Google Chrome preinstalled on GitHub's Ubuntu runners.
       - name: browser test
         run: |

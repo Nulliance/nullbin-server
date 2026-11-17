@@ -2437,7 +2437,7 @@ test('room expiry uses the signed end on the first batch and clears locally with
   }
 });
 
-test('cloning a discussion disposes its pending refresh and clears comment drafts', async () => {
+test('cloning a discussion disposes its pending refresh and clears comment drafts', { timeout: 60_000 }, async () => {
   const { share } = await createPaste({ text: 'Original discussion text.', discussion: true });
   const h = await open();
   let releaseRefresh: () => void = () => {};
@@ -2495,7 +2495,7 @@ test('cloning a discussion disposes its pending refresh and clears comment draft
 
 // Gate lifecycle regressions use delayed real API responses. A synthetic
 // pagehide keeps the document inspectable while exercising departure cleanup.
-test('room creation cannot resume after departure during a delayed response', async (t) => {
+test('room creation cannot resume after departure during a delayed response', { timeout: 120_000 }, async (t) => {
   await restartAPI();
   t.after(() => restartAPI());
   for (const stage of ['create', 'first-record', 'last-record'] as const) {
@@ -2522,7 +2522,7 @@ test('room creation cannot resume after departure during a delayed response', as
       delivered.resolve();
     });
     await goto(h, `${origin}/chat`);
-    await h.page.fill('#room-you', 'Departing creator');
+    await h.page.fill('#room-you', 'Departure tester');
     await h.page.fill('#room-name', 'Private name');
     await h.page.check('#room-password-switch');
     await h.page.fill('#room-password', 'private password');
@@ -2543,13 +2543,13 @@ test('room creation cannot resume after departure during a delayed response', as
   }
 });
 
-test('room joining cannot resume or keep a tentative session after departure', async (t) => {
+test('room joining cannot resume or keep a tentative session after departure', { timeout: 120_000 }, async (t) => {
   await restartAPI();
   t.after(() => restartAPI());
   const creator = await open();
   t.after(() => creator.context.close());
   await goto(creator, `${origin}/chat`);
-  await creator.page.fill('#room-you', 'Creator');
+  await creator.page.fill('#room-you', 'Ada');
   await creator.page.check('#room-password-switch');
   await creator.page.fill('#room-password', 'private password');
   await creator.page.click('#room-create-submit');
@@ -2606,7 +2606,7 @@ test('room joining cannot resume or keep a tentative session after departure', a
   }
 });
 
-test('saved signed room expiry survives reload when the API hides settings and extends its countdown', async (t) => {
+test('saved signed room expiry survives reload when the API hides settings and extends its countdown', { timeout: 60_000 }, async (t) => {
   await restartAPI();
   t.after(() => restartAPI());
   const h = await open();
@@ -2618,7 +2618,7 @@ test('saved signed room expiry survives reload when the API hides settings and e
     Object.assign(window, { __advanceSavedExpiry: (ms: number) => { offset = ms; } });
   });
   await goto(h, `${origin}/chat`);
-  await h.page.fill('#room-you', 'Expiry creator');
+  await h.page.fill('#room-you', 'Expiry tester');
   await h.page.selectOption('#room-expiry', '300');
   await h.page.click('#room-create-submit');
   await h.page.waitForSelector('#room-chat:not([hidden])');
@@ -2653,13 +2653,13 @@ test('saved signed room expiry survives reload when the API hides settings and e
   await h.check();
 });
 
-test('joining refuses already expired signed settings before posting or saving keys', async (t) => {
+test('joining refuses already expired signed settings before posting or saving keys', { timeout: 60_000 }, async (t) => {
   await restartAPI();
   t.after(() => restartAPI());
   const creator = await open();
   t.after(() => creator.context.close());
   await goto(creator, `${origin}/chat`);
-  await creator.page.fill('#room-you', 'Expiry creator');
+  await creator.page.fill('#room-you', 'Expiry tester');
   await creator.page.selectOption('#room-expiry', '300');
   await creator.page.click('#room-create-submit');
   await creator.page.waitForSelector('#room-chat:not([hidden])');

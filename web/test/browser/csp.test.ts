@@ -2313,7 +2313,7 @@ test('mobile Null Chats keep the composer and controls inside the visible viewpo
     assert.equal(result.overflow, false, 'no horizontal page overflow');
     assert.ok(result.title.width >= result.head.width * .55, 'the room name gets most of the header width');
     assert.ok(result.title.right + 8 <= result.tools.left, 'the title and actions never overlap');
-    assert.ok(result.head.height <= 112, 'the header stays compact instead of stacking chips');
+    assert.ok(result.head.height <= 112, `the header stays compact at ${h.page.viewportSize()!.width}px: ${JSON.stringify(result)}`);
     assert.equal(result.encryptionVisible, true, 'encryption is labelled, not an unexplained lock');
     for (const chip of result.chips) {
       assert.equal(chip.clipped, false, 'status text is never clipped');
@@ -2352,6 +2352,11 @@ test('mobile Null Chats keep the composer and controls inside the visible viewpo
     await viewport(null);
     await checkLayout(0, 740);
   }
+  await h.page.setViewportSize({ width: 320, height: 740 });
+  await viewport(null);
+  await h.page.evaluate(() => { document.getElementById('room-member-count')!.textContent = '20 members'; });
+  await checkLayout(0, 740);
+  await h.page.evaluate(() => { document.getElementById('room-member-count')!.textContent = '1 member'; });
   await h.page.setViewportSize({ width: 390, height: 740 });
   await viewport(null);
   await capture('chat-390-light');

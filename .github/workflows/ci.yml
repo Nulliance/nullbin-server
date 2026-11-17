@@ -447,6 +447,9 @@ jobs:
           test "$(stat -c '%U %a' /etc/nullbin-update-check.conf)" = 'root 644'
           grep -qx v9.9.9 /etc/nullbin-update-check.conf
           sudo systemd-analyze verify /etc/systemd/system/nullbin-update-check.service /etc/systemd/system/nullbin-update-check.timer
+          # Stop scheduled checks before installing the fake response: an
+          # OnBoot/OnCalendar activation racing this test would inflate calls.
+          sudo systemctl stop nullbin-update-check.timer
           sudo systemctl stop nullbin-update-check.service
           # Exercise the real service sandbox with a fake GitHub response,
           # so this test needs neither a published release nor network access.

@@ -12,7 +12,7 @@ import { after, before, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn, execFileSync, type ChildProcess } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm } from 'node:fs/promises';
 import net from 'node:net';
 import { crc32, deflateSync } from 'node:zlib';
 import { createServer, type Server } from 'node:http';
@@ -2296,6 +2296,13 @@ test('mobile Null Chats keep the composer and controls inside the visible viewpo
       const log = document.getElementById('room-messages')!;
       return {
         head: rect('.nb-chat-head'), log: rect('#room-messages'),
+        title: rect('#room-title'), tools: rect('.nb-chat-tools'), status: rect('.nb-chat-sub'),
+        chips: [...document.querySelectorAll<HTMLElement>('.nb-chat-sub > .nb-chip')].map((chip) => ({
+          left: chip.getBoundingClientRect().left, right: chip.getBoundingClientRect().right,
+          top: chip.getBoundingClientRect().top, bottom: chip.getBoundingClientRect().bottom,
+          clipped: chip.scrollWidth > chip.clientWidth + 1,
+        })),
+        encryptionVisible: getComputedStyle(document.querySelector('.nb-chat-sub .nb-narrow')!).display !== 'none',
         composer: rect('#room-composer'), send: rect('#room-send'),
         invite: rect('#room-invite-open'), members: rect('#room-members-open'), destroy: rect('#room-destroy'),
         overflow: document.documentElement.scrollWidth > innerWidth,
@@ -2304,6 +2311,15 @@ test('mobile Null Chats keep the composer and controls inside the visible viewpo
       };
     });
     assert.equal(result.overflow, false, 'no horizontal page overflow');
+    assert.ok(result.title.width >= result.head.width * .55, 'the room name gets most of the header width');
+    assert.ok(result.title.right + 8 <= result.tools.left, 'the title and actions never overlap');
+    assert.ok(result.head.height <= 112, 'the header stays compact instead of stacking chips');
+    assert.equal(result.encryptionVisible, true, 'encryption is labelled, not an unexplained lock');
+    for (const chip of result.chips) {
+      assert.equal(chip.clipped, false, 'status text is never clipped');
+      assert.ok(chip.left >= result.head.left - 1 && chip.right <= result.head.right + 1, 'status fits the header');
+      assert.ok(chip.top >= result.tools.bottom - 1, 'status has its own row below the actions');
+    }
     assert.equal(result.scrollable, true, 'only the conversation scrolls');
     assert.ok(result.head.top >= top - 1 && result.log.height > 30, 'header and conversation remain visible');
     assert.ok(result.log.bottom <= result.composer.top + 1, 'messages never sit behind the composer');
@@ -2322,16 +2338,35 @@ test('mobile Null Chats keep the composer and controls inside the visible viewpo
   await h.page.waitForFunction(() => !(document.getElementById('room-text') as HTMLTextAreaElement).disabled);
   await viewport(null);
   await checkLayout(0, 740);
-  for (const width of [360, 390, 767, 844]) {
+  assert.equal(await h.page.getByRole('button', { name: 'Invite someone', exact: true }).count(), 1);
+  assert.equal(await h.page.getByRole('button', { name: 'Self-destruct', exact: true }).count(), 1);
+  const screenshotDir = process.env['NB_TEST_SCREENSHOTS_DIR'];
+  const capture = async (name: string) => {
+    if (!screenshotDir) return;
+    await mkdir(screenshotDir, { recursive: true });
+    await h.page.screenshot({ path: path.join(screenshotDir, `${name}.png`) });
+  };
+  await capture('chat-320-light');
+  for (const width of [280, 360, 390, 430, 600, 767, 768, 844, 1024]) {
     await h.page.setViewportSize({ width, height: 740 });
     await viewport(null);
     await checkLayout(0, 740);
   }
   await h.page.setViewportSize({ width: 390, height: 740 });
+  await viewport(null);
+  await capture('chat-390-light');
+  await h.page.emulateMedia({ colorScheme: 'dark' });
+  await capture('chat-390-dark');
+  await h.page.emulateMedia({ colorScheme: 'light' });
+  await h.page.setViewportSize({ width: 1280, height: 800 });
+  await viewport(null);
+  await capture('chat-desktop');
+  await h.page.setViewportSize({ width: 390, height: 740 });
   await h.page.fill('#room-text', 'Mobile keyboard message');
   await viewport(350, 110);
   await checkLayout(110, 460);
   assert.ok(await h.page.isHidden('body > .nb-top'), 'site navigation gives the keyboard more room');
+  await capture('chat-keyboard');
   await h.page.click('#room-send');
   await h.page.waitForFunction(() => document.getElementById('room-messages')?.textContent?.includes('Mobile keyboard message'));
   await checkLayout(110, 460);
@@ -2379,6 +2414,7 @@ test('mobile Null Chats keep the composer and controls inside the visible viewpo
   await h.page.setViewportSize({ width: 844, height: 390 });
   await viewport(null);
   await checkLayout(0, 390);
+  await capture('chat-landscape');
   // Dialogs remain reachable above a keyboard, including their close action.
   await h.page.click('#room-invite-open');
   await h.page.fill('#room-invite-label', 'Invite label');

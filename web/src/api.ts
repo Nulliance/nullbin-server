@@ -36,10 +36,10 @@ export class ApiError extends Error {
   }
 }
 
-async function errorFrom(resp: Response): Promise<ApiError> {
+async function errorFrom(resp: Response, maxBytes?: number): Promise<ApiError> {
   let body: Record<string, unknown> = {};
   try {
-    const v: unknown = await resp.json();
+    const v: unknown = maxBytes === undefined ? await resp.json() : await boundedJSON(resp, maxBytes);
     if (typeof v === 'object' && v !== null && !Array.isArray(v)) body = v as Record<string, unknown>;
   } catch {
     // not JSON
@@ -322,6 +322,52 @@ export async function fetchComments(id: string, commentToken: string): Promise<U
 }
 
 // --- Null Chats ---
+// Room response budgets mirror internal/rooms. The separately hosted API
+// is not trusted to enforce its own response limits.
+const ROOM_RECORDS = 1000;
+const ROOM_RECORD_BYTES = 16 * 1024;
+const ROOM_READ_BYTES = 64 * 1024;
+const ROOM_JSON_BYTES = 128 * 1024;
+
+/** Bound decoded bytes before JSON parsing, even without Content-Length. */
+async function boundedJSON(resp: Response, limit: number): Promise<unknown> {
+  if (Number(resp.headers.get('Content-Length')) > limit) {
+    await resp.body?.cancel().catch(() => {});
+    throw new Error('The server sent an oversized response.');
+  }
+  if (!resp.body) throw new Error('The server sent an invalid response.');
+  const reader = resp.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  try {
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      size += value.byteLength;
+      if (size > limit) {
+        await reader.cancel().catch(() => {});
+        throw new Error('The server sent an oversized response.');
+      }
+      chunks.push(value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  const bytes = new Uint8Array(size);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes)) as unknown;
+}
+
+async function roomJSON(resp: Response): Promise<Record<string, unknown>> {
+  const v = await boundedJSON(resp, ROOM_JSON_BYTES);
+  if (typeof v !== 'object' || v === null || Array.isArray(v)) throw new Error('The server sent an invalid response.');
+  return v as Record<string, unknown>;
+}
+
 
 export interface RoomCreated {
   id: string;
@@ -337,8 +383,8 @@ export async function createRoom(expiresIn: number, maxMembers: number, inviteTt
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ expires_in: expiresIn, max_members: maxMembers, invite_ttl: inviteTtl }),
   });
-  if (resp.status !== 201) throw await errorFrom(resp);
-  const v = (await resp.json()) as Record<string, unknown>;
+  if (resp.status !== 201) throw await errorFrom(resp, ROOM_JSON_BYTES);
+  const v = await roomJSON(resp);
   const { id, owner_token: owner, member_token: member, slot } = v;
   if (typeof id !== 'string' || !ID.test(id) || typeof owner !== 'string' || !TOKEN.test(owner) || typeof member !== 'string' || !TOKEN.test(member) || slot !== 0) {
     throw new Error('The server sent an invalid response.');
@@ -356,8 +402,8 @@ export async function createInvite(id: string, ownerToken: string, ttl: number):
     method: 'POST',
     headers: { 'Nullbin-Owner-Token': ownerToken },
   });
-  if (resp.status !== 201) throw await errorFrom(resp);
-  const v = (await resp.json()) as Record<string, unknown>;
+  if (resp.status !== 201) throw await errorFrom(resp, ROOM_JSON_BYTES);
+  const v = await roomJSON(resp);
   const { invite_token: token, slot } = v;
   if (typeof token !== 'string' || !TOKEN.test(token) || !validSlot(slot, 1)) throw new Error('The server sent an invalid response.');
   return { token, slot };
@@ -370,8 +416,8 @@ export async function joinRoom(id: string, inviteToken: string): Promise<{ membe
     method: 'POST',
     headers: { 'Nullbin-Invite-Token': inviteToken },
   });
-  if (resp.status !== 200) throw await errorFrom(resp);
-  const v = (await resp.json()) as Record<string, unknown>;
+  if (resp.status !== 200) throw await errorFrom(resp, ROOM_JSON_BYTES);
+  const v = await roomJSON(resp);
   const { member_token: token, slot } = v;
   if (typeof token !== 'string' || !TOKEN.test(token) || !validSlot(slot, 1)) throw new Error('The server sent an invalid response.');
   return { memberToken: token, slot };
@@ -385,7 +431,7 @@ export async function postRecord(id: string, memberToken: string, data: Uint8Arr
     headers: { 'Content-Type': 'application/octet-stream', 'Nullbin-Member-Token': memberToken },
     body: data,
   });
-  if (resp.status !== 201) throw await errorFrom(resp);
+  if (resp.status !== 201) throw await errorFrom(resp, ROOM_JSON_BYTES);
   await resp.body?.cancel();
 }
 
@@ -397,19 +443,21 @@ export interface RoomRecords {
 
 /** Fetches the records after the first `after`, in server order. */
 export async function fetchRecords(id: string, memberToken: string, after: number): Promise<RoomRecords> {
+  if (!Number.isSafeInteger(after) || after < 0 || after > ROOM_RECORDS) throw new Error('Invalid room record index.');
   const resp = await fetch(apiURL(`/api/v1/rooms/${id}/records?after=${after}`), {
     ...base, signal: AbortSignal.timeout(REQUEST_MS),
     method: 'GET',
     headers: { 'Nullbin-Member-Token': memberToken },
   });
-  if (resp.status !== 200) throw await errorFrom(resp);
-  const v = (await resp.json()) as Record<string, unknown>;
+  if (resp.status !== 200) throw await errorFrom(resp, ROOM_JSON_BYTES);
+  const v = await roomJSON(resp);
   const { records, next, expires_in: left } = v;
-  if (!Array.isArray(records) || records.length > 200 || typeof next !== 'number' || !Number.isSafeInteger(next) || next !== after + records.length ||
+  if (!Array.isArray(records) || records.length > 200 || typeof next !== 'number' || !Number.isSafeInteger(next) || next > ROOM_RECORDS || next !== after + records.length ||
     typeof left !== 'number' || !Number.isSafeInteger(left) || left < 0 || left > 8 * 24 * 3600) {
     throw new Error('The server sent an invalid response.');
   }
   const out: { from: number; data: Uint8Array }[] = [];
+  let totalBytes = 0;
   for (const item of records as unknown[]) {
     const r = (typeof item === 'object' && item !== null ? item : {}) as Record<string, unknown>;
     const from = r['from'];
@@ -421,6 +469,8 @@ export async function fetchRecords(id: string, memberToken: string, after: numbe
     } catch {
       throw new Error('The server sent an invalid response.');
     }
+    totalBytes += bytes.byteLength;
+    if (bytes.byteLength < 41 || bytes.byteLength > ROOM_RECORD_BYTES || totalBytes > ROOM_READ_BYTES) throw new Error('The server sent an invalid response.');
     out.push({ from, data: bytes });
   }
   return { records: out, next, expiresIn: left };
@@ -435,8 +485,8 @@ export async function fetchMembers(id: string, ownerToken: string): Promise<Map<
     method: 'GET',
     headers: { 'Nullbin-Owner-Token': ownerToken },
   });
-  if (resp.status !== 200) throw await errorFrom(resp);
-  const v = (await resp.json()) as Record<string, unknown>;
+  if (resp.status !== 200) throw await errorFrom(resp, ROOM_JSON_BYTES);
+  const v = await roomJSON(resp);
   const members = v['members'];
   if (typeof members !== 'object' || members === null || Array.isArray(members)) throw new Error('The server sent an invalid response.');
   const out = new Map<number, SlotState>();
@@ -455,7 +505,7 @@ export async function admitMember(id: string, ownerToken: string, slot: number):
     method: 'POST',
     headers: { 'Nullbin-Owner-Token': ownerToken },
   });
-  if (resp.status !== 204) throw await errorFrom(resp);
+  if (resp.status !== 204) throw await errorFrom(resp, ROOM_JSON_BYTES);
 }
 
 /** Closes a member's slot for good (owner only). */
@@ -465,7 +515,7 @@ export async function removeMember(id: string, ownerToken: string, slot: number)
     method: 'POST',
     headers: { 'Nullbin-Owner-Token': ownerToken },
   });
-  if (resp.status !== 204) throw await errorFrom(resp);
+  if (resp.status !== 204) throw await errorFrom(resp, ROOM_JSON_BYTES);
 }
 
 /** Self-destructs the room for everyone. Any member can. */
@@ -475,5 +525,5 @@ export async function destroyRoom(id: string, memberToken: string): Promise<void
     method: 'DELETE',
     headers: { 'Nullbin-Member-Token': memberToken },
   });
-  if (resp.status !== 204) throw await errorFrom(resp);
+  if (resp.status !== 204) throw await errorFrom(resp, ROOM_JSON_BYTES);
 }

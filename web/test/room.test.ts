@@ -1423,3 +1423,39 @@ test('a joiner whose invite link was changed on the way finds out from the creat
   assert.equal(s.apply(2, ctl(c, inviteRec(1, 'Bob'))), null);
   assert.equal(s.inviteMismatch, false);
 });
+
+test('receiving-key pins survive a failed reconstruction and a second reload', () => {
+  const a = person(0);
+  const b = person(1);
+  const newest = sodium.crypto_box_keypair();
+  const identity = { slot: 0, signPublic: a.sign.publicKey, boxes: new Map([[0, { publicKey: a.box.publicKey, secretKey: a.box.privateKey }]]) };
+  const known = new Map([[0, a.sign.publicKey], [1, b.sign.publicKey]]);
+  const first = new RoomState(sodium, key, ROOM, identity, new Map(), { known, boxes: new Map([[1, { n: 2, key: newest.publicKey }]]) });
+  // Persist before any history arrived, as happens on a failed first fetch.
+  const persisted = first.receivingPins();
+  assert.equal(persisted.get(1)?.n, 2);
+  const second = new RoomState(sodium, key, ROOM, identity, new Map(), { known, boxes: persisted });
+  second.apply(0, ctl(a, join(a, 'Ada')));
+  second.apply(1, ctl(b, join(b, 'Bob')));
+  const recipient = second.recipients().find((m) => m.slot === 1)!;
+  assert.equal(recipient.boxN, 2);
+  assert.deepEqual(recipient.boxKey, newest.publicKey);
+  const ck = newChain(sodium, 1);
+  const place = { roomId: ROOM, slot: 0, gen: 1, index: 0 };
+  const sealed = sealChainKey(sodium, ck.ck, recipient.boxKey, place, 1);
+  assert.equal(openChainKey(sodium, sealed, b.box.publicKey, b.box.privateKey, place, 1), null, 'the retired secret cannot open a new delivery');
+  assert.deepEqual(openChainKey(sodium, sealed, newest.publicKey, newest.privateKey, place, 1), ck.ck);
+});
+
+test('receiving-key snapshots include newer observed rotations', () => {
+  const a = person(0);
+  const b = person(1);
+  const newest = sodium.crypto_box_keypair();
+  const s = stateOf(a);
+  s.apply(0, ctl(a, join(a, 'Ada')));
+  enter(s, a, b, 'Bob');
+  s.apply(1, ctl(b, { t: 'box', id: id(), time: 1, n: 1, box: encodeKey(sodium, newest.publicKey) }));
+  const saved = s.receivingPins().get(1)!;
+  assert.equal(saved.n, 1);
+  assert.deepEqual(saved.key, newest.publicKey);
+});

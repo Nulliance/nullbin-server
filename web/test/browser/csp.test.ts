@@ -2384,3 +2384,55 @@ test('mobile Null Chats keep the composer and controls inside the visible viewpo
   await h.check();
 });
 
+
+test('room expiry uses the signed end on the first batch and clears locally without the API', async (t) => {
+  await restartAPI();
+  t.after(() => restartAPI());
+  for (const mode of ['extended-api', 'ready-to-send'] as const) {
+    const h = await open({ hasTouch: true });
+    t.after(() => h.context.close());
+    await h.page.addInitScript(() => {
+      const original = Date.now.bind(Date);
+      let offset = 0;
+      Date.now = () => original() + offset;
+      Object.assign(window, { __advanceRoomClock: (ms: number) => { offset = ms; } });
+    });
+    if (mode === 'extended-api') {
+      await h.page.route('**/api/v1/rooms/*/records?*', async (route) => {
+        if (new URL(route.request().url()).searchParams.get('after') !== '0') {
+          await route.fulfill({ status: 503, contentType: 'application/json', headers: { 'Access-Control-Allow-Origin': origin }, body: '{"error":"offline fixture"}' });
+          return;
+        }
+        const response = await route.fetch();
+        const data = await response.json();
+        await route.fulfill({ response, body: JSON.stringify({ ...data, expires_in: 86400 }) });
+      });
+    }
+    await goto(h, `${origin}/chat`);
+    await h.page.fill('#room-you', 'Expiry tester');
+    await h.page.fill('#room-name', 'Expiry fixture');
+    await h.page.selectOption('#room-expiry', '300');
+    await h.page.click('#room-create-submit');
+    await h.page.waitForSelector('#room-chat:not([hidden])');
+    if (mode === 'extended-api') {
+      await h.page.waitForFunction(() => /Self-destructs in [45]m/.test(document.getElementById('room-expires')?.textContent ?? ''));
+    } else {
+      await h.page.waitForFunction(() => !(document.getElementById('room-text') as HTMLTextAreaElement).disabled);
+      await h.page.fill('#room-text', 'Private expiring draft');
+    }
+    const posts = h.sent.filter((s) => s.method === 'POST' && s.path.endsWith('/records')).length;
+    await h.page.evaluate((mode) => {
+      (window as unknown as { __advanceRoomClock: (ms: number) => void }).__advanceRoomClock(301000);
+      if (mode === 'ready-to-send') (document.getElementById('room-composer') as HTMLFormElement).requestSubmit();
+      else document.dispatchEvent(new Event('visibilitychange'));
+    }, mode);
+    await h.page.waitForSelector('#problem:not([hidden])');
+    assert.equal(await h.page.textContent('#problem-title'), 'This Null Chat has expired');
+    assert.equal(await h.page.inputValue('#room-text'), '');
+    assert.equal(await h.page.textContent('#room-messages'), '');
+    assert.equal(await h.page.evaluate(() => sessionStorage.length), 0);
+    assert.equal(h.sent.filter((s) => s.method === 'POST' && s.path.endsWith('/records')).length, posts, 'expiry prevents any later message/key POST');
+    await h.check(mode === 'extended-api' ? /status of 503/ : undefined);
+    await h.context.close();
+  }
+});

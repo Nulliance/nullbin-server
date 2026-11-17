@@ -721,6 +721,14 @@ const colour = (slot: number) => `nb-c${slot % 8}`;
 const initial = (name: string) => (Array.from(name.trim())[0] ?? '?').toUpperCase();
 const DIALOGS = ['room-invite-dialog', 'room-members-dialog', 'room-destroy-dialog'];
 
+/** Finish key delivery against the latest membership before sealing a message. */
+export async function syncRoomKeys(share: () => Promise<void>, rotate: () => boolean, ended: () => boolean): Promise<void> {
+  do {
+    if (ended()) return;
+    await share();
+  } while (!ended() && rotate());
+}
+
 function openChat(sodium: Sodium, id: string, session: Session): void {
   /**
    * For the creator: whether a join proves it came from the invite link for
@@ -838,7 +846,7 @@ function openChat(sodium: Sodium, id: string, session: Session): void {
   // is still open: after it ends, the keys are wiped.
   let queue: Promise<unknown> = Promise.resolve();
   const exclusive = <T>(fn: () => Promise<T>): Promise<T | undefined> => {
-    const guarded = () => (ended ? Promise.resolve(undefined) : fn());
+    const guarded = () => (expired() ? Promise.resolve(undefined) : fn());
     const run = queue.then(guarded, guarded);
     queue = run.catch(() => {});
     return run;
@@ -872,10 +880,12 @@ function openChat(sodium: Sodium, id: string, session: Session): void {
     el('room-waiting-code').replaceChildren();
     waitingStatus.replaceChildren();
     nodes.clear();
-    text.value = '';
+    for (const id of ['room-text', 'room-join-name', 'room-join-password', 'room-invite-label']) {
+      el<HTMLInputElement | HTMLTextAreaElement>(id).value = '';
+    }
     mode = null;
     show(context, false);
-    for (const e of ['room-context-title', 'room-context-quote', 'room-member-list', 'room-member-count', 'room-invite-link', 'room-expires']) el(e).replaceChildren();
+    for (const e of ['room-context-title', 'room-context-quote', 'room-member-list', 'room-member-count', 'room-invite-link', 'room-invite-who', 'room-invite-error', 'room-join-error', 'room-status', 'room-expires', 'announce']) el(e).replaceChildren();
     title.textContent = 'Null Chat';
     avatar.textContent = 'B';
     document.title = baseTitle;
@@ -897,6 +907,14 @@ function openChat(sodium: Sodium, id: string, session: Session): void {
     shutdown();
     clearSession(id);
     showProblem(heading, body);
+  };
+  // Enforce the earliest known end locally, even when the API is offline.
+  const expired = () => {
+    if (ended) return true;
+    const until = state.ends === null ? deadline : deadline === null ? state.ends : Math.min(deadline, state.ends);
+    if (until === null || Date.now() < until) return false;
+    end('This Null Chat has expired', 'Its time is up. This tab’s messages and keys have been cleared.');
+    return true;
   };
   // The server stops answering once our place is closed. Someone never let
   // in most likely had their place closed by the creator (a wrong
@@ -935,7 +953,7 @@ function openChat(sodium: Sodium, id: string, session: Session): void {
     for (const m of state.members.values()) known.set(m.slot, encodeKey(sodium, m.signKey));
     session.known = [...known].map(([slot, k]) => ({ slot, key: k }));
     session.removedSlots = [...state.removed];
-    session.peerBoxes = [...state.members.values()].map((m) => ({ slot: m.slot, n: m.boxN, key: b64(sodium, m.boxKey) }));
+    session.peerBoxes = [...state.receivingPins()].map(([slot, pin]) => ({ slot, n: pin.n, key: b64(sodium, pin.key) }));
     const rk = state.rosterKey();
     if (rk) session.roster = b64(sodium, rk);
     saveSession(id, session);
@@ -949,7 +967,7 @@ function openChat(sodium: Sodium, id: string, session: Session): void {
    * the history are dropped, past MAX_POSTED.
    */
   const post = async (bytes: Uint8Array) => {
-    if (ended) throw new Error('ended');
+    if (expired()) throw new Error('ended');
     // A record is known by its signature, which re-encrypting it keeps.
     const sig = bytes[0] === MESSAGE_VERSION ? outerSignature(bytes) : openControl(sodium, key, id, session.slot, bytes)?.signature;
     if (!sig) throw new Error('unreadable record');
@@ -1216,7 +1234,7 @@ function openChat(sodium: Sodium, id: string, session: Session): void {
 
   /** Encrypts, signs and posts one chat record; it is applied here at once. */
   const sendChat = async (record: MessageRecord) => {
-    if (ended) return;
+    if (expired()) return;
     // Keys go to the members we know of. An old view may miss a new member
     // or a new receiving key: fetch the room again first.
     if (Date.now() - synced > STALE_MS) {
@@ -1226,8 +1244,8 @@ function openChat(sodium: Sodium, id: string, session: Session): void {
     let sent = false as boolean;
     let at: { gen: number; index: number } | undefined;
     await exclusive(async () => {
-      await shareKeys();
-      if (ended || !chain) return;
+      await syncRoomKeys(shareKeys, () => session.rotate, () => expired());
+      if (expired() || !chain) return;
       // Sealing steps our chain past this record's key and deletes it.
       at = { gen: chain.gen, index: chain.index };
       const bytes = sealMessage(sodium, chain, id, session.slot, signSecret, record);
@@ -1641,7 +1659,7 @@ function openChat(sodium: Sodium, id: string, session: Session): void {
       }),
       menuItem('Copy text', 'copy', async () => {
         closeMenu(true);
-        if (await copyText(m.text)) announce('Message copied.');
+        if (await copyText(m.text)) announce('Message copied.', listening.signal);
       }));
     if (own) {
       menu.append(
@@ -1841,6 +1859,7 @@ function openChat(sodium: Sodium, id: string, session: Session): void {
   const expiresLeft = make('span', '');
   expires.replaceChildren(icon('flame'), expiresLabel, expiresLeft);
   const updateCountdown = () => {
+    if (expired()) return;
     if (deadline === null) return;
     const left = deadline - Date.now();
     expiresLabel.textContent = left > 0 ? 'Self-destructs in ' : 'Self-destructing ';
@@ -1860,7 +1879,7 @@ function openChat(sodium: Sodium, id: string, session: Session): void {
   let polling: Promise<void> | null = null;
   /** Fetches and applies everything new; callers share a fetch in progress. */
   function poll(): Promise<void> {
-    if (ended) return Promise.resolve();
+    if (expired()) return Promise.resolve();
     polling ??= fetchAll().finally(() => {
       polling = null;
     });
@@ -1876,12 +1895,13 @@ function openChat(sodium: Sodium, id: string, session: Session): void {
     try {
       for (;;) {
         const batch = await fetchRecords(id, session.member, after);
-        if (ended) return;
+        if (expired()) return;
         // The countdown is the server's; it never runs past the end the
         // creator signed. Only a gap bigger than clocks usually have is
         // worth a warning.
         fetchedAt = Date.now();
-        deadline = fetchedAt + batch.expiresIn * 1000;
+        const serverEnd = fetchedAt + batch.expiresIn * 1000;
+        deadline = deadline === null ? serverEnd : Math.min(deadline, serverEnd);
         if (state.ends !== null && deadline > state.ends) {
           if (deadline > state.ends + ENDS_SLACK_MS && !warnedEnds) {
             warnedEnds = true;
@@ -1889,12 +1909,15 @@ function openChat(sodium: Sodium, id: string, session: Session): void {
           }
           deadline = state.ends;
         }
-        updateCountdown();
         for (const r of batch.records) {
           const e = state.apply(r.from, r.data);
+          if (expired()) return;
           if (e?.kind === 'removed' && e.slot !== session.slot) session.rotate = true; // they must not get our next keys
           if (e) show1(e, false);
         }
+        if (state.ends !== null) deadline = Math.min(deadline, state.ends);
+        updateCountdown();
+        if (ended) return;
         after = batch.next;
         redrawNames();
         if (state.conflict || state.cloned) break;
@@ -2027,7 +2050,7 @@ function openChat(sodium: Sodium, id: string, session: Session): void {
     }
   }
   document.addEventListener('visibilitychange', () => {
-    if (!document.hidden && !ended) {
+    if (!document.hidden && !expired()) {
       unread = 0;
       document.title = baseTitle;
       void poll();
@@ -2325,7 +2348,7 @@ function initMembers(sodium: Sodium, id: string, session: Session, state: RoomSt
           const fresh = nameNode(slot, 'nb-member-name', false);
           nameEl.replaceWith(fresh);
           nameEl = fresh;
-          announce(on ? `${state.nameOf(slot)} marked verified.` : `${state.nameOf(slot)} unmarked.`);
+          announce(on ? `${state.nameOf(slot)} marked verified.` : `${state.nameOf(slot)} unmarked.`, signal);
         });
         actions.append(check);
       }
@@ -2370,7 +2393,7 @@ function initMembers(sodium: Sodium, id: string, session: Session, state: RoomSt
             if (!announced) await control({ t: 'remove', id: newRecordId(sodium), time: Date.now(), slot });
             // Shown as removed once the removal is read back from the room.
             for (let i = 0; i < 2 && !state.removalSeen.has(slot) && !isEnded(); i++) await sync();
-            announce(state.removalSeen.has(slot) ? `${state.nameOf(slot)} was removed.` : `${state.nameOf(slot)} is being removed.`);
+            announce(state.removalSeen.has(slot) ? `${state.nameOf(slot)} was removed.` : `${state.nameOf(slot)} is being removed.`, signal);
           } catch (e) {
             error.textContent = roomError(e, 'Could not remove them. Try again.');
             show(error);
@@ -2456,7 +2479,7 @@ function initOwner(sodium: Sodium, id: string, session: Session, owner: string, 
       done();
       revoke.textContent = 'Revoke this invite';
       dialog.close();
-      announce('The invite was revoked. Its link no longer works.');
+      announce('The invite was revoked. Its link no longer works.', signal);
     } catch (e) {
       done();
       revoke.textContent = 'Revoke this invite';
@@ -2566,6 +2589,7 @@ function initOwner(sodium: Sodium, id: string, session: Session, owner: string, 
       reveal(result);
       linkBox.focus();
     } catch (e) {
+      if (isEnded()) return;
       if (e instanceof ApiError && e.status === 404) return gone();
       error.textContent = e instanceof Error && e.message === 'reused place'
         ? 'The server gave this invite a place that was already used, so no link was made. The server may have been tampered with: be careful with this chat.'

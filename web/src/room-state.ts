@@ -345,6 +345,16 @@ export class RoomState {
     return this.rk;
   }
 
+  /** Receiving keys already pinned, including members absent from a partial history. */
+  receivingPins(): Map<number, { n: number; key: Uint8Array }> {
+    const pins = new Map(this.boxPins);
+    for (const [slot, member] of this.members) {
+      const previous = pins.get(slot);
+      if (!previous || member.boxN > previous.n) pins.set(slot, { n: member.boxN, key: member.boxKey });
+    }
+    return pins;
+  }
+
   /** Decrypts every name, label and room name waiting for the roster key. */
   private resolve(): void {
     const rk = this.rk;

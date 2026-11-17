@@ -91,13 +91,18 @@ export function clearError(): void {
 }
 
 /** Announces a short message to screen readers. */
-export function announce(message: string): void {
+export function announce(message: string, signal?: AbortSignal): void {
+  if (signal?.aborted) return;
   const e = el('announce');
   e.textContent = '';
   // A separate task, so the same message twice is announced twice.
-  setTimeout(() => {
-    e.textContent = message;
+  // A room that ends before this task runs must not put a name back.
+  const cancel = () => window.clearTimeout(timer);
+  const timer = window.setTimeout(() => {
+    signal?.removeEventListener('abort', cancel);
+    if (!signal?.aborted) e.textContent = message;
   }, 50);
+  signal?.addEventListener('abort', cancel, { once: true });
 }
 
 let toastTimer = 0;

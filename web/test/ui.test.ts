@@ -7,6 +7,34 @@ import { UPLOAD_CHUNK, fetchPaste, rechunk } from '../src/api.ts';
 import { hasHiddenChars, safeFilename, textPreview, MAX_PREVIEW_LINES, MAX_PREVIEW_CHARS } from '../src/view.ts';
 import { CloneableAttachment, MAX_BUFFERED_DOWNLOAD } from '../src/attachments.ts';
 import { emailHref } from '../src/share.ts';
+import { announce } from '../src/dom.ts';
+
+test('room announcements cannot restore private names after their room is cleared', async () => {
+  const originalDocument = Object.getOwnPropertyDescriptor(globalThis, 'document');
+  const originalWindow = Object.getOwnPropertyDescriptor(globalThis, 'window');
+  const live = { textContent: '' };
+  Object.defineProperty(globalThis, 'document', { configurable: true, value: { getElementById: () => live } });
+  Object.defineProperty(globalThis, 'window', { configurable: true, value: { setTimeout, clearTimeout } });
+  try {
+    const room = new AbortController();
+    announce('Private member marked verified.', room.signal);
+    room.abort();
+    live.textContent = ''; // the room's shutdown clears the live region
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    assert.equal(live.textContent, '', 'an already queued announcement stays cancelled');
+    announce('A late async operation completed.', room.signal);
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    assert.equal(live.textContent, '', 'a completed operation cannot announce into an ended room');
+    announce('An ordinary announcement.');
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    assert.equal(live.textContent, 'An ordinary announcement.', 'other pages keep their announcements');
+  } finally {
+    if (originalDocument) Object.defineProperty(globalThis, 'document', originalDocument);
+    else Reflect.deleteProperty(globalThis, 'document');
+    if (originalWindow) Object.defineProperty(globalThis, 'window', originalWindow);
+    else Reflect.deleteProperty(globalThis, 'window');
+  }
+});
 
 async function* pieces(sizes: number[]): AsyncGenerator<Uint8Array> {
   let v = 0;

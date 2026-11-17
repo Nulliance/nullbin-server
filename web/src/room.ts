@@ -872,10 +872,12 @@ function openChat(sodium: Sodium, id: string, session: Session): void {
     el('room-waiting-code').replaceChildren();
     waitingStatus.replaceChildren();
     nodes.clear();
-    text.value = '';
+    for (const id of ['room-text', 'room-join-name', 'room-join-password', 'room-invite-label']) {
+      el<HTMLInputElement | HTMLTextAreaElement>(id).value = '';
+    }
     mode = null;
     show(context, false);
-    for (const e of ['room-context-title', 'room-context-quote', 'room-member-list', 'room-member-count', 'room-invite-link', 'room-expires']) el(e).replaceChildren();
+    for (const e of ['room-context-title', 'room-context-quote', 'room-member-list', 'room-member-count', 'room-invite-link', 'room-invite-who', 'room-invite-error', 'room-join-error', 'room-status', 'room-expires', 'announce']) el(e).replaceChildren();
     title.textContent = 'Null Chat';
     avatar.textContent = 'B';
     document.title = baseTitle;
@@ -1641,7 +1643,7 @@ function openChat(sodium: Sodium, id: string, session: Session): void {
       }),
       menuItem('Copy text', 'copy', async () => {
         closeMenu(true);
-        if (await copyText(m.text)) announce('Message copied.');
+        if (await copyText(m.text)) announce('Message copied.', listening.signal);
       }));
     if (own) {
       menu.append(
@@ -2325,7 +2327,7 @@ function initMembers(sodium: Sodium, id: string, session: Session, state: RoomSt
           const fresh = nameNode(slot, 'nb-member-name', false);
           nameEl.replaceWith(fresh);
           nameEl = fresh;
-          announce(on ? `${state.nameOf(slot)} marked verified.` : `${state.nameOf(slot)} unmarked.`);
+          announce(on ? `${state.nameOf(slot)} marked verified.` : `${state.nameOf(slot)} unmarked.`, signal);
         });
         actions.append(check);
       }
@@ -2370,7 +2372,7 @@ function initMembers(sodium: Sodium, id: string, session: Session, state: RoomSt
             if (!announced) await control({ t: 'remove', id: newRecordId(sodium), time: Date.now(), slot });
             // Shown as removed once the removal is read back from the room.
             for (let i = 0; i < 2 && !state.removalSeen.has(slot) && !isEnded(); i++) await sync();
-            announce(state.removalSeen.has(slot) ? `${state.nameOf(slot)} was removed.` : `${state.nameOf(slot)} is being removed.`);
+            announce(state.removalSeen.has(slot) ? `${state.nameOf(slot)} was removed.` : `${state.nameOf(slot)} is being removed.`, signal);
           } catch (e) {
             error.textContent = roomError(e, 'Could not remove them. Try again.');
             show(error);
@@ -2456,7 +2458,7 @@ function initOwner(sodium: Sodium, id: string, session: Session, owner: string, 
       done();
       revoke.textContent = 'Revoke this invite';
       dialog.close();
-      announce('The invite was revoked. Its link no longer works.');
+      announce('The invite was revoked. Its link no longer works.', signal);
     } catch (e) {
       done();
       revoke.textContent = 'Revoke this invite';
@@ -2566,6 +2568,7 @@ function initOwner(sodium: Sodium, id: string, session: Session, owner: string, 
       reveal(result);
       linkBox.focus();
     } catch (e) {
+      if (isEnded()) return;
       if (e instanceof ApiError && e.status === 404) return gone();
       error.textContent = e instanceof Error && e.message === 'reused place'
         ? 'The server gave this invite a place that was already used, so no link was made. The server may have been tampered with: be careful with this chat.'

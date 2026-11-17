@@ -2172,6 +2172,71 @@ test('large text previews are bounded and downloads preserve the complete text',
   await h.context.close();
 });
 
+test('ending a mobile Null Chat clears hidden invite metadata and drafts', async (t) => {
+  await restartAPI();
+  t.after(() => restartAPI());
+  for (const ending of ['pagehide', 'self-destruct'] as const) {
+    const h = await open({ hasTouch: true });
+    t.after(() => h.context.close());
+    await h.page.setViewportSize({ width: 390, height: 740 });
+    await goto(h, `${origin}/chat`);
+    await h.page.fill('#room-you', 'Cleanup tester');
+    await h.page.fill('#room-name', 'Private cleanup room');
+    await h.page.click('#room-create-submit');
+    await h.page.waitForSelector('#room-chat:not([hidden])');
+    await h.page.waitForFunction(() => !(document.getElementById('room-text') as HTMLTextAreaElement).disabled);
+    await h.page.click('#room-invite-open');
+    await h.page.fill('#room-invite-label', 'Private invite recipient');
+    await h.page.click('#room-invite-create');
+    await h.page.waitForSelector('#room-invite-result:not([hidden])');
+    assert.equal(await h.page.textContent('#room-invite-who'), 'Private invite recipient');
+    await h.page.click('#room-invite-close');
+    await h.page.fill('#room-text', 'Unsent private message');
+    await h.page.click('#room-invite-open');
+    await h.page.fill('#room-invite-label', 'Unsent private invite');
+    if (ending === 'pagehide') {
+      // A reply that arrives after cleanup must not restore dialog text.
+      const held = Promise.withResolvers<void>();
+      const posted = Promise.withResolvers<void>();
+      t.after(() => held.resolve());
+      await h.page.route('**/api/v1/rooms/*/records', async (route) => {
+        if (route.request().method() !== 'POST') return route.continue();
+        posted.resolve();
+        await held.promise;
+        await route.fulfill({ status: 503, contentType: 'application/json', headers: { 'Access-Control-Allow-Origin': origin }, body: '{"error":"temporarily unavailable"}' });
+      });
+      await h.page.click('#room-invite-create');
+      await posted.promise;
+      await h.page.evaluate(() => window.dispatchEvent(new PageTransitionEvent('pagehide', { persisted: true })));
+      held.resolve();
+      await h.page.waitForFunction(() => document.getElementById('room-invite-form')?.getAttribute('aria-busy') !== 'true');
+    } else {
+      await h.page.click('#room-invite-close');
+      await h.page.click('#room-destroy');
+      await h.page.click('#room-destroy-confirm');
+      await h.page.waitForSelector('#problem:not([hidden])');
+    }
+    const remaining = await h.page.evaluate(() => ({
+      draft: (document.getElementById('room-text') as HTMLTextAreaElement).value,
+      label: (document.getElementById('room-invite-label') as HTMLInputElement).value,
+      who: document.getElementById('room-invite-who')!.textContent,
+      error: document.getElementById('room-invite-error')!.textContent,
+      link: document.getElementById('room-invite-link')!.textContent,
+      messages: document.getElementById('room-messages')!.textContent,
+      announce: document.getElementById('announce')!.textContent,
+    }));
+    assert.deepEqual(remaining, { draft: '', label: '', who: '', error: '', link: '', messages: '', announce: '' }, `${ending} clears even hidden fields`);
+    for (const sent of h.sent) {
+      const wire = `${sent.path} ${JSON.stringify(sent.headers)} ${sent.body?.toString('latin1') ?? ''}`;
+      for (const secret of ['Private cleanup room', 'Private invite recipient', 'Unsent private message', 'Unsent private invite']) {
+        assert.ok(!wire.includes(secret), 'private text never reaches the server');
+      }
+    }
+    await h.check(ending === 'pagehide' ? /status of 503/ : undefined);
+    await h.context.close();
+  }
+});
+
 test('mobile Null Chats keep the composer and controls inside the visible viewport', async (t) => {
   await restartAPI();
   t.after(() => restartAPI());

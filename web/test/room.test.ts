@@ -948,11 +948,19 @@ test('a removal counts in the creator’s tab before the room hears of it', () =
 test('names, labels and the room name are hidden from anyone who holds only the room key', () => {
   const a = person(0);
   const b = person(1);
-  const records = [ctl(a, join(a, 'Ada')), ctl(a, roomRec('Weekend trip')), ctl(a, inviteRec(1, 'Bob from work')), ctl(b, join(b, 'Bob')), ctl(a, admit(b, 'Bob'))];
+  // Spaces cannot occur in base64url ciphertext. A short name such as
+  // "Bob" can occur there by chance, which is not a plaintext leak.
+  const creatorName = 'Ada private fixture';
+  const memberName = 'Bob private fixture';
+  const roomName = 'Weekend private fixture';
+  const inviteLabel = 'Work invite fixture';
+  const records = [ctl(a, join(a, creatorName)), ctl(a, roomRec(roomName)), ctl(a, inviteRec(1, inviteLabel)), ctl(b, join(b, memberName)), ctl(a, admit(b, memberName))];
   // The room key opens every control record, but no name is in them.
-  for (const bytes of records) {
-    const json = JSON.stringify(openControl(sodium, key, ROOM, bytes[0] === 1 ? 0 : 1, bytes)?.record ?? openControl(sodium, key, ROOM, 1, bytes)?.record);
-    for (const secret of ['Ada', 'Weekend', 'Bob', 'work']) assert.ok(!json.includes(secret), `${secret} in ${json.slice(0, 60)}`);
+  for (const [i, bytes] of records.entries()) {
+    const opened = openControl(sodium, key, ROOM, i === 3 ? 1 : 0, bytes);
+    assert.ok(opened, 'the outsider can open the control envelope');
+    const json = JSON.stringify(opened.record);
+    for (const secret of [creatorName, memberName, roomName, inviteLabel]) assert.ok(!json.includes(secret), `${secret} in ${json.slice(0, 60)}`);
   }
   // Someone with the room key and no roster key sees no names.
   const outsider = stateOf(person(5));
@@ -966,10 +974,10 @@ test('names, labels and the room name are hidden from anyone who holds only the 
   // Bob learns them all once the creator lets him in.
   const s = stateOf(b);
   for (const [i, bytes] of records.entries()) s.apply(i === 3 ? 1 : 0, bytes);
-  assert.equal(s.name, 'Weekend trip');
-  assert.equal(s.nameOf(0), 'Ada');
-  assert.equal(s.nameOf(1), 'Bob');
-  assert.equal(s.labels.get(1), 'Bob from work');
+  assert.equal(s.name, roomName);
+  assert.equal(s.nameOf(0), creatorName);
+  assert.equal(s.nameOf(1), memberName);
+  assert.equal(s.labels.get(1), inviteLabel);
   assert.ok(s.rosterVersion > 0);
   assert.deepEqual(s.rosterKey(), ROSTER);
   // The creator reads a joiner's sealed name before letting them in; nobody else can.

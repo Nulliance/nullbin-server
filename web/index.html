@@ -58,6 +58,7 @@
   <symbol id="i-chevron" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></symbol>
   <symbol id="i-link" viewBox="0 0 24 24"><path d="M10 13.5a4.5 4.5 0 0 0 6.4.5l3-3a4.5 4.5 0 0 0-6.4-6.4l-1.2 1.2"/><path d="M14 10.5a4.5 4.5 0 0 0-6.4-.5l-3 3a4.5 4.5 0 0 0 6.4 6.4l1.2-1.2"/></symbol>
   <symbol id="i-menu" viewBox="0 0 24 24"><path d="M4 7h16M4 12h16M4 17h16"/></symbol>
+  <symbol id="i-back" viewBox="0 0 24 24"><path d="m12 5-7 7 7 7M5 12h15"/></symbol>
   <symbol id="i-qr" viewBox="0 0 24 24"><path d="M3 3h6v6H3zM15 3h6v6h-6zM3 15h6v6H3zM15 15h3v3h3v3h-6zM12 3v9H3M12 15v6M15 12h6M21 12v3"/></symbol>
 </svg>
 
@@ -464,6 +465,7 @@
     </div>
     <div id="room-chat" class="nb-chat" hidden>
       <header class="nb-chat-head">
+        <a href="/chat" class="nb-chat-tool nb-chat-back nb-room-mobile" aria-label="Back to Null Chat"><svg class="nb-i" aria-hidden="true"><use href="#i-back"/></svg></a>
         <div id="room-avatar" class="nb-chat-avatar" aria-hidden="true">B</div>
         <div class="nb-chat-heading">
           <h1 id="room-title" class="nb-chat-title" tabindex="-1">Null Chat</h1>
@@ -476,8 +478,13 @@
         <div class="nb-chat-tools">
           <button id="room-invite-open" type="button" class="btn nb-btn-primary nb-chat-invite" aria-label="Invite someone" aria-haspopup="dialog" aria-controls="room-invite-dialog" hidden><svg class="nb-i" aria-hidden="true"><use href="#i-user-plus"/></svg><span>Invite</span></button>
           <button id="room-destroy" type="button" class="btn nb-btn-secondary nb-chat-destroy" aria-label="Self-destruct" aria-haspopup="dialog" aria-controls="room-destroy-dialog" title="End this chat for everyone, now"><svg class="nb-i" aria-hidden="true"><use href="#i-flame"/></svg><span>Self-destruct</span></button>
+          <button id="room-menu-open" type="button" class="nb-chat-tool nb-room-mobile" aria-label="Chat menu" popovertarget="room-menu"><svg class="nb-i" aria-hidden="true"><use href="#i-more"/></svg></button>
         </div>
       </header>
+      <div id="room-menu" class="nb-room-menu" popover aria-label="Chat options">
+        <button id="room-theme-toggle" type="button" aria-pressed="false" aria-label="Dark theme"><svg class="nb-i" aria-hidden="true"><use href="#i-moon"/></svg><span>Dark theme</span><span class="nb-menu-switch" aria-hidden="true"></span></button>
+        <button id="room-menu-destroy" type="button" class="nb-room-menu-danger" aria-haspopup="dialog" aria-controls="room-destroy-dialog"><svg class="nb-i" aria-hidden="true"><use href="#i-flame"/></svg><span>Self-destruct</span></button>
+      </div>
       <ol id="room-messages" class="nb-chat-log" aria-label="Messages" aria-live="polite"></ol>
       <div class="nb-chat-dock">
         <button id="room-jump" type="button" class="nb-chat-jump" aria-label="Go to the latest messages" hidden><svg class="nb-i" aria-hidden="true"><use href="#i-down"/></svg><span id="room-jump-count" class="nb-chat-jump-count" hidden></span></button>

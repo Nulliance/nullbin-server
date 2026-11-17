@@ -818,6 +818,24 @@ const colour = (slot: number) => `nb-c${slot % 8}`;
 const initial = (name: string) => (Array.from(name.trim())[0] ?? '?').toUpperCase();
 const DIALOGS = ['room-invite-dialog', 'room-members-dialog', 'room-destroy-dialog'];
 
+/** Cosmetic menu cleanup must never interrupt disposal of messages or keys. */
+function hideRoomMenu(): void {
+  try {
+    document.getElementById('room-menu')?.hidePopover?.();
+  } catch {
+    // Older browsers or an invalid popover state must not block teardown.
+  }
+}
+
+/** The surviving bfcache listener captures only this flag, never room keys. */
+function roomRestoration(): { left: () => void; restore: (event: PageTransitionEvent) => void } {
+  let leftLive = false;
+  return {
+    left: () => { leftLive = true; },
+    restore: (event) => { if (event.persisted && leftLive) location.reload(); },
+  };
+}
+
 /** Finish key delivery against the latest membership before sealing a message. */
 export async function syncRoomKeys(share: () => Promise<void>, rotate: () => boolean, ended: () => boolean): Promise<void> {
   do {
@@ -955,6 +973,7 @@ function openChat(sodium: Sodium, id: string, session: Session): void {
   // --- Ending: everything decrypted and every key leaves the page. ---
   const shutdown = () => {
     ended = true;
+    hideRoomMenu();
     releaseLock?.();
     listening.abort();
     sizes.disconnect();
@@ -972,7 +991,15 @@ function openChat(sodium: Sodium, id: string, session: Session): void {
     channel?.close();
     channel = null;
     for (const d of DIALOGS) el<HTMLDialogElement>(d).close();
+    // Detached nodes may still be held by an in-flight callback or selection.
+    // Erase their text/labels as well as removing them from the live document.
+    const privateText = document.createTreeWalker(log, NodeFilter.SHOW_TEXT);
+    for (let node = privateText.nextNode(); node; node = privateText.nextNode()) node.nodeValue = '';
+    for (const node of log.querySelectorAll('*')) {
+      for (const attribute of [...node.attributes]) node.removeAttribute(attribute.name);
+    }
     log.replaceChildren();
+    run = null;
     show(waiting, false);
     el('room-waiting-code').replaceChildren();
     waitingStatus.replaceChildren();
@@ -1436,16 +1463,18 @@ function openChat(sodium: Sodium, id: string, session: Session): void {
   };
 
   const empty = make('li', 'nb-chat-empty');
-  empty.append(make('strong', '', 'No messages yet'),
-    document.createTextNode(owner !== null
+  const emptyIcon = icon('lock');
+  emptyIcon.classList.add('nb-chat-empty-icon');
+  empty.append(emptyIcon, make('strong', '', 'No messages yet'),
+    make('p', 'nb-chat-empty-copy', owner !== null
       ? 'Invite people with a link, then say hello. Only people in this chat can read it, not even the server.'
       : 'Say hello. Only people in this chat can read it, not even the server.'));
   if (owner !== null) {
     const invite = make('button', 'btn nb-btn-primary');
     invite.type = 'button';
     invite.append(icon('user-plus'), make('span', '', 'Invite people'));
-    invite.addEventListener('click', () => el('room-invite-open').click());
-    empty.append(make('br', ''), invite);
+    invite.addEventListener('click', () => el('room-invite-open').click(), { signal: listening.signal });
+    empty.append(invite);
   }
   log.append(empty);
 
@@ -1534,7 +1563,7 @@ function openChat(sodium: Sodium, id: string, session: Session): void {
     scrollBottom(window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth');
     pending = 0;
     updateJump();
-  });
+  }, { signal: listening.signal });
   const add = (li: HTMLLIElement, mine: boolean, counts: boolean) => {
     const stick = mine || atBottom;
     log.append(li);
@@ -1625,7 +1654,7 @@ function openChat(sodium: Sodium, id: string, session: Session): void {
         n.classList.remove('nb-flash');
         void n.offsetWidth;
         n.classList.add('nb-flash');
-      });
+      }, { signal: listening.signal });
       bubble.append(quote);
     }
     // The time (and "(edited)") floats at the end of the last line of
@@ -1658,7 +1687,7 @@ function openChat(sodium: Sodium, id: string, session: Session): void {
         const names = [...who].map(nameFor).join(', ');
         b.title = names;
         b.setAttribute('aria-label', `${emoji} ${who.size}: ${names}. ${mine ? 'Take back your reaction' : 'React with this too'}`);
-        b.addEventListener('click', () => react(m, emoji, !mine));
+        b.addEventListener('click', () => react(m, emoji, !mine), { signal: listening.signal });
         const item = make('li', '');
         item.append(b);
         list.append(item);
@@ -1681,7 +1710,7 @@ function openChat(sodium: Sodium, id: string, session: Session): void {
         if (menuFor?.id === m.key) return closeMenu(true);
         const r = more.getBoundingClientRect();
         openMenu(m, own ? r.left : r.right, r.top, more);
-      });
+      }, { signal: listening.signal });
       li.append(more);
     }
   };
@@ -1723,7 +1752,7 @@ function openChat(sodium: Sodium, id: string, session: Session): void {
     b.setAttribute('role', 'menuitem');
     b.append(icon(iconName), make('span', '', label));
     noRepeat(b); // holding Enter must not confirm a two-step item
-    b.addEventListener('click', () => run(b));
+    b.addEventListener('click', () => run(b), { signal: listening.signal });
     return b;
   };
   const openMenu = (m: Message, x: number, y: number, opener: HTMLElement | null) => {
@@ -1743,7 +1772,7 @@ function openChat(sodium: Sodium, id: string, session: Session): void {
       b.addEventListener('click', () => {
         closeMenu(true);
         react(m, emoji, !mine);
-      });
+      }, { signal: listening.signal });
       row.append(b);
     }
     menu.replaceChildren(row,
@@ -1798,7 +1827,7 @@ function openChat(sodium: Sodium, id: string, session: Session): void {
     else if (e.key === 'End') go(items.length - 1);
     else return;
     if (e.key !== 'Tab') e.preventDefault();
-  });
+  }, { signal: listening.signal });
   window.addEventListener('resize', () => closeMenu(false), { signal: listening.signal });
   window.addEventListener('blur', () => closeMenu(false), { signal: listening.signal });
 
@@ -1819,7 +1848,7 @@ function openChat(sodium: Sodium, id: string, session: Session): void {
     } else {
       openMenu(m, ev.clientX, ev.clientY, null);
     }
-  });
+  }, { signal: listening.signal });
   // A long press on touch screens (iPhones send no contextmenu event).
   let press = 0;
   let pressStart: { x: number; y: number } | null = null;
@@ -1827,6 +1856,7 @@ function openChat(sodium: Sodium, id: string, session: Session): void {
     clearTimeout(press);
     press = 0;
   };
+  listening.signal.addEventListener('abort', cancelPress, { once: true });
   log.addEventListener('pointerdown', (ev) => {
     if (ev.pointerType !== 'touch') return;
     const target = ev.target as Element;
@@ -1841,11 +1871,11 @@ function openChat(sodium: Sodium, id: string, session: Session): void {
       window.getSelection()?.removeAllRanges();
       openMenu(m, pressStart!.x, pressStart!.y, null);
     }, LONG_PRESS_MS);
-  });
+  }, { signal: listening.signal });
   log.addEventListener('pointermove', (ev) => {
     if (press && pressStart && Math.hypot(ev.clientX - pressStart.x, ev.clientY - pressStart.y) > 10) cancelPress();
-  });
-  for (const t of ['pointerup', 'pointercancel', 'pointerleave'] as const) log.addEventListener(t, cancelPress);
+  }, { signal: listening.signal });
+  for (const t of ['pointerup', 'pointercancel', 'pointerleave'] as const) log.addEventListener(t, cancelPress, { signal: listening.signal });
   // A double-click on a bubble replies to it, as in desktop messengers.
   log.addEventListener('dblclick', (ev) => {
     const target = ev.target as Element;
@@ -1854,7 +1884,7 @@ function openChat(sodium: Sodium, id: string, session: Session): void {
     if (!m || m.deleted || composerLocked) return;
     window.getSelection()?.removeAllRanges();
     startContext('reply', m);
-  });
+  }, { signal: listening.signal });
 
   /** Shows one event: a new message, a change to one, or a notice. */
   const show1 = (e: RoomEvent, mine: boolean) => {
@@ -2154,13 +2184,13 @@ function openChat(sodium: Sodium, id: string, session: Session): void {
   // the conversation and every key from it, as a reload would, so a page
   // the browser keeps in its back/forward cache cannot bring them back. The
   // session stays: coming back reloads and rejoins, showing new messages only.
-  let leftLive = false;
+  const restoration = roomRestoration();
   window.addEventListener('pagehide', () => {
     if (ended) return;
-    leftLive = true;
+    restoration.left();
     shutdown();
   }, { signal: listening.signal });
-  window.addEventListener('pageshow', (e) => { if (e.persisted && leftLive) location.reload(); });
+  window.addEventListener('pageshow', restoration.restore);
   if (navigator.locks) {
     void navigator.locks.request(lockName, { ifAvailable: true }, (lock) => {
       if (!lock) {
@@ -2231,7 +2261,7 @@ function openChat(sodium: Sodium, id: string, session: Session): void {
   text.addEventListener('input', () => {
     updateSend();
     grow();
-  });
+  }, { signal: listening.signal });
   let mode: { kind: 'reply' | 'edit'; target: Message } | null = null;
   text.maxLength = MAX_MESSAGE_LENGTH;
   const startContext = (kind: 'reply' | 'edit', target: Message) => {
@@ -2258,7 +2288,7 @@ function openChat(sodium: Sodium, id: string, session: Session): void {
   el('room-context-cancel').addEventListener('click', () => {
     stopContext();
     text.focus({ preventScroll: true });
-  });
+  }, { signal: listening.signal });
   text.addEventListener('keydown', (e) => {
     if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
       e.preventDefault();
@@ -2274,7 +2304,7 @@ function openChat(sodium: Sodium, id: string, session: Session): void {
         startContext('edit', mine);
       }
     }
-  });
+  }, { signal: listening.signal });
   composer.addEventListener('submit', async (ev) => {
     ev.preventDefault();
     // Control and direction characters, stacks of marks and long runs of
@@ -2317,7 +2347,7 @@ function openChat(sodium: Sodium, id: string, session: Session): void {
       composer.removeAttribute('aria-busy');
       if (!ended && desktop) text.focus({ preventScroll: true });
     }
-  });
+  }, { signal: listening.signal });
 
   const isEnded = () => ended;
   // A removal counts in this tab at once, before the server or the room
@@ -2346,11 +2376,16 @@ function initDestroy(id: string, session: Session, end: (heading: string, text: 
   const dialog = el<HTMLDialogElement>('room-destroy-dialog');
   const confirm = el<HTMLButtonElement>('room-destroy-confirm');
   const error = el('room-destroy-error');
-  el('room-destroy').addEventListener('click', () => {
+  window.matchMedia('(max-width: 767.98px), (max-width: 1199.98px) and (pointer: coarse)').addEventListener('change', (event) => {
+    if (!event.matches) hideRoomMenu();
+  }, { signal });
+  const open = () => {
     if (!admitted()) return;
+    hideRoomMenu();
     show(error, false);
     dialog.showModal();
-  }, { signal });
+  };
+  for (const button of ['room-destroy', 'room-menu-destroy']) el(button).addEventListener('click', open, { signal });
   for (const b of ['room-destroy-close', 'room-destroy-cancel']) el(b).addEventListener('click', () => dialog.close(), { signal });
   confirm.addEventListener('click', async () => {
     if (confirm.disabled || !admitted()) return;
@@ -2378,6 +2413,11 @@ function initMembers(sodium: Sodium, id: string, session: Session, state: RoomSt
   const dialog = el<HTMLDialogElement>('room-members-dialog');
   const list = el('room-member-list');
   const error = el('room-members-error');
+  const armedTimers = new Set<number>();
+  signal.addEventListener('abort', () => {
+    for (const timer of armedTimers) clearTimeout(timer);
+    armedTimers.clear();
+  }, { once: true });
   const render = async () => {
     show(error, false);
     let states: Map<number, SlotState> | null = null;
@@ -2445,7 +2485,7 @@ function initMembers(sodium: Sodium, id: string, session: Session, state: RoomSt
           nameEl.replaceWith(fresh);
           nameEl = fresh;
           announce(on ? `${state.nameOf(slot)} marked verified.` : `${state.nameOf(slot)} unmarked.`, signal);
-        });
+        }, { signal });
         actions.append(check);
       }
       if (session.owner !== null && slot !== 0 && !(announced && closed)) {
@@ -2465,14 +2505,17 @@ function initMembers(sodium: Sodium, id: string, session: Session, state: RoomSt
             span.textContent = 'Sure?';
             armedAt = Date.now();
             armed = window.setTimeout(() => {
+              armedTimers.delete(armed);
               armed = 0;
               remove.classList.remove('nb-armed');
               span.textContent = label;
             }, 4000);
+            armedTimers.add(armed);
             return;
           }
           if (Date.now() - armedAt < CONFIRM_GAP_MS) return;
           clearTimeout(armed);
+          armedTimers.delete(armed);
           armed = 0;
           remove.classList.remove('nb-armed');
           const done = busy(remove, 'Removing…');
@@ -2497,7 +2540,7 @@ function initMembers(sodium: Sodium, id: string, session: Session, state: RoomSt
             done();
           }
           if (!isEnded()) await render();
-        });
+        }, { signal });
         actions.append(remove);
       }
       return li;
@@ -2595,7 +2638,7 @@ function initOwner(sodium: Sodium, id: string, session: Session, owner: string, 
     reset();
     label.focus();
   }, { signal });
-  bindCopy(el<HTMLButtonElement>('room-invite-copy'), () => linkBox.textContent ?? '', 'Invite link copied', linkBox);
+  bindCopy(el<HTMLButtonElement>('room-invite-copy'), () => linkBox.textContent ?? '', 'Invite link copied', linkBox, 'The link is selected', signal);
   // An invite whose place the server gave but whose signed record did not
   // get posted. The next Create finishes it, with the same record, instead
   // of taking another place (places are never given out twice).
@@ -2700,6 +2743,7 @@ function initOwner(sodium: Sodium, id: string, session: Session, owner: string, 
   }, { signal });
   // Leaving the room forgets an invite that was never finished.
   signal.addEventListener('abort', () => {
+    clearTimeout(armed);
     if (unfinished) sodium.memzero(unfinished.secret);
     unfinished = null;
   });

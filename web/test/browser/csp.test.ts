@@ -1233,6 +1233,16 @@ test('Null Chat: create, invite once, chat, reply, react, edit, unsend, remove, 
   await say(a, 'Hi Bob <b>not bold</b>');
   await waitText(b, 'Hi Bob <b>not bold</b>');
   assert.equal(await b.page.locator('#room-messages b').count(), 0, 'messages are text, never HTML');
+  await b.page.setViewportSize({ width: 390, height: 844 });
+  const incomingLayout = await b.page.locator('.nb-m:not(.nb-own) .nb-m-bubble').evaluate((bubble) => {
+    const name = bubble.querySelector('.nb-m-name')!.getBoundingClientRect();
+    const time = bubble.querySelector('.nb-m-meta')!.getBoundingClientRect();
+    const words = bubble.querySelector('.nb-m-words')!.getBoundingClientRect();
+    return { nameTop: name.top, nameBottom: name.bottom, timeTop: time.top, timeBottom: time.bottom, wordsTop: words.top, height: bubble.getBoundingClientRect().height };
+  });
+  assert.ok(incomingLayout.timeTop >= incomingLayout.nameTop - 1 && incomingLayout.timeBottom <= incomingLayout.nameBottom + 1, 'incoming timestamps share the sender line');
+  assert.ok(incomingLayout.timeBottom <= incomingLayout.wordsTop + 1 && incomingLayout.height <= 70, 'short incoming messages do not leave an empty timestamp row');
+  await b.page.setViewportSize({ width: 1280, height: 800 });
   // Bob replies to Ada's message, from the ⋯ button beside it; the menu
   // opens on its first item and Escape closes it.
   const theirs = '#room-messages .nb-m:not(.nb-own)';
@@ -1533,6 +1543,7 @@ test('Null Chat pending admission: no chat flash, self-destruct or record floodi
     const destroys = h.sent.filter((request) => request.method === 'DELETE').length;
     await h.page.evaluate(() => {
       document.getElementById('room-destroy')!.click();
+      document.getElementById('room-menu-destroy')!.click();
       document.getElementById('room-destroy-confirm')!.click();
     });
     assert.equal(await h.page.locator('#room-destroy-dialog').evaluate((dialog) => (dialog as HTMLDialogElement).open), false);
@@ -2190,7 +2201,7 @@ test('large text previews are bounded and downloads preserve the complete text',
 test('ending a mobile Null Chat clears hidden invite metadata and drafts', async (t) => {
   await restartAPI();
   t.after(() => restartAPI());
-  for (const ending of ['pagehide', 'self-destruct'] as const) {
+  for (const ending of ['pagehide', 'self-destruct', 'popover-unavailable', 'popover-error'] as const) {
     const h = await open({ hasTouch: true });
     t.after(() => h.context.close());
     await h.page.setViewportSize({ width: 390, height: 740 });
@@ -2200,6 +2211,16 @@ test('ending a mobile Null Chat clears hidden invite metadata and drafts', async
     await h.page.click('#room-create-submit');
     await h.page.waitForSelector('#room-chat:not([hidden])');
     await h.page.waitForFunction(() => !(document.getElementById('room-text') as HTMLTextAreaElement).disabled);
+    await h.page.fill('#room-text', 'Private rendered cleanup message');
+    await h.page.click('#room-send');
+    await h.page.waitForSelector('#room-messages .nb-m');
+    const oldMessage = await h.page.$('#room-messages .nb-m');
+    assert.ok(oldMessage);
+    const debuggerSession = await h.context.newCDPSession(h.page);
+    const oldControl = await debuggerSession.send('Runtime.evaluate', { expression: "document.querySelector('#room-messages .nb-m-more')", objectGroup: 'cleanup-check' });
+    assert.ok(oldControl.result.objectId);
+    const ownerToken = await h.page.evaluate(() => Object.values(sessionStorage).map((value) => JSON.parse(value) as { owner?: string }).find((value) => value.owner)?.owner);
+    assert.ok(ownerToken);
     await h.page.click('#room-invite-open');
     await h.page.fill('#room-invite-label', 'Private invite recipient');
     await h.page.click('#room-invite-create');
@@ -2209,7 +2230,7 @@ test('ending a mobile Null Chat clears hidden invite metadata and drafts', async
     await h.page.fill('#room-text', 'Unsent private message');
     await h.page.click('#room-invite-open');
     await h.page.fill('#room-invite-label', 'Unsent private invite');
-    if (ending === 'pagehide') {
+    if (ending !== 'self-destruct') {
       // A reply that arrives after cleanup must not restore dialog text.
       const held = Promise.withResolvers<void>();
       const posted = Promise.withResolvers<void>();
@@ -2222,12 +2243,18 @@ test('ending a mobile Null Chat clears hidden invite metadata and drafts', async
       });
       await h.page.click('#room-invite-create');
       await posted.promise;
+      await h.page.evaluate((ending) => {
+        const menu = document.getElementById('room-menu')!;
+        if (ending === 'popover-unavailable') Object.defineProperty(menu, 'hidePopover', { value: undefined });
+        if (ending === 'popover-error') menu.hidePopover = () => { throw new DOMException('Popover unavailable', 'InvalidStateError'); };
+      }, ending);
       await h.page.evaluate(() => window.dispatchEvent(new PageTransitionEvent('pagehide', { persisted: true })));
       held.resolve();
       await h.page.waitForFunction(() => document.getElementById('room-invite-form')?.getAttribute('aria-busy') !== 'true');
     } else {
       await h.page.click('#room-invite-close');
-      await h.page.click('#room-destroy');
+      await h.page.click('#room-menu-open');
+      await h.page.click('#room-menu-destroy');
       await h.page.click('#room-destroy-confirm');
       await h.page.waitForSelector('#problem:not([hidden])');
     }
@@ -2241,13 +2268,37 @@ test('ending a mobile Null Chat clears hidden invite metadata and drafts', async
       announce: document.getElementById('announce')!.textContent,
     }));
     assert.deepEqual(remaining, { draft: '', label: '', who: '', error: '', link: '', messages: '', announce: '' }, `${ending} clears even hidden fields`);
+    assert.equal(await oldMessage.evaluate((message) => message.textContent), '', 'even retained detached message nodes lose their plaintext');
+    assert.equal(await oldMessage.evaluate((message) => message.querySelectorAll('[title], [aria-label]').length), 0, 'detached labels cannot retain names or quoted messages');
+    await oldMessage.dispose();
+    const oldListeners = await debuggerSession.send('DOMDebugger.getEventListeners', { objectId: oldControl.result.objectId });
+    assert.equal(oldListeners.listeners.filter((listener) => listener.type === 'click').length, 0, 'retained detached message controls cannot keep room callbacks alive');
+    for (const expression of ["document.getElementById('room-invite-copy')", "document.getElementById('room-context-cancel')", 'window']) {
+      const remote = await debuggerSession.send('Runtime.evaluate', { expression, objectGroup: 'cleanup-check' });
+      assert.ok(remote.result.objectId);
+      const { listeners } = await debuggerSession.send('DOMDebugger.getEventListeners', { objectId: remote.result.objectId });
+      if (expression !== 'window') assert.equal(listeners.filter((listener) => listener.type === 'click').length, 0, 'room-bound callbacks are removed on teardown');
+      for (const listener of listeners.filter((listener) => listener.type === 'pageshow')) {
+        assert.ok(listener.handler?.objectId);
+        const handler = await debuggerSession.send('Runtime.getProperties', { objectId: listener.handler.objectId });
+        const scopes = handler.internalProperties?.find((property) => property.name === '[[Scopes]]')?.value?.objectId;
+        assert.ok(scopes);
+        const entries = await debuggerSession.send('Runtime.getProperties', { objectId: scopes, ownProperties: true });
+        for (const entry of entries.result.filter((entry) => entry.value?.description?.startsWith('Closure'))) {
+          const bindings = await debuggerSession.send('Runtime.getProperties', { objectId: entry.value!.objectId!, ownProperties: true });
+          assert.equal(bindings.result.some((binding) => binding.value?.value === ownerToken), false, 'the surviving restore callback cannot retain an owner token');
+        }
+      }
+    }
+    await debuggerSession.send('Runtime.releaseObjectGroup', { objectGroup: 'cleanup-check' });
+    await debuggerSession.detach();
     for (const sent of h.sent) {
       const wire = `${sent.path} ${JSON.stringify(sent.headers)} ${sent.body?.toString('latin1') ?? ''}`;
-      for (const secret of ['Private cleanup room', 'Private invite recipient', 'Unsent private message', 'Unsent private invite']) {
+      for (const secret of ['Private cleanup room', 'Private invite recipient', 'Private rendered cleanup message', 'Unsent private message', 'Unsent private invite']) {
         assert.ok(!wire.includes(secret), 'private text never reaches the server');
       }
     }
-    await h.check(ending === 'pagehide' ? /status of 503/ : undefined);
+    await h.check(ending !== 'self-destruct' ? /status of 503/ : undefined);
     await h.context.close();
   }
 });
@@ -2304,16 +2355,19 @@ test('mobile Null Chats keep the composer and controls inside the visible viewpo
         })),
         encryptionVisible: getComputedStyle(document.querySelector('.nb-chat-sub .nb-narrow')!).display !== 'none',
         composer: rect('#room-composer'), send: rect('#room-send'),
-        invite: rect('#room-invite-open'), members: rect('#room-members-open'), destroy: rect('#room-destroy'),
+        invite: rect('#room-invite-open'), members: rect('#room-members-open'), menu: rect('#room-menu-open'), back: rect('.nb-chat-back'),
         overflow: document.documentElement.scrollWidth > innerWidth,
         scrollable: getComputedStyle(log).overflowY === 'auto',
         fontSize: parseFloat(getComputedStyle(document.getElementById('room-text')!).fontSize),
       };
     });
     assert.equal(result.overflow, false, 'no horizontal page overflow');
-    assert.ok(result.title.width >= result.head.width * .55, 'the room name gets most of the header width');
+    assert.ok(result.title.width >= result.head.width * .38, 'the room name keeps usable space beside navigation and actions');
     assert.ok(result.title.right + 8 <= result.tools.left, 'the title and actions never overlap');
     assert.ok(result.head.height <= (h.page.viewportSize()!.width < 320 ? 128 : 112), `the header stays compact at ${h.page.viewportSize()!.width}px: ${JSON.stringify(result)}`);
+    assert.ok(await h.page.isHidden('body > .nb-top'), 'the chat has one header, without the global navigation bar');
+    assert.ok(result.head.top <= top + 1, 'the chat header starts at the visible viewport top');
+    if (h.page.viewportSize()!.width >= 320) assert.ok(result.head.height <= 90, 'the entire mobile header fits in 90px');
     assert.equal(result.encryptionVisible, true, 'encryption is labelled, not an unexplained lock');
     for (const chip of result.chips) {
       assert.equal(chip.clipped, false, 'status text is never clipped');
@@ -2325,7 +2379,7 @@ test('mobile Null Chats keep the composer and controls inside the visible viewpo
     assert.ok(result.log.bottom <= result.composer.top + 1, 'messages never sit behind the composer');
     assert.ok(result.composer.bottom <= bottom + 1, 'composer stays above the keyboard');
     assert.ok(result.fontSize >= 16, 'typing does not trigger iOS input zoom');
-    for (const control of [result.send, result.invite, result.members, result.destroy]) {
+    for (const control of [result.send, result.invite, result.members, result.menu, result.back]) {
       assert.ok(control.height >= 44 && control.width >= 44, 'chat controls have 44px tap targets');
       assert.ok(control.left >= 0 && control.right <= h.page.viewportSize()!.width, 'controls fit the screen');
     }
@@ -2339,7 +2393,22 @@ test('mobile Null Chats keep the composer and controls inside the visible viewpo
   await viewport(null);
   await checkLayout(0, 740);
   assert.equal(await h.page.getByRole('button', { name: 'Invite someone', exact: true }).count(), 1);
-  assert.equal(await h.page.getByRole('button', { name: 'Self-destruct', exact: true }).count(), 1);
+  assert.equal(await h.page.getByRole('button', { name: 'Chat menu', exact: true }).count(), 1);
+  assert.ok(await h.page.isHidden('#room-destroy'), 'self-destruct is tucked into the mobile menu');
+  await h.page.click('#room-menu-open');
+  await h.page.waitForSelector('#room-menu:popover-open');
+  await h.page.click('#room-theme-toggle');
+  assert.equal(await h.page.getAttribute('html', 'data-bs-theme'), 'dark');
+  assert.equal(await h.page.getAttribute('#theme-toggle', 'aria-pressed'), 'true');
+  await h.page.click('#room-theme-toggle');
+  await h.page.keyboard.press('Escape');
+  assert.ok(await h.page.isHidden('#room-menu'));
+  assert.equal(await h.page.locator('#room-menu-open').evaluate((button) => document.activeElement === button), true, 'Escape returns focus to the menu trigger');
+  await h.page.click('#room-menu-open');
+  await h.page.click('#room-menu-destroy');
+  await h.page.waitForSelector('#room-destroy-dialog[open]');
+  assert.ok(await h.page.isHidden('#room-menu'), 'confirmation replaces the menu');
+  await h.page.click('#room-destroy-cancel');
   const screenshotDir = process.env['NB_TEST_SCREENSHOTS_DIR'];
   const capture = async (name: string) => {
     if (!screenshotDir) return;
@@ -2366,6 +2435,9 @@ test('mobile Null Chats keep the composer and controls inside the visible viewpo
   await h.page.emulateMedia({ colorScheme: 'light' });
   await h.page.setViewportSize({ width: 1280, height: 800 });
   await viewport(null);
+  assert.ok(await h.page.isVisible('body > .nb-top'), 'desktop keeps the site navigation');
+  assert.ok(await h.page.isVisible('#room-destroy'), 'desktop keeps its labelled action');
+  assert.ok(await h.page.isHidden('#room-menu-open'));
   await capture('chat-desktop');
   await h.page.setViewportSize({ width: 390, height: 740 });
   await h.page.fill('#room-text', 'Mobile keyboard message');
@@ -2382,6 +2454,23 @@ test('mobile Null Chats keep the composer and controls inside the visible viewpo
   await checkLayout(70, 380);
   await h.page.fill('#room-text', '');
   await viewport(null);
+  assert.ok(await h.page.locator('.nb-m-text').first().evaluate((text) => parseFloat(getComputedStyle(text).fontSize) >= 16), 'messages stay readable on a phone');
+  await h.page.locator('.nb-m.nb-own .nb-m-bubble').first().click({ button: 'right' });
+  await h.page.waitForSelector('.nb-menu:not([hidden])');
+  for (const width of [280, 390]) {
+    await h.page.setViewportSize({ width, height: 740 });
+    await viewport(null);
+    await h.page.locator('.nb-m.nb-own .nb-m-bubble').first().click({ button: 'right' });
+    const controls = await h.page.locator('.nb-menu button').evaluateAll((buttons) => buttons.map((button) => {
+      const r = button.getBoundingClientRect();
+      return { width: r.width, height: r.height, left: r.left, right: r.right };
+    }));
+    for (const control of controls) {
+      assert.ok(control.width >= 44 && control.height >= 44, 'message menu actions have full touch targets');
+      assert.ok(control.left >= 0 && control.right <= width, 'message menu actions fit even cover screens');
+    }
+    await h.page.keyboard.press('Escape');
+  }
   // Populate enough DOM rows to exercise scrolling without filling the
   // encrypted room's record quota with layout fixtures.
   await h.page.evaluate(() => {
@@ -2423,13 +2512,16 @@ test('mobile Null Chats keep the composer and controls inside the visible viewpo
   await capture('chat-landscape');
   // Dialogs remain reachable above a keyboard, including their close action.
   await h.page.click('#room-invite-open');
+  const sheet = await h.page.locator('#room-invite-dialog').boundingBox();
+  assert.ok(sheet && Math.abs(sheet.y + sheet.height - 378) <= 1, 'mobile panels sit near the bottom of the visible viewport');
   await h.page.fill('#room-invite-label', 'Invite label');
   await viewport(250, 30);
   const dialog = await h.page.locator('#room-invite-dialog').boundingBox();
   assert.ok(dialog && dialog.y >= 30 && dialog.y + dialog.height <= 280, 'invite dialog fits above the keyboard');
   await h.page.click('#room-invite-close');
   await viewport(null);
-  await h.page.click('#room-destroy');
+  await h.page.click('#room-menu-open');
+  await h.page.click('#room-menu-destroy');
   await h.page.click('#room-destroy-confirm');
   await h.page.waitForSelector('#problem:not([hidden])');
   await viewport(240, 40);
@@ -2441,6 +2533,57 @@ test('mobile Null Chats keep the composer and controls inside the visible viewpo
   await h.check();
 });
 
+
+test('mobile sender safety codes stay fully visible beside edited messages', async (t) => {
+  await restartAPI();
+  t.after(() => restartAPI());
+  const creator = await open();
+  const guest = await open();
+  t.after(() => Promise.all([creator.context.close(), guest.context.close()]));
+  await goto(creator, `${origin}/chat`);
+  await creator.page.fill('#room-you', 'Alex');
+  await creator.page.click('#room-create-submit');
+  await creator.page.waitForSelector('#room-chat:not([hidden])');
+  await creator.page.click('#room-invite-open');
+  await creator.page.fill('#room-invite-label', 'Alex');
+  await creator.page.click('#room-invite-create');
+  await creator.page.waitForSelector('#room-invite-result:not([hidden])');
+  const link = (await creator.page.textContent('#room-invite-link'))!;
+  await creator.page.click('#room-invite-close');
+  await goto(guest, link);
+  await guest.page.fill('#room-join-name', 'Alex');
+  await guest.page.click('#room-join-submit');
+  await guest.page.waitForSelector('#room-chat:not([hidden])');
+  await guest.page.fill('#room-text', 'I will check this afternoon.');
+  await guest.page.press('#room-text', 'Enter');
+  await creator.page.waitForSelector('.nb-m:not(.nb-own) .nb-tag');
+  await guest.page.press('#room-text', 'ArrowUp');
+  await guest.page.fill('#room-text', 'Sure. I will check this afternoon.');
+  await guest.page.press('#room-text', 'Enter');
+  await creator.page.waitForSelector('.nb-m:not(.nb-own) .nb-m-edited');
+  const tag = creator.page.locator('.nb-m:not(.nb-own) .nb-m-name .nb-tag');
+  const shortCode = (await tag.textContent())!;
+  assert.match(shortCode, /^\d{5} \d{5} \d{5}$/);
+  for (const code of [shortCode, `${shortCode} ${shortCode}`]) {
+    // The full six-group code is used when short safety-code prefixes clash.
+    await tag.evaluate((tag, code) => { tag.textContent = code; }, code);
+    for (const width of [280, 320, 390]) {
+      await creator.page.setViewportSize({ width, height: 740 });
+      const layout = await tag.evaluate((tag) => {
+        const name = tag.closest('.nb-m-name')!.getBoundingClientRect();
+        const range = document.createRange();
+        range.selectNodeContents(tag);
+        return { name: { left: name.left, right: name.right, top: name.top, bottom: name.bottom }, fragments: [...range.getClientRects()].map((r) => ({ left: r.left, right: r.right, top: r.top, bottom: r.bottom })) };
+      });
+      for (const fragment of layout.fragments) {
+        assert.ok(fragment.left >= layout.name.left - 1 && fragment.right <= layout.name.right + 1, `all safety-code digits fit at ${width}px`);
+        assert.ok(fragment.top >= layout.name.top - 1 && fragment.bottom <= layout.name.bottom + 1, 'wrapped security codes remain fully visible');
+      }
+    }
+  }
+  await creator.check();
+  await guest.check();
+});
 
 test('room expiry uses the signed end on the first batch and clears locally without the API', async (t) => {
   await restartAPI();

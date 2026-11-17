@@ -420,6 +420,17 @@ body.nb-in-room #room { display: flex; flex: 1; flex-direction: column; }
 .nb-chip-btn:focus-visible { outline: 2px solid var(--nb-accent); outline-offset: 1px; }
 .nb-chat .nb-narrow { display: none; }
 .nb-chat-tools { display: flex; flex: none; align-items: center; gap: 8px; }
+.nb-chat-tool.nb-room-mobile { display: none; }
+.nb-room-menu { position: fixed; inset: calc(var(--nb-room-top, 0px) + env(safe-area-inset-top) + 48px) 12px auto auto; width: 220px; max-width: calc(100% - 24px); margin: 0; padding: 6px; border: 1px solid var(--nb-line-strong); border-radius: 12px; background: var(--nb-surface); color: var(--nb-text); }
+.nb-room-menu > button { display: flex; align-items: center; gap: 12px; width: 100%; min-height: 44px; padding: 10px 12px; border: 0; border-radius: 6px; background: transparent; color: inherit; font: inherit; font-size: 14px; text-align: start; cursor: pointer; }
+.nb-room-menu > button:hover { background: var(--nb-soft); }
+.nb-room-menu > button:focus-visible { outline: 2px solid var(--nb-accent); outline-offset: -2px; }
+.nb-room-menu > .nb-room-menu-danger { color: var(--nb-danger); }
+.nb-room-menu .nb-i { width: 18px; height: 18px; }
+.nb-menu-switch { position: relative; flex: none; width: 32px; height: 20px; margin-left: auto; border: 1px solid var(--nb-line-strong); border-radius: var(--nb-pill); background: var(--nb-raised); }
+.nb-menu-switch::after { content: ''; position: absolute; top: 2px; left: 2px; width: 14px; height: 14px; border-radius: 50%; background: var(--nb-muted); }
+[aria-pressed="true"] > .nb-menu-switch { border-color: var(--nb-accent); background: var(--nb-accent); }
+[aria-pressed="true"] > .nb-menu-switch::after { transform: translateX(12px); background: var(--nb-on-accent); }
 .nb-chat-invite { --bs-btn-padding-y: 0; display: inline-flex; align-items: center; gap: 6px; height: var(--nb-control-height); border-radius: var(--nb-pill); }
 .nb-chat-tool { display: grid; place-items: center; width: 38px; height: 38px; padding: 0; border: 0; border-radius: 50%; background: transparent; color: var(--nb-muted); cursor: pointer; }
 .nb-chat-tool:hover { background: var(--nb-raised); color: var(--nb-ink); }
@@ -435,6 +446,8 @@ body.nb-in-room #room { display: flex; flex: 1; flex-direction: column; }
 .nb-chat-empty { margin: auto; padding: 20px 24px; max-width: 360px; border: 1px solid var(--nb-line); border-radius: var(--nb-radius-card); background: var(--nb-surface); color: var(--nb-muted); font-size: 13.5px; text-align: center; }
 .nb-chat-empty strong { display: block; margin-bottom: 4px; color: var(--nb-ink); font-size: 15px; }
 .nb-chat-empty .btn { margin-top: 12px; }
+.nb-chat-empty-icon { display: none; }
+.nb-chat-empty-copy { margin: 0; }
 .nb-day, .nb-sys { align-self: center; padding: 3px 11px; border-radius: var(--nb-pill); background: var(--nb-in-bubble); color: var(--nb-muted); font-size: 12.5px; font-weight: 500; text-align: center; }
 .nb-day { margin: 10px 0 8px; font-weight: 600; }
 .nb-sys { margin: 6px 0; }
@@ -582,17 +595,18 @@ body.nb-in-room #room { display: flex; flex: 1; flex-direction: column; }
    messages scroll, so the keyboard cannot strand the composer below them. */
 @media (max-width: 767.98px), (max-width: 1199.98px) and (pointer: coarse) {
   body.nb-in-room { position: fixed; top: var(--nb-room-top, 0px); right: 0; left: 0; height: 100vh; height: var(--nb-room-height, 100dvh); min-height: 0; overflow: hidden; }
-  body.nb-in-room .nb-top { position: static; flex: none; }
-  body.nb-in-room .nb-top .nb-bare-btn { width: 44px; height: 44px; }
-  body.nb-in-room.nb-room-keyboard > .nb-top { display: none; }
+  body.nb-in-room > .nb-top { display: none; }
   body.nb-in-room .nb-main { flex: 1; min-height: 0; overflow: hidden; padding-inline: max(12px, env(safe-area-inset-left)) max(12px, env(safe-area-inset-right)); }
   body.nb-in-room #room { min-height: 0; }
   body.nb-in-room .nb-chat { min-height: 0; overflow: hidden; }
-  body.nb-in-room .nb-chat-head { position: static; flex: none; display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 0 12px; min-height: 0; padding-block: 8px 4px; box-shadow: none; }
+  body.nb-in-room .nb-chat-head { position: static; flex: none; display: grid; grid-template-columns: 44px minmax(0, 1fr) auto; align-items: center; gap: 0 8px; min-height: 0; padding-block: env(safe-area-inset-top) 0; box-shadow: none; }
+  body.nb-in-room .nb-room-mobile { display: grid; width: 44px; height: 44px; }
+  body.nb-in-room .nb-chat-back { grid-column: 1; grid-row: 1; }
   body.nb-in-room .nb-chat-avatar { display: none; }
   body.nb-in-room .nb-chat-heading { display: contents; }
-  body.nb-in-room .nb-chat-title { grid-column: 1; grid-row: 1; font-size: 18px; line-height: 1.35; }
-  body.nb-in-room .nb-chat-tools { grid-column: 2; grid-row: 1; gap: 8px; }
+  body.nb-in-room .nb-chat-title { grid-column: 2; grid-row: 1; font-size: 17px; line-height: 1.35; }
+  body.nb-in-room .nb-chat-tools { grid-column: 3; grid-row: 1; gap: 4px; }
+  body.nb-in-room .nb-chat-tools .nb-chat-destroy { display: none; }
   /* One quiet status row; only controls carry a full-height tap target.
      Wrapping remains available for enlarged system text, never clipping. */
   body.nb-in-room .nb-chat-sub { grid-column: 1 / -1; grid-row: 2; min-width: 0; align-items: center; flex-wrap: wrap; gap: 0 clamp(4px, calc(10vw - 24px), 12px); margin: 0; overflow: visible; }
@@ -601,7 +615,7 @@ body.nb-in-room #room { display: flex; flex: 1; flex-direction: column; }
   body.nb-in-room .nb-chat-sub .nb-chip-btn:hover { color: var(--nb-accent); }
   body.nb-in-room .nb-chat-sub .nb-chip-btn:focus-visible { border-radius: 4px; }
   body.nb-in-room .nb-chat-sub .nb-chip-btn { display: inline-flex; align-items: center; min-width: 44px; min-height: 44px; }
-  body.nb-in-room .nb-chat-invite, body.nb-in-room .nb-chat-destroy { display: inline-flex; flex: none; align-items: center; justify-content: center; width: 44px; height: 44px; min-height: 44px; padding: 0; }
+  body.nb-in-room .nb-chat-invite { display: inline-flex; flex: none; align-items: center; justify-content: center; width: 44px; height: 44px; min-height: 44px; padding: 0; }
   body.nb-in-room .nb-chat-invite > span, body.nb-in-room .nb-chat-destroy > span { display: none; }
   body.nb-in-room .nb-chat .nb-wide { display: none; }
   body.nb-in-room .nb-chat .nb-narrow { display: inline; }
@@ -619,11 +633,70 @@ body.nb-in-room #room { display: flex; flex: 1; flex-direction: column; }
   body.nb-in-room .nb-m-bubble { max-width: calc(100% - 46px); }
   body.nb-in-room .nb-m-more { display: none; }
   body.nb-in-room .nb-m-avatar { width: 30px; height: 30px; font-size: 13px; }
+
+  /* A quiet frame around the conversation, with generous touch targets. */
+  body.nb-in-room .nb-chat-back, body.nb-in-room #room-menu-open { color: var(--nb-text); }
+  body.nb-in-room .nb-chat-head :is(a, button):focus-visible { outline: 2px solid var(--nb-accent); outline-offset: -3px; box-shadow: none; }
+  body.nb-in-room .nb-chat-invite { border-color: transparent; background: var(--nb-accent-tint); color: var(--nb-accent); }
+  body.nb-in-room .nb-chat-invite:hover { background: var(--nb-accent); color: var(--nb-on-accent); }
+  body.nb-in-room .nb-chat-sub { font-size: 12px; }
+  body.nb-in-room .nb-chat-sub .nb-chip { font-weight: 400; }
+  body.nb-in-room .nb-chat-sub .nb-chip-warn { color: var(--nb-muted); }
+  body.nb-in-room .nb-chat-sub .nb-chip-btn { gap: 6px; }
+  body.nb-in-room .nb-chat-log { padding-block: 16px 8px; scrollbar-width: thin; scrollbar-color: var(--nb-line-strong) transparent; }
+  body.nb-in-room .nb-chat-empty { width: 100%; max-width: 296px; margin: auto; padding: 24px 8px; border: 0; background: transparent; font-size: 14px; line-height: 1.6; }
+  body.nb-in-room .nb-chat-empty-icon { display: block; width: 28px; height: 28px; margin: 0 auto 16px; color: var(--nb-muted); }
+  body.nb-in-room .nb-chat-empty strong { margin-bottom: 8px; font-size: 20px; font-weight: 600; line-height: 1.3; }
+  body.nb-in-room .nb-chat-empty .btn { margin-top: 20px; padding-inline: 20px; }
+  body.nb-in-room .nb-sys { max-width: 92%; margin-block: 10px; padding: 0; background: transparent; color: var(--nb-muted); font-size: 12px; font-weight: 400; line-height: 1.5; }
+  body.nb-in-room .nb-day { margin-block: 12px; padding: 4px 10px; background: transparent; color: var(--nb-muted); font-size: 12px; }
+  body.nb-in-room .nb-m.nb-first { padding-top: 12px; }
+  body.nb-in-room .nb-m-bubble { padding: 9px 12px 10px; }
+  body.nb-in-room .nb-m-text { font-size: 16px; line-height: 1.5; }
+  body.nb-in-room .nb-m-name { margin-bottom: 3px; font-size: 13px; }
+  body.nb-in-room .nb-m-name[class*="nb-c"] { color: color-mix(in srgb, var(--nb-who) 65%, var(--nb-ink)); filter: none; }
+  body.nb-in-room .nb-m-meta { margin-top: 7px; font-size: 11px; }
+  body.nb-in-room .nb-m-foot .nb-m-meta { margin-top: 0; }
+  /* Plain sender names share a line with the time. Security badges keep
+     the full width so an edited timestamp can never clip their codes. */
+  body.nb-in-room .nb-m-name .nb-tag { max-width: 100%; white-space: normal; overflow-wrap: normal; }
+  body.nb-in-room .nb-m-bubble:has(> .nb-m-name):not(:has(> .nb-m-name .nb-tag, > .nb-m-name .nb-verified, > .nb-m-foot)) { display: grid; grid-template-columns: minmax(0, 1fr) auto; column-gap: 12px; }
+  body.nb-in-room .nb-m-bubble:has(> .nb-m-name):not(:has(> .nb-m-name .nb-tag, > .nb-m-name .nb-verified, > .nb-m-foot)) > .nb-m-name { grid-column: 1; grid-row: 1; }
+  body.nb-in-room .nb-m-bubble:has(> .nb-m-name):not(:has(> .nb-m-name .nb-tag, > .nb-m-name .nb-verified, > .nb-m-foot)) > .nb-m-text { display: contents; }
+  body.nb-in-room .nb-m-bubble:has(> .nb-m-name):not(:has(> .nb-m-name .nb-tag, > .nb-m-name .nb-verified, > .nb-m-foot)) :is(.nb-m-words, .nb-m-quote) { grid-column: 1 / -1; }
+  body.nb-in-room .nb-m-bubble:has(> .nb-m-name):not(:has(> .nb-m-name .nb-tag, > .nb-m-name .nb-verified, > .nb-m-foot)) .nb-m-meta { grid-column: 2; grid-row: 1; align-self: center; float: none; margin: 0; }
+  body.nb-in-room .nb-react { position: relative; min-width: 36px; height: 32px; padding-inline: 9px; border-radius: 16px; }
+  body.nb-in-room .nb-react::after { content: ''; position: absolute; inset: -6px 0; }
+  body.nb-in-room .nb-chat-foot { border-radius: 28px; }
+  body.nb-in-room .nb-chat-foot:focus-within { border-color: var(--nb-accent); box-shadow: none; }
+  body.nb-in-room .nb-chat-composer { gap: 8px; padding-left: 16px; }
+  body.nb-in-room .nb-chat-composer textarea { caret-color: var(--nb-accent); }
+  body.nb-in-room .nb-chat-context { padding-left: 16px; }
+  body.nb-in-room .nb-chat-context-text { padding-left: 0; border: 0; }
+  body.nb-in-room .nb-chat-status { padding: 10px 12px; border-radius: 12px; line-height: 1.5; }
+  body.nb-in-room .nb-chat-jump { width: 44px; height: 44px; box-shadow: none; }
+  body.nb-in-room .nb-room-menu { right: max(12px, env(safe-area-inset-right)); width: 232px; padding: 6px; }
+  body.nb-in-room .nb-room-menu > button { min-height: 48px; font-size: 15px; }
+  body.nb-in-room .nb-room-menu > .nb-room-menu-danger { margin-top: 4px; border-top: 1px solid var(--nb-line); border-radius: 0 0 6px 6px; }
+  body.nb-in-room .nb-dialog { top: calc(var(--nb-room-top, 0px) + var(--nb-room-height, 100dvh) - 12px); transform: translateY(-100%); margin-block: 0; padding: 20px; padding-bottom: max(20px, env(safe-area-inset-bottom)); border-radius: 20px; }
+  body.nb-in-room .nb-dialog-head { margin-bottom: 16px; }
+  body.nb-in-room .nb-dialog-head .nb-h2 { font-size: 20px; }
+  body.nb-in-room .nb-dialog-close { flex: none; width: 44px; height: 44px; }
+  body.nb-in-room .nb-dialog .nb-muted { font-size: 14px; line-height: 1.6; }
+  body.nb-in-room .nb-member-list > li { padding-block: 12px; }
+  body.nb-in-room .nb-member-list > li + li { border-top: 1px solid var(--nb-line); border-radius: 0; }
+  body.nb-in-room .nb-member-name { font-size: 15px; }
+  body.nb-in-room .nb-member-detail { line-height: 1.5; }
+  body.nb-in-room .nb-menu { width: 300px; min-width: 0; max-width: calc(100vw - 24px); }
+  body.nb-in-room .nb-menu-reacts { display: grid; grid-template-columns: repeat(6, minmax(44px, 1fr)); }
+  body.nb-in-room .nb-menu-reacts button { width: 44px; height: 44px; justify-self: center; }
+  body.nb-in-room .nb-menu-item { min-height: 44px; font-size: 15px; }
 }
 
 /* Foldable cover screens get a deliberate second metadata line, rather
    than squeezing labels or reducing their type and touch targets. */
 @media (max-width: 319.98px) {
+  body.nb-in-room .nb-menu-reacts { grid-template-columns: repeat(3, minmax(44px, 1fr)); }
   body.nb-in-room .nb-chat-sub { display: grid; grid-template-columns: minmax(0, 1fr) auto; column-gap: 12px; }
   body.nb-in-room .nb-chat-sub .nb-chip-ok { grid-column: 1; justify-self: start; }
   body.nb-in-room .nb-chat-sub .nb-chip-btn { grid-column: 2; justify-self: end; }

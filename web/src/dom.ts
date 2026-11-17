@@ -198,14 +198,15 @@ export function chip(label: string, iconName?: string, tone?: 'warn' | 'accent' 
 }
 
 /** Copies with local feedback and an actionable fallback if permission is denied. */
-export function bindCopy(button: HTMLButtonElement, value: () => string, done: string, select?: HTMLElement, selected = 'The link is selected'): void {
+export function bindCopy(button: HTMLButtonElement, value: () => string, done: string, select?: HTMLElement, selected = 'The link is selected', signal?: AbortSignal): void {
   let copying = false;
   button.addEventListener('click', async () => {
-    if (copying) return;
+    if (copying || signal?.aborted) return;
     copying = true;
     resetCopied(button);
     const copied = await copyText(value());
     copying = false;
+    if (signal?.aborted) return;
     if (copied) {
       showCopied(button);
       toast(done);
@@ -223,7 +224,7 @@ export function bindCopy(button: HTMLButtonElement, value: () => string, done: s
     } else {
       toast('Could not copy. Use Save document to save the text instead.', 'warn');
     }
-  });
+  }, signal ? { signal } : undefined);
 }
 
 /** Hides a password shown with bindReveal again, without moving the focus. */

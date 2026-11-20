@@ -111,7 +111,9 @@ jobs:
           go-version: "1.27.4"
           cache: false
       - name: Install pinned Gitsign
-        run: go install github.com/sigstore/gitsign@v0.18.0
+        run: |
+          go install github.com/sigstore/gitsign@v0.18.0
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
       - name: Create and verify the signed release tag
         env:
           GITSIGN_TOKEN_PROVIDER: github-actions

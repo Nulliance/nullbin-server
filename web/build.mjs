@@ -1,6 +1,6 @@
 // Builds the frontend into internal/assets/dist for go:embed:
 //   app.js     one ES module bundle (TypeScript + libsodium.js)
-//   app.css    one stylesheet (Bootstrap 5.3.8 CSS + Nullbin styles)
+//   app.css    one stylesheet (Bootstrap 5.3.9 CSS + Nullbin styles)
 //   index.html the page, with Subresource Integrity hashes filled in
 //
 // The output is deterministic: the same sources, lockfile and esbuild
@@ -132,7 +132,7 @@ for (const m of cssText.matchAll(/url\(\s*(['"]?)([^'")]*)/g)) {
   if (!m[2].startsWith('data:')) fail(`app.css references a non-data URL: ${m[2].slice(0, 80)}`);
 }
 if (/@import/.test(cssText)) fail('app.css still contains @import');
-if (!/Bootstrap\s+v5\.3\.8/.test(cssText) || !/Licensed under MIT/.test(cssText)) fail("Bootstrap's MIT license notice is missing from app.css");
+if (!/Bootstrap\s+v5\.3\.9/.test(cssText) || !/Licensed under MIT/.test(cssText)) fail("Bootstrap's MIT license notice is missing from app.css");
 if (/\binnerHTML\b|\bouterHTML\b|insertAdjacentHTML|document\.write/.test(jsText)) fail('app.js uses an HTML-injection API');
 if (/\beval\(|new Function\(/.test(jsText)) fail('app.js uses eval or new Function');
 

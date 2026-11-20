@@ -8,8 +8,8 @@ name: Release
 # No prebuilt binaries are published; each server builds the release from source.
 #
 # Two jobs keep privileges apart:
-#   build   - read-only; checks the tag, builds twice and computes checksums
-#   release - creates the release tag and GitHub release; runs no project code
+#   build   - read-only; checks main+CI, builds twice and computes checksums
+#   release - signs and pushes the tag, then creates the GitHub release
 #
 # Only a commit on main that already passed CI can be released. The install
 # commands look up the latest GitHub release, so servers see a new version
@@ -38,7 +38,7 @@ jobs:
     runs-on: ubuntu-24.04
     permissions:
       contents: read
-      actions: read # check the CI result for the tagged commit
+      actions: read # check the CI result for the selected commit
     outputs:
       sums: ${{ steps.sums.outputs.sums }}
     steps:
@@ -56,7 +56,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          git merge-base --is-ancestor "$GITHUB_SHA" origin/main || { echo "The tag must point to a commit on main."; exit 1; }
+          git merge-base --is-ancestor "$GITHUB_SHA" origin/main || { echo "The selected commit must be on main."; exit 1; }
           # Check each run's result here: the API's status filter can miss a
           # run that finished moments ago.
           passed=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs?head_sha=$GITHUB_SHA&event=push" -q '[.workflow_runs[] | select(.conclusion == "success")] | length')
@@ -90,7 +90,7 @@ jobs:
           { echo "sums<<END_OF_SUMS"; echo "$sums"; echo "END_OF_SUMS"; } >> "$GITHUB_OUTPUT"
 
   release:
-    name: Create the GitHub release
+    name: Sign tag and create the GitHub release
     needs: build
     runs-on: ubuntu-24.04
     permissions:

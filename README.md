@@ -449,7 +449,10 @@ Always update the server first.
 
 `update` installs only versions published on the Releases page from the
 main branch, and refuses if files in `~/nullbin` were changed or added
-(other than your settings), because they would be built in.
+(other than your settings), because they would be built in. Releases from
+v0.5.5 onward must also carry a Sigstore signature from this repository's
+Release workflow. The first update downloads a pinned Gitsign verifier once;
+older releases remain available for rollback.
 
 **To go back to an earlier release**, give its version:
 `sudo ./nullbin update v1.2.2`. Check that release's notes first; a release
@@ -677,7 +680,7 @@ For the full analysis, see the [threat model](THREAT_MODEL.md).
 
 | Component | Specification |
 |---|---|
-| Frontend | TypeScript with native browser APIs; Bootstrap 5.3.8 CSS, without Bootstrap JavaScript or a framework. Builds to static HTML, JavaScript and CSS. |
+| Frontend | TypeScript with native browser APIs; Bootstrap 5.3.9 CSS, without Bootstrap JavaScript or a framework. Builds to static HTML, JavaScript and CSS. |
 | Cryptography | `libsodium-wrappers-sumo` 0.8.4 with bundled WebAssembly, running in the browser. No CDN or outside service. |
 | Backend | Go 1.25 or later, standard library only: no third-party Go modules, database or accounts. |
 | Storage | Ciphertext and JSON metadata on local disk. One API process per data directory. Files use mode `0600`, directories `0700`. |

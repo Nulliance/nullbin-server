@@ -8,13 +8,13 @@ under their own licenses.
 Shipped in the browser bundles (internal/assets/dist, embedded in the binary)
 -----------------------------------------------------------------------------
 
-1. Bootstrap 5.3.8 (CSS only) -- bundled into app.css
+1. Bootstrap 5.3.9 (CSS only) -- bundled into app.css
    https://getbootstrap.com/  -- MIT License
    The original license header is also kept at the end of app.css.
 
    The MIT License (MIT)
 
-   Copyright (c) 2011-2025 The Bootstrap Authors
+   Copyright (c) 2011-2026 The Bootstrap Authors
 
    Permission is hereby granted, free of charge, to any person obtaining a copy
    of this software and associated documentation files (the "Software"), to deal
@@ -136,7 +136,7 @@ Container image
    data, netbase). Their copyright and license files are inside the image
    under /usr/share/doc/.
 
-8. The HTTPS proxy image (deploy layouts) contains Caddy 2.11.8
+8. The HTTPS proxy image (deploy layouts) contains Caddy 2.11.9
    (https://caddyserver.com), Apache License 2.0, copied from the official
    caddy image. The Go modules compiled into it carry their own licenses
    (mostly Apache-2.0, MIT and BSD); run "caddy build-info" in the proxy

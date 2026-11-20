@@ -62,21 +62,20 @@ README when behaviour or guarantees change.
 release from source, so a release is what reaches servers.
 
 1. Wait until CI passes on the `main` commit you want to release.
-2. Tag that commit and push the tag:
-
-   ```bash
-   git switch main && git pull
-   git tag -a v1.2.3 -m "Nullbin v1.2.3"
-   git push origin v1.2.3
-   ```
-
-3. The Release workflow refuses tags that are not on `main` or whose
-   commit has not passed CI. It then builds the tag twice, checks both
-   builds are identical, and creates the GitHub release with their
-   `SHA256SUMS`. Nothing prebuilt is published; servers build the release
-   from source. They see the new version only after that release exists.
-4. Edit the release's notes on GitHub to say what changed, especially
+2. In GitHub, open **Actions → Release → Run workflow**, select `main`, and
+   enter the next version tag (for example, `v1.2.3`). Do not create or push
+   release tags manually.
+3. The workflow checks that the selected commit is on `main` and passed CI,
+   builds it twice, checks reproducibility, then creates an annotated tag
+   signed with keyless Sigstore through GitHub Actions OIDC. It verifies the
+   signature before publishing the GitHub release and `SHA256SUMS`.
+   Nothing prebuilt is published; servers build the release from source.
+4. Edit the release notes on GitHub to say what changed, especially
    security fixes and anything an update needs beyond the usual steps.
+
+GitHub may label Sigstore-signed tags as unverified in its UI. This is
+expected; verify them with Gitsign using the repository's Release workflow
+identity. The updater performs that verification automatically.
 
 Use [semantic versions](https://semver.org): bump the patch number for
 fixes, the minor number for compatible features, and the major number for

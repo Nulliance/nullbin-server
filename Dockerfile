@@ -20,7 +20,7 @@
 ARG VERSION=dev
 
 # --- frontend bundles -------------------------------------------------------
-FROM --platform=$BUILDPLATFORM node:26.13.0-alpine@sha256:8996bb5821d62a8fd9bb27c1cb07462f3fdce6e47d640c6a881ead0b064ce216 AS web
+FROM --platform=$BUILDPLATFORM node:26.13.1-alpine@sha256:6bd9ab43c0ec0190ca7b2d193906cb8b7edf6e7f4afa43ddeccd6452710bffb5 AS web
 WORKDIR /src
 COPY package.json package-lock.json .npmrc ./
 RUN npm ci --ignore-scripts --no-audit --no-fund
@@ -75,7 +75,7 @@ COPY --from=api-build /out/nullbin /nullbin
 # --- HTTPS proxy -------------------------------------------------------------
 # Caddy is one static binary. Run it without the Alpine userland it ships in
 # (no shell, tools or package manager) and as a non-root user, like the API.
-FROM caddy:2.11.8-alpine@sha256:f6228111e5fafa1a5238258d0858e103f10599b8d1659a146e7726681a002bb9 AS caddy-dist
+FROM caddy:2.11.9-alpine@sha256:0bbb055bda6793c999bde78b1b5ce3e89f829fb031af2cf50056ea1246559fee AS caddy-dist
 RUN mkdir -m 0700 -p /state/data /state/config
 
 FROM gcr.io/distroless/static-debian13:nonroot@sha256:aafe993665bf6200db38a02c11a9351e782a84b6a45e7f33b6695638c88e3931 AS proxy

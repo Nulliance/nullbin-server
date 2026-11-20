@@ -424,6 +424,71 @@ $changes" >&2
     echo "$code"
   }
 
+  # A pinned Gitsign binary verifies post-cutover release tags. It is
+  # installed root-owned outside the checkout, so a repository change cannot
+  # replace the verifier. The checksum is pinned here, not fetched at runtime.
+  gitsign_verifier() {
+    local asset digest arch binary dir=/usr/local/lib/nullbin tmp
+    case $(uname -m) in
+      x86_64)
+        arch=amd64
+        asset=gitsign_0.18.0_linux_amd64
+        digest=2bc625472a08fea3bb6a57982c7d8b4978d1032251d305ceef3bf2ded0ca4483
+        ;;
+      aarch64|arm64)
+        arch=arm64
+        asset=gitsign_0.18.0_linux_arm64
+        digest=dec27cbc6602c62542f738312082d481254c743ff91055ecc394cf3a60be1c01
+        ;;
+      *) die "signed-release verification supports Linux x86_64 and arm64 hosts only" ;;
+    esac
+    command -v sha256sum >/dev/null || die "sha256sum is required to verify the Gitsign download"
+    install -d -o root -g root -m 0755 -- "$dir"
+    [[ ! -L $dir && $(stat -c %u -- "$dir") == 0 ]] ||
+      die "$dir must be a real root-owned directory"
+    binary="$dir/gitsign-0.18.0-linux-$arch"
+    if [[ -e $binary || -L $binary ]]; then
+      [[ -f $binary && ! -L $binary && $(stat -c %u -- "$binary") == 0 ]] ||
+        die "$binary must be a regular root-owned file"
+      printf '%s  %s\n' "$digest" "$binary" | sha256sum -c - >/dev/null ||
+        die "$binary failed its pinned SHA-256 check; remove it only after investigating"
+      echo "$binary"
+      return 0
+    fi
+    tmp=$(mktemp) || die "could not create a temporary file for Gitsign"
+    if ! curl -fsSL --proto '=https' --proto-redir '=https' --max-time 180 --max-filesize 100000000 \
+      "https://github.com/sigstore/gitsign/releases/download/v0.18.0/$asset" -o "$tmp"; then
+      rm -f -- "$tmp"
+      die "could not download the pinned Gitsign verifier from GitHub"
+    fi
+    if ! printf '%s  %s\n' "$digest" "$tmp" | sha256sum -c - >/dev/null; then
+      rm -f -- "$tmp"
+      die "the downloaded Gitsign verifier failed its pinned SHA-256 check"
+    fi
+    if ! install -o root -g root -m 0755 -- "$tmp" "$binary"; then
+      rm -f -- "$tmp"
+      die "could not install the Gitsign verifier"
+    fi
+    rm -f -- "$tmp"
+    echo "$binary"
+  }
+
+  verify_release_tag() {
+    local tag=$1 slug verifier owner_home
+    slug=$(repo_slug) || die "could not determine the GitHub repository for signature verification"
+    verifier=$(gitsign_verifier)
+    owner_home=$(getent passwd "$owner" | cut -d: -f6)
+    [[ -n $owner_home && -d $owner_home ]] || die "could not determine the checkout owner's home directory for signature verification"
+    echo "Verifying $tag was signed by $slug's Release workflow..."
+    as_owner env HOME="$owner_home" "$verifier" verify-tag \
+      --certificate-identity "https://github.com/$slug/.github/workflows/release.yml@refs/heads/main" \
+      --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+      --certificate-github-workflow-repository "$slug" \
+      --certificate-github-workflow-ref "refs/heads/main" \
+      --certificate-github-workflow-trigger "workflow_dispatch" \
+      "$tag" ||
+      die "$tag does not have a valid signature from $slug's Release workflow"
+  }
   case $cmd in
     setup)
       local domain=${1:-} cloudflare=()
@@ -525,6 +590,11 @@ $changes" >&2
           404) die "$target is not a published release. See the Releases page on GitHub." ;;
           *) die "could not confirm with GitHub that $target is a published release, so nothing was changed. Check that this server can reach api.github.com, then try again in a few minutes." ;;
         esac
+        # Releases before v0.5.5 predate signed-tag enforcement. Keep them
+        # available for rollback; every later stable release must verify.
+        if [[ $(printf '%s\n' "$target" "v0.5.5" | sort -V | head -n 1) == "v0.5.5" ]]; then
+          verify_release_tag "$target"
+        fi
       fi
       # Edited files would be overwritten, and files added to the checkout
       # would be built into Nullbin along with the release. The settings

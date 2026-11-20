@@ -16,12 +16,12 @@
     "test:browser": "node --test web/test/browser/*.test.ts"
   },
   "dependencies": {
-    "bootstrap": "5.3.8",
+    "bootstrap": "5.3.9",
     "libsodium-wrappers-sumo": "0.8.4"
   },
   "devDependencies": {
     "esbuild": "0.28.2",
-    "playwright-core": "1.65.0",
+    "playwright-core": "1.65.1",
     "typescript": "7.0.2"
   }
 }

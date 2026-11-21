@@ -75,7 +75,7 @@ COPY --from=api-build /out/nullbin /nullbin
 # --- HTTPS proxy -------------------------------------------------------------
 # Caddy is one static binary. Run it without the Alpine userland it ships in
 # (no shell, tools or package manager) and as a non-root user, like the API.
-FROM caddy:2.11.9-alpine@sha256:0bbb055bda6793c999bde78b1b5ce3e89f829fb031af2cf50056ea1246559fee AS caddy-dist
+FROM caddy:2.11.9-alpine@sha256:003a97808e781aa9f7e75cc2f43d34d461099031faf5e20faefb9f61126836f0 AS caddy-dist
 RUN mkdir -m 0700 -p /state/data /state/config
 
 FROM gcr.io/distroless/static-debian13:nonroot@sha256:aafe993665bf6200db38a02c11a9351e782a84b6a45e7f33b6695638c88e3931 AS proxy

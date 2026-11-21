@@ -142,30 +142,23 @@ jobs:
           printf '%s\n' "$SUMS" > SHA256SUMS
           # Only sha256sum lines ("<64 hex>  <file name>") are expected.
           if grep -qvE '^[0-9a-f]{64} [ *][A-Za-z0-9._-]+$' SHA256SUMS; then echo "unexpected checksum output"; exit 1; fi
+          # GitHub renders every newline in a release body as a line break,
+          # so each paragraph below must stay on one line.
           cat > notes.md <<NOTES
           ## Install or update
 
-          Nullbin is built from source on your own server; nothing prebuilt
-          is published. Follow the
-          [install and update steps](https://github.com/${GH_REPO}#start-here)
-          in the README. They pick up this release automatically.
+          Nullbin is built from source on your own server; nothing prebuilt is published. Follow the [install and update steps](https://github.com/${GH_REPO}#start-here) in the README. They pick up this release automatically.
 
           ## Checksums
 
-          Builds are reproducible: building this release from source gives
-          exactly these files. To check, run this in a checkout of \`${TAG}\`
-          (on an arm64 machine, compare with the arm64 line):
+          Builds are reproducible: building this release from source gives exactly these files. To check, run this in a checkout of \`${TAG}\` (on an arm64 machine, compare with the arm64 line):
 
           \`\`\`
           docker build --target artifacts --build-arg VERSION=${TAG} --output type=local,dest=out .
           sha256sum out/nullbin out/dist/app.js out/dist/app.css out/dist/index.html
           \`\`\`
 
-          \`app.js\`, \`app.css\` and \`index.html\` are the frontend of the
-          optional combined server. A website served on its own is built
-          with its own API and site addresses, so its hashes differ; it
-          reports them in
-          \`/version.json\`.
+          \`app.js\`, \`app.css\` and \`index.html\` are the frontend of the optional combined server. A website served on its own is built with its own API and site addresses, so its hashes differ; it reports them in \`/version.json\`.
 
           \`\`\`
           ${SUMS}

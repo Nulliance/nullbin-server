@@ -1238,10 +1238,12 @@ test('Null Chat: create, invite once, chat, reply, react, edit, unsend, remove, 
     const name = bubble.querySelector('.nb-m-name')!.getBoundingClientRect();
     const time = bubble.querySelector('.nb-m-meta')!.getBoundingClientRect();
     const words = bubble.querySelector('.nb-m-words')!.getBoundingClientRect();
-    return { nameTop: name.top, nameBottom: name.bottom, timeTop: time.top, timeBottom: time.bottom, wordsTop: words.top, height: bubble.getBoundingClientRect().height };
+    const box = bubble.getBoundingClientRect();
+    return { nameBottom: name.bottom, timeTop: time.top, timeBottom: time.bottom, timeRight: time.right, wordsTop: words.top, wordsBottom: words.bottom, bubbleBottom: box.bottom, bubbleRight: box.right, height: box.height };
   });
-  assert.ok(incomingLayout.timeTop >= incomingLayout.nameTop - 1 && incomingLayout.timeBottom <= incomingLayout.nameBottom + 1, 'incoming timestamps share the sender line');
-  assert.ok(incomingLayout.timeBottom <= incomingLayout.wordsTop + 1 && incomingLayout.height <= 70, 'short incoming messages do not leave an empty timestamp row');
+  assert.ok(incomingLayout.timeTop >= incomingLayout.nameBottom - 1 && incomingLayout.timeTop >= incomingLayout.wordsTop - 1, 'incoming timestamps sit with the text, below the sender name');
+  assert.ok(incomingLayout.timeBottom >= incomingLayout.wordsBottom - 2 && incomingLayout.timeBottom <= incomingLayout.bubbleBottom && incomingLayout.bubbleRight - incomingLayout.timeRight <= 16, 'timestamps sit in the bottom corner of the bubble, as in other messengers');
+  assert.ok(incomingLayout.height <= 70, 'short incoming messages do not leave an empty timestamp row');
   await b.page.setViewportSize({ width: 1280, height: 800 });
   // Bob replies to Ada's message, from the ⋯ button beside it; the menu
   // opens on its first item and Escape closes it.
@@ -2367,7 +2369,7 @@ test('mobile Null Chats keep the composer and controls inside the visible viewpo
     assert.ok(result.head.height <= (h.page.viewportSize()!.width < 320 ? 128 : 112), `the header stays compact at ${h.page.viewportSize()!.width}px: ${JSON.stringify(result)}`);
     assert.ok(await h.page.isHidden('body > .nb-top'), 'the chat has one header, without the global navigation bar');
     assert.ok(result.head.top <= top + 1, 'the chat header starts at the visible viewport top');
-    if (h.page.viewportSize()!.width >= 320) assert.ok(result.head.height <= 90, 'the entire mobile header fits in 90px');
+    if (h.page.viewportSize()!.width >= 320) assert.ok(result.head.height <= 98, 'the entire mobile header fits in 98px, with room above its buttons');
     assert.equal(result.encryptionVisible, true, 'encryption is labelled, not an unexplained lock');
     for (const chip of result.chips) {
       assert.equal(chip.clipped, false, 'status text is never clipped');

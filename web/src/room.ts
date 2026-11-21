@@ -1805,11 +1805,15 @@ function openChat(sodium: Sodium, id: string, session: Session): void {
     }
     menu.hidden = false;
     opener?.setAttribute('aria-expanded', 'true');
-    // Next to the pointer or the button, inside the window.
+    // Next to the pointer or the button, inside the visible screen: on a
+    // phone the keyboard can cover the bottom of the window.
     const w = menu.offsetWidth;
     const h = menu.offsetHeight;
+    const vv = window.visualViewport;
+    const minTop = (vv?.offsetTop ?? 0) + 8;
+    const maxBottom = (vv ? vv.offsetTop + vv.height : window.innerHeight) - 8;
     const left = Math.max(8, Math.min(opener && own ? x - w : x, window.innerWidth - w - 8));
-    const top = y + h + 8 > window.innerHeight ? Math.max(8, y - h) : y;
+    const top = Math.max(minTop, Math.min(y + h > maxBottom ? y - h : y, maxBottom - h));
     menu.style.left = `${left}px`;
     menu.style.top = `${top}px`;
     document.addEventListener('pointerdown', outside, true);
@@ -1852,9 +1856,12 @@ function openChat(sodium: Sodium, id: string, session: Session): void {
   // A long press on touch screens (iPhones send no contextmenu event).
   let press = 0;
   let pressStart: { x: number; y: number } | null = null;
+  let pressing: Element | null = null; // the bubble shrinks a little while held
   const cancelPress = () => {
     clearTimeout(press);
     press = 0;
+    pressing?.classList.remove('nb-pressing');
+    pressing = null;
   };
   listening.signal.addEventListener('abort', cancelPress, { once: true });
   log.addEventListener('pointerdown', (ev) => {
@@ -1865,8 +1872,12 @@ function openChat(sodium: Sodium, id: string, session: Session): void {
     if (!m || m.deleted) return;
     pressStart = { x: ev.clientX, y: ev.clientY };
     cancelPress();
+    pressing = target.closest('.nb-m');
+    pressing?.classList.add('nb-pressing');
     press = window.setTimeout(() => {
       press = 0;
+      pressing?.classList.remove('nb-pressing');
+      pressing = null;
       pressed = Date.now();
       window.getSelection()?.removeAllRanges();
       openMenu(m, pressStart!.x, pressStart!.y, null);
@@ -2262,6 +2273,8 @@ function openChat(sodium: Sodium, id: string, session: Session): void {
     updateSend();
     grow();
   }, { signal: listening.signal });
+  // The on-screen keyboard's Return key says what it does.
+  text.enterKeyHint = desktop ? 'send' : 'enter';
   let mode: { kind: 'reply' | 'edit'; target: Message } | null = null;
   text.maxLength = MAX_MESSAGE_LENGTH;
   const startContext = (kind: 'reply' | 'edit', target: Message) => {
@@ -2290,7 +2303,10 @@ function openChat(sodium: Sodium, id: string, session: Session): void {
     text.focus({ preventScroll: true });
   }, { signal: listening.signal });
   text.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
+    // As in other messengers: on a computer Enter sends and Shift+Enter
+    // starts a new line; on a phone or tablet Return starts a new line and
+    // the Send button sends.
+    if (e.key === 'Enter' && !e.shiftKey && !e.isComposing && desktop) {
       e.preventDefault();
       composer.requestSubmit();
     } else if (e.key === 'Escape' && mode) {
@@ -2305,6 +2321,46 @@ function openChat(sodium: Sodium, id: string, session: Session): void {
       }
     }
   }, { signal: listening.signal });
+  // Tapping Send keeps the keyboard up: the box keeps focus.
+  send.addEventListener('mousedown', (e) => {
+    if (document.activeElement === text) e.preventDefault();
+  }, { signal: listening.signal });
+  /**
+   * A new message shows at once, as "sending", while it is sealed and
+   * posted. It is only a picture of the box's text (put in with
+   * textContent): the message itself is drawn when it is sent, and this
+   * goes. Screen readers hear the message once, when it is sent.
+   */
+  const showSending = (value: string, target: Message | null) => {
+    const li = make('li', 'nb-pend');
+    li.setAttribute('aria-hidden', 'true');
+    if (!run || run.from !== session.slot || Date.now() - run.time >= GROUP_MS) li.classList.add('nb-first');
+    const bubble = make('div', 'nb-m-bubble');
+    if (target) {
+      const quote = make('span', 'nb-m-quote');
+      const who = make('strong', '');
+      who.append(nameNode(target.from));
+      const quoted = make('span', '', target.text);
+      quoted.dir = 'auto';
+      quote.append(who, quoted);
+      bubble.append(quote);
+    }
+    const body = make('p', 'nb-m-text');
+    body.dir = 'auto';
+    const meta = make('span', 'nb-m-meta');
+    meta.append(icon('clock'));
+    body.append(make('span', 'nb-pend-words', value), meta);
+    bubble.append(body);
+    li.append(bubble);
+    empty.hidden = true;
+    add(li, true, false);
+    return li;
+  };
+  const dropSending = (li: HTMLLIElement) => {
+    li.replaceChildren();
+    li.remove();
+    empty.hidden = false; // gone already if a message landed
+  };
   composer.addEventListener('submit', async (ev) => {
     ev.preventDefault();
     // Control and direction characters, stacks of marks and long runs of
@@ -2326,6 +2382,16 @@ function openChat(sodium: Sodium, id: string, session: Session): void {
     sending = true;
     updateSend();
     composer.setAttribute('aria-busy', 'true');
+    // A new message leaves the box at once; it comes back if not sent.
+    const draft = text.value;
+    let sendingLi: HTMLLIElement | null = null;
+    if (current?.kind !== 'edit') {
+      sendingLi = showSending(value, current?.kind === 'reply' ? current.target : null);
+      text.value = '';
+      mode = null;
+      show(context, false);
+      grow();
+    }
     try {
       if (current?.kind === 'edit') {
         if (value !== current.target.text) await sendChat({ t: 'edit', id: newRecordId(sodium), time: Date.now(), target: current.target.id, text: value });
@@ -2334,14 +2400,26 @@ function openChat(sodium: Sodium, id: string, session: Session): void {
         // see whether they read the same.
         await sendChat({ t: 'msg', id: newRecordId(sodium), time: Date.now(), text: value, reply: current?.kind === 'reply' ? { id: current.target.id, author: current.target.from } : null, seen: state.acks() });
       }
-      if (ended) return;
+      if (ended || sendingLi) return; // a new message's box may hold the next one by now
       text.value = '';
       mode = null;
       show(context, false);
       grow();
     } catch (e) {
+      if (sendingLi && !ended) {
+        // Back in the box: alone if it is still empty, else before
+        // whatever was typed since.
+        if (text.value.trim() === '' && !mode) {
+          text.value = draft;
+          if (current?.kind === 'reply' && !current.target.deleted) startContext('reply', current.target);
+        } else {
+          text.value = `${draft}\n${text.value}`;
+        }
+        grow();
+      }
       failed(e, current?.kind === 'edit' ? 'Your edit was not saved.' : 'Your message was not sent; it’s still in the box.');
     } finally {
+      if (sendingLi) dropSending(sendingLi);
       sending = false;
       updateSend();
       composer.removeAttribute('aria-busy');

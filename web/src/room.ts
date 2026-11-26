@@ -33,6 +33,7 @@ import { cleanName } from './comments.ts';
 import { announce, bindCopy, bindReveal, busy, copyText, el, formatBytes, formatCountdown, nextFrame, reveal, show, showProblem, showSection, swap, toast } from './dom.ts';
 import { generatePassword, MIN_PASSWORD_LENGTH } from './create.ts';
 import { encodeInviteFragment, parseInviteFragment } from './link.ts';
+import { PasteError } from './format.ts';
 import { qrSvg } from './share.ts';
 import { deleteUploadedRoomFiles, expiryChoices, expiryLabel, loadRoomImage, looksLikeImage, saveRoomFile, uploadRoomFile } from './room-files.ts';
 import {
@@ -237,6 +238,22 @@ function settingsOk(v: unknown): boolean {
 
 /** A chat gives out each of its 19 places once: removed people and revoked or expired invites keep theirs. */
 const NO_PLACES = 'This chat has given out all 19 places it ever can: removed people and revoked or expired invites keep theirs, so nobody new can join. Start a new chat to add people.';
+
+/** What went wrong with a chat file, in a chat's words (paste errors speak of pastes and links). */
+function chatFileError(e: unknown, fallback: string): string {
+  if (e instanceof PasteError) {
+    switch (e.code) {
+      case 'wrong-key':
+      case 'tampered':
+        return 'This file can’t be decrypted: it was changed or damaged on the server.';
+      case 'truncated':
+        return 'This file is incomplete: its data ended early.';
+      case 'network':
+        return 'The file stopped downloading. Check your connection and try again.';
+    }
+  }
+  return e instanceof Error && e.message ? e.message : fallback;
+}
 
 function roomError(e: unknown, fallback: string): string {
   if (e instanceof ApiError) {
@@ -770,6 +787,12 @@ function joinFlow(sodium: Sodium, id: string, roomKey: Uint8Array, inviteToken: 
 
 const VISIBLE_POLL_MS = 2500;
 const HIDDEN_POLL_MS = 15000;
+/**
+ * After a long-poll wakes with records, the next starts no sooner than this,
+ * so a busy room costs each tab at most about two reads a second however
+ * fast others post (room reads are limited to 10 a second per network).
+ */
+const WAKE_GAP_MS = 500;
 /** Messages from one person within this long form one run of bubbles. */
 const GROUP_MS = 5 * 60_000;
 /** A press this long on a touch screen opens a message's menu. */
@@ -950,7 +973,7 @@ function openChat(sodium: Sodium, id: string, session: Session): void {
   const resumePolling = () => {
     if (ended || !pollingPaused) return;
     pollingPaused = false;
-    schedule(false);
+    schedule();
   };
   let synced = 0; // when the last complete poll finished, Date.now()
   let rejoined = 0;
@@ -959,6 +982,8 @@ function openChat(sodium: Sodium, id: string, session: Session): void {
   let lastChime = 0;
   let pendingFile: File | null = null;
   const activePreviewUrls = new Set<string>();
+  /** Decrypted files handed to the browser as downloads; freed when the chat ends. */
+  const savedDownloads = new Set<() => void>();
   const uploadedFiles = new Map<string, { id: string; deleteToken: string }>();
   /** Slots this tab has admitted and is waiting to see the admit for. */
   const admitting = new Set<number>();
@@ -1003,6 +1028,8 @@ function openChat(sodium: Sodium, id: string, session: Session): void {
     void audioCtx?.close().catch(() => {});
     audioCtx = null;
     for (const u of activePreviewUrls) URL.revokeObjectURL(u);
+    for (const free of savedDownloads) free();
+    savedDownloads.clear();
     activePreviewUrls.clear();
     uploadedFiles.clear();
     pendingFile = null;
@@ -1746,6 +1773,10 @@ function openChat(sodium: Sodium, id: string, session: Session): void {
         try {
           await saveRoomFile(sodium, f, () => ended || m.deleted, (frac) => {
             if (frac > 0 && frac < 1) note.textContent = `Decrypting ${Math.round(frac * 100)}%…`, note.hidden = false;
+          }, (free) => {
+            if (ended) return free();
+            savedDownloads.add(free);
+            setTimeout(() => savedDownloads.delete(free), 60_000);
           });
           note.hidden = true;
         } catch (e) {
@@ -1753,7 +1784,7 @@ function openChat(sodium: Sodium, id: string, session: Session): void {
           note.classList.add('nb-tone-danger');
           note.textContent = e instanceof ApiError && e.status === 404
             ? 'This file expired or was deleted.'
-            : e instanceof Error && e.message ? e.message : 'The file could not be downloaded.';
+            : chatFileError(e, 'The file could not be downloaded.');
           note.hidden = false;
         } finally {
           done();
@@ -1826,7 +1857,7 @@ function openChat(sodium: Sodium, id: string, session: Session): void {
             note.classList.add('nb-tone-danger');
             note.textContent = e instanceof ApiError && e.status === 404
               ? 'This file expired or was deleted.'
-              : e instanceof Error && e.message ? e.message : 'The image could not be shown.';
+              : chatFileError(e, 'The image could not be shown.');
             note.hidden = false;
           } finally {
             done();
@@ -2244,9 +2275,9 @@ function openChat(sodium: Sodium, id: string, session: Session): void {
 
   // --- Fetching (long-polling when visible, gentle interval when hidden) ---
   let soon = false; // check again shortly, to show what we just posted
-  const schedule = (quick = false) => {
+  const schedule = (quickMs = 0) => {
     clearTimeout(timer);
-    const wait = quick ? 50 : soon ? 400 : document.hidden ? HIDDEN_POLL_MS : VISIBLE_POLL_MS;
+    const wait = quickMs > 0 ? quickMs : soon ? 400 : document.hidden ? HIDDEN_POLL_MS : VISIBLE_POLL_MS;
     soon = false;
     if (!ended && !pollingPaused) timer = window.setTimeout(() => void poll(), wait);
   };
@@ -2261,7 +2292,8 @@ function openChat(sodium: Sodium, id: string, session: Session): void {
   }
   async function fetchAll(): Promise<void> {
     let delay: number | null = null;
-    let quickNext = false;
+    /** When the next long-poll starts, in ms (0: no long-poll follows). */
+    let quickNext = 0;
     // Old receiving keys go before anything is read, also after the tab
     // was asleep, and their deletion is saved at once, even if the fetch
     // then fails.
@@ -2286,10 +2318,12 @@ function openChat(sodium: Sodium, id: string, session: Session): void {
         }
         if (expired() || pollingPaused) return;
         const elapsed = Date.now() - reqStart;
-        // If we long-polled and either received records or waited normally,
-        // start the next long-poll right away. If the server returned 0 records
+        // After a long-poll that brought records, wait WAKE_GAP_MS before the
+        // next one, so a burst arrives as one batch; after one that waited its
+        // full time, start the next at once. If the server returned 0 records
         // immediately (e.g. wait pool saturated), fall back to VISIBLE_POLL_MS.
-        if (waitSec > 0 && (batch.records.length > 0 || elapsed >= 1000)) quickNext = true;
+        if (waitSec > 0 && batch.records.length > 0) quickNext = WAKE_GAP_MS;
+        else if (waitSec > 0 && elapsed >= 1000) quickNext = 50;
         // The countdown is the server's; it never runs past the end the
         // creator signed. Only a gap bigger than clocks usually have is
         // worth a warning.
@@ -2317,7 +2351,10 @@ function openChat(sodium: Sodium, id: string, session: Session): void {
         if (state.conflict || state.cloned) break;
         // Chains stepped past messages read are saved as we go.
         persist();
-        if (batch.records.length === 0 || batch.next >= 1000) break;
+        // A complete batch is as good as an empty read after it: stop here,
+        // and the next long-poll returns at once if more has arrived. (Reading
+        // again until empty doubled the requests of every wake.)
+        if (batch.records.length === 0 || batch.complete || batch.next >= 1000) break;
       }
       // Any delivery opened with our current key: replace that key soon.
       if (state.deliveredMax >= currentBox()) session.boxRotate = true;
@@ -2422,7 +2459,7 @@ function openChat(sodium: Sodium, id: string, session: Session): void {
       hiddenAbort = false;
       if (ended || pollingPaused) return;
       if (wasHiddenAbort && !(e instanceof ApiError)) {
-        schedule(false);
+        schedule();
         return;
       }
       if (e instanceof ApiError && e.status === 404) {
@@ -2446,7 +2483,7 @@ function openChat(sodium: Sodium, id: string, session: Session): void {
       clearTimeout(timer);
       timer = window.setTimeout(() => void poll(), delay);
     } else {
-      schedule(quickNext && !document.hidden);
+      schedule(document.hidden ? 0 : quickNext);
     }
   }
   const clearUnread = () => {
@@ -2620,6 +2657,13 @@ function openChat(sodium: Sodium, id: string, session: Session): void {
     const f = e.dataTransfer.files[0];
     if (f) setAttachment(f);
   }, { signal: listening.signal });
+  // A file dropped anywhere else would make the browser open it in this tab,
+  // leaving the page and ending the chat here: ignore it instead.
+  for (const type of ['dragover', 'drop'] as const) {
+    document.addEventListener(type, (e) => {
+      if (e.dataTransfer?.types.includes('Files')) e.preventDefault();
+    }, { signal: listening.signal });
+  }
   function unlockComposer(): void {
     if (ended) return;
     show(waiting, false);

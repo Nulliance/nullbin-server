@@ -156,7 +156,7 @@ func New(cfg Config) *Server {
 		downloads:     newClientLimiter(1.0/3, 20),
 		roomCreates:   newClientLimiter(1.0/6, 10), // 10 rooms per minute
 		roomWrites:    newClientLimiter(2, 30),     // messages, invites, joins and owner actions
-		roomReads:     newClientLimiter(10, 100),   // polling: a room of 20 behind one network polls every 2.5 s each
+		roomReads:     newClientLimiter(10, 100),   // a tab long-polls, and reads at most about twice a second in a busy room
 		downloadBytes: newLimiter(clientBytesPerSecond, clientBytesPerSecond, limiterMaxEntries),
 		globalBytes:   newLimiter(globalBytesPerSecond, globalBytesPerSecond, 1),
 		chunkSlots:    newSlotPool(chunkSlotsTotal, chunkSlotsPerClient, chunkSlotsPerSite),

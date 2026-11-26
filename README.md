@@ -1191,7 +1191,13 @@ the room still exists):
 - `GET /{id}/records?after=n` (with `Nullbin-Member-Token`; `n` up to 1000)
   returns up to 200 records, and 64 KiB, after the first `n`:
   `{"next": m, "expires_in": seconds, "records": [{"from": slot, "data": "<base64>"}]}`,
-  streamed under the download bandwidth limits.
+  streamed under the download bandwidth limits. With `wait=s` (`0` to `20`,
+  digits only, no leading zeros; otherwise `400`), a member that has read
+  everything is answered when a record arrives, the member is removed or
+  the room ends, or after `s` seconds, whichever is first. Waiting readers
+  use their own pool (512 in all, 16 per client network, 32 per IPv6 /48),
+  so they never take download slots; when it is full, the read is answered
+  at once. Wrong tokens, unknown rooms and bad indices never wait.
 - `GET /{id}/members` (owner) returns each used slot's state
   (`invited`, `expired`, `pending`, `joined`, `removed`).
 - `POST /{id}/members/{n}/remove` (owner) closes slot `n` (not 0) for good:

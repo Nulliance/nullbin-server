@@ -186,6 +186,29 @@ Text must pass strict rules (no control, format, direction-changing or
 default-ignorable characters, joiners only where they do a visible job,
 at most 2,000 UTF-16 units, something visible).
 
+A **file** is a standard encrypted paste on the same server, and `file`
+carries everything needed to open it; readers refuse the whole message
+unless all of these hold:
+
+- exactly the keys `id`, `key`, `name` and `size`;
+- `id` is the paste ID, 32 lowercase hex digits;
+- `key` is the paste's 32-byte key, 43 characters of unpadded base64url;
+- `name` is 1 to 255 UTF-16 units, already in the cleaned form (no path
+  separators, control, format, direction-changing, default-ignorable,
+  private-use or lone-surrogate characters, no leading or trailing dots
+  or spaces, no Windows device name), so cleaning it again changes nothing;
+- `size` is a whole number of bytes from 0 to 2 GiB.
+
+`text` may be empty only when `file` is present. Edits change only the
+text: a message's file cannot be replaced. A reader never fetches a file on
+its own; it opens the paste only when the user asks to save or preview it,
+refuses password-protected pastes, and refuses the file unless the paste's
+authenticated name (cleaned the same way) and size equal `name` and `size`.
+Previews accept only PNG, JPEG, GIF and WebP, recognised by their bytes,
+never SVG. The paste's lifetime is chosen by the sender to end before the
+chat does. Nothing the server stores ties a paste to its chat, though the
+timing of uploads and downloads can hint at it.
+
 A **receipt** is `{slot, gen, index, h}`: for each of the 20 places, the
 newest place the sender read there and `h = b64u(H(16, JSON of that record))`,
 or `gen = 0` and a fixed `h` for nothing read. Every message carries all 20,

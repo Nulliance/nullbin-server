@@ -3059,3 +3059,57 @@ test('Null Chat: attaching is off in a chat too short for any file lifetime', { 
   assert.equal(a.sent.some((s) => s.path.startsWith('/api/v1/pastes')), false, 'no paste was created');
   await a.check();
 });
+
+test('Null Chat: a saved file is freed when the chat ends, and stray file drops never leave the page', { timeout: 60_000 }, async (t) => {
+  await restartAPI();
+  t.after(() => restartAPI());
+  const a = await open({ noFileSystemAccess: true }); // the buffered download, not the save dialog
+  t.after(() => a.context.close());
+  await a.page.addInitScript(() => {
+    const w = window as unknown as { __made: string[]; __revoked: string[] };
+    w.__made = [];
+    w.__revoked = [];
+    const create = URL.createObjectURL.bind(URL);
+    const revoke = URL.revokeObjectURL.bind(URL);
+    URL.createObjectURL = (o: Blob | MediaSource) => { const u = create(o); w.__made.push(u); return u; };
+    URL.revokeObjectURL = (u: string) => { w.__revoked.push(u); revoke(u); };
+  });
+  await goto(a, `${origin}/chat`);
+  await a.page.fill('#room-you', 'Ada');
+  await a.page.click('#room-create-submit');
+  await a.page.waitForSelector('#room-chat:not([hidden])');
+  await a.page.waitForFunction(() => !(document.getElementById('room-text') as HTMLTextAreaElement).disabled);
+
+  // A file dropped outside the chat area is ignored instead of opened.
+  const prevented = await a.page.evaluate(() => {
+    const dt = new DataTransfer();
+    dt.items.add(new File(['x'], 'stray.txt', { type: 'text/plain' }));
+    const target = document.querySelector('header') ?? document.body;
+    const over = new DragEvent('dragover', { dataTransfer: dt, bubbles: true, cancelable: true });
+    const drop = new DragEvent('drop', { dataTransfer: dt, bubbles: true, cancelable: true });
+    target.dispatchEvent(over);
+    target.dispatchEvent(drop);
+    return over.defaultPrevented && drop.defaultPrevented;
+  });
+  assert.equal(prevented, true, 'stray drops are cancelled, so the browser does not open the file');
+
+  await a.page.setInputFiles('#room-file', { name: 'kept.txt', mimeType: 'text/plain', buffer: Buffer.from('decrypted secret') });
+  await a.page.waitForSelector('#room-attach-bar:not([hidden])');
+  await a.page.click('#room-send');
+  const card = a.page.locator('#room-messages .nb-m-file');
+  await card.waitFor({ timeout: 30_000 });
+  const before = await a.page.evaluate(() => (window as unknown as { __made: string[] }).__made.length);
+  const [download] = await Promise.all([a.page.waitForEvent('download'), card.getByRole('button', { name: 'Save file' }).click()]);
+  assert.equal(download.suggestedFilename(), 'kept.txt');
+  const url = await a.page.evaluate((n) => (window as unknown as { __made: string[] }).__made[n], before);
+  assert.ok(url?.startsWith('blob:'), 'the decrypted file went to the browser as a blob URL');
+  assert.equal(await a.page.evaluate((u) => (window as unknown as { __revoked: string[] }).__revoked.includes(u), url), false, 'still available while the browser saves it');
+
+  // Ending the chat frees it at once, not a minute later.
+  await a.page.click('#room-destroy');
+  await a.page.waitForSelector('#room-destroy-dialog[open]');
+  await a.page.click('#room-destroy-confirm');
+  await a.page.waitForSelector('#problem:not([hidden])');
+  assert.equal(await a.page.evaluate((u) => (window as unknown as { __revoked: string[] }).__revoked.includes(u), url), true, 'the decrypted copy is freed when the chat ends');
+  await a.check();
+});

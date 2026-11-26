@@ -152,6 +152,8 @@ export async function saveRoomFile(
   file: ChatFile,
   isCancelled: () => boolean,
   onProgress?: (fraction: number) => void,
+  /** Receives a function that frees a buffered download's decrypted copy (the browser keeps it a minute otherwise). */
+  onBuffered?: (free: () => void) => void,
 ): Promise<void> {
   const key = decodePasteKey(sodium, file.key);
   let reader: ByteReader | null = null;
@@ -211,7 +213,7 @@ export async function saveRoomFile(
         chunks.push(piece as Uint8Array<ArrayBuffer>);
       }
       if (isCancelled()) throw new PasteError('cancelled', 'Cancelled.');
-      downloadBlob(new Blob(chunks, { type: 'application/octet-stream' }), authName);
+      onBuffered?.(downloadBlob(new Blob(chunks, { type: 'application/octet-stream' }), authName));
     }
   } catch (e) {
     await writable?.abort().catch(() => {});

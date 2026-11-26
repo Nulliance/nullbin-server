@@ -505,7 +505,17 @@ export interface RoomRecords {
   records: { from: number; data: Uint8Array }[];
   next: number;
   expiresIn: number;
+  /**
+   * The batch holds every record the server had: it is under the record
+   * limit, and so far under the byte limit that no further record could
+   * have been left out. Reading again at once would return nothing. (A
+   * server can always withhold records; this lets it do nothing new.)
+   */
+  complete: boolean;
 }
+
+/** Records one read returns at most (internal/rooms MaxReadBatch). */
+const ROOM_READ_BATCH = 200;
 
 /** Maximum long-poll wait in seconds (must match server maxRoomWaitSeconds). */
 export const MAX_ROOM_WAIT = 20;
@@ -547,7 +557,7 @@ export async function fetchRecords(id: string, memberToken: string, after: numbe
   if (resp.status !== 200) throw await errorFrom(resp, ROOM_JSON_BYTES);
   const v = await roomJSON(resp);
   const { records, next, expires_in: left } = v;
-  if (!Array.isArray(records) || records.length > 200 || typeof next !== 'number' || !Number.isSafeInteger(next) || next > ROOM_RECORDS || next !== after + records.length ||
+  if (!Array.isArray(records) || records.length > ROOM_READ_BATCH || typeof next !== 'number' || !Number.isSafeInteger(next) || next > ROOM_RECORDS || next !== after + records.length ||
     typeof left !== 'number' || !Number.isSafeInteger(left) || left < 0 || left > 8 * 24 * 3600) {
     throw new Error('The server sent an invalid response.');
   }
@@ -568,7 +578,10 @@ export async function fetchRecords(id: string, memberToken: string, after: numbe
     if (bytes.byteLength < 41 || bytes.byteLength > ROOM_RECORD_BYTES || totalBytes > ROOM_READ_BYTES) throw new Error('The server sent an invalid response.');
     out.push({ from, data: bytes });
   }
-  return { records: out, next, expiresIn: left };
+  // The server adds records while they fit in ROOM_READ_BYTES, so a batch
+  // with room for one more of the largest is not cut short.
+  const complete = out.length < ROOM_READ_BATCH && totalBytes + ROOM_RECORD_BYTES <= ROOM_READ_BYTES;
+  return { records: out, next, expiresIn: left, complete };
 }
 
 export type SlotState = 'invited' | 'pending' | 'joined' | 'removed' | 'expired';

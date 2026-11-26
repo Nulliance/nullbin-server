@@ -22,6 +22,28 @@ test('room reads enforce total record and per-batch byte limits', async () => {
   }
 });
 
+test('a room read is complete only when the server could not have left records out', async () => {
+  const original = globalThis.fetch;
+  const read = async (records: readonly { from: number; data: string }[]) => {
+    globalThis.fetch = async () => new Response(JSON.stringify({ records, next: records.length, expires_in: 300 }));
+    return (await fetchRecords(room, token, 0)).complete;
+  };
+  try {
+    assert.equal(await read([]), true);
+    assert.equal(await read([record(41)]), true);
+    // 48 KiB leaves room for one more record of the largest size (16 KiB).
+    assert.equal(await read(Array.from({ length: 3 }, () => record(16384))), true);
+    // Past that, the server may have stopped for bytes: read again.
+    assert.equal(await read([...Array.from({ length: 3 }, () => record(16384)), record(41)]), false);
+    assert.equal(await read(Array.from({ length: 4 }, () => record(16384))), false);
+    // A full batch of 200 may have more behind it.
+    assert.equal(await read(Array.from({ length: 199 }, () => record(41))), true);
+    assert.equal(await read(Array.from({ length: 200 }, () => record(41))), false);
+  } finally {
+    globalThis.fetch = original;
+  }
+});
+
 test('room reads cancel oversized streamed JSON before parsing it', async () => {
   const original = globalThis.fetch;
   let cancelled = false;

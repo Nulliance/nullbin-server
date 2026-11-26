@@ -49,10 +49,11 @@
 // control records, and "nullbin room message v1\0<room>\0<slot>\0<generation>
 // \0<index>\0" || JSON for messages.
 
-import { FLAG_TAGS, HIDDEN, joinerOk } from './hidden.ts';
+import { FLAG_TAGS, HIDDEN, hasHiddenChars, joinerOk } from './hidden.ts';
 import type { Sodium } from './sodium.ts';
 import { paddedLength } from './format.ts';
 import { cleanName } from './comments.ts';
+import { cleanFileName } from './zip.ts';
 
 export const ROOM_KEY_BYTES = 32;
 export const CONTROL_VERSION = 1;
@@ -141,13 +142,21 @@ export interface Ack {
   h: string;
 }
 
+/** An encrypted file shared in chat via a Paste-bridge link. */
+export interface ChatFile {
+  id: string;
+  key: string;
+  name: string;
+  size: number;
+}
+
 /**
  * Chat records, encrypted with one-time message keys: a message (maybe a
- * reply, always with receipts), a reaction added or taken back, an edit or
- * an unsend of one's own message.
+ * reply, maybe with an encrypted file, always with receipts), a reaction
+ * added or taken back, an edit or an unsend of one's own message.
  */
 export type MessageRecord =
-  | { t: 'msg'; id: string; time: number; text: string; reply: Ref | null; seen: Ack[] }
+  | { t: 'msg'; id: string; time: number; text: string; reply: Ref | null; seen: Ack[]; file?: ChatFile }
   | { t: 'react'; id: string; time: number; target: string; author: number; emoji: string; on: boolean }
   | { t: 'edit'; id: string; time: number; target: string; text: string }
   | { t: 'unsend'; id: string; time: number; target: string };
@@ -903,12 +912,45 @@ const acksOk = (a: unknown) => {
 /** The hash in a receipt for a place we read nothing from. */
 export const NO_ACK = 'A'.repeat(22);
 
+const MAX_CHAT_FILE_SIZE = 2 * 1024 * 1024 * 1024; // HardMaxSize (2 GiB)
+
+/**
+ * Sanitizes a filename for Null Chat file cards so it always satisfies
+ * cleanFileName, hasHiddenChars (including PUA/surrogates), and the 255 UTF-16
+ * code-unit cap.
+ */
+export function cleanChatFileName(name: string): string {
+  // Strip Private Use Area and lone surrogates that hasHiddenChars flags,
+  // then apply cleanFileName and cap at 255 UTF-16 code units without
+  // splitting a surrogate pair.
+  const stripped = name.replace(/[\p{Co}\p{Cs}]/gu, '_');
+  let cleaned = cleanFileName(stripped, 'file');
+  if (cleaned.length > 255) {
+    let end = 255;
+    if (/[\uD800-\uDBFF]/.test(cleaned[end - 1]!)) end--;
+    cleaned = cleanFileName(cleaned.slice(0, end), 'file');
+  }
+  return !hasHiddenChars(cleaned) && cleaned.length > 0 && cleaned.length <= 255 ? cleaned : 'file';
+}
+
+const fileOk = (f: unknown): f is ChatFile =>
+  plainObject(f) && Object.keys(f).sort().join(',') === 'id,key,name,size' &&
+  idOk(f['id']) && typeof f['key'] === 'string' && B64URL_32.test(f['key']) &&
+  typeof f['name'] === 'string' && f['name'].length > 0 && f['name'].length <= 255 &&
+  cleanChatFileName(f['name']) === f['name'] && !hasHiddenChars(f['name']) &&
+  typeof f['size'] === 'number' && Number.isSafeInteger(f['size']) && f['size'] >= 0 && f['size'] <= MAX_CHAT_FILE_SIZE;
+
 /** The exact schema of every chat record. */
 export function validMessage(v: unknown): v is MessageRecord {
   if (!plainObject(v)) return false;
   switch (v['t']) {
-    case 'msg':
-      return common(v, 'id,reply,seen,t,text,time') && textOk(v['text']) && (v['reply'] === null || refOk(v['reply'])) && acksOk(v['seen']);
+    case 'msg': {
+      const hasFile = 'file' in v;
+      if (!common(v, hasFile ? 'file,id,reply,seen,t,text,time' : 'id,reply,seen,t,text,time')) return false;
+      if (hasFile && !fileOk(v['file'])) return false;
+      const textValid = hasFile && v['text'] === '' ? true : textOk(v['text']);
+      return textValid && (v['reply'] === null || refOk(v['reply'])) && acksOk(v['seen']);
+    }
     case 'react':
       return common(v, 'author,emoji,id,on,t,target,time') && idOk(v['target']) && validSlot(v['author'], 0) &&
         typeof v['emoji'] === 'string' && REACTIONS.includes(v['emoji']) && typeof v['on'] === 'boolean';

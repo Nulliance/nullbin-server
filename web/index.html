@@ -60,6 +60,8 @@
   <symbol id="i-menu" viewBox="0 0 24 24"><path d="M4 7h16M4 12h16M4 17h16"/></symbol>
   <symbol id="i-back" viewBox="0 0 24 24"><path d="m12 5-7 7 7 7M5 12h15"/></symbol>
   <symbol id="i-qr" viewBox="0 0 24 24"><path d="M3 3h6v6H3zM15 3h6v6h-6zM3 15h6v6H3zM15 15h3v3h3v3h-6zM12 3v9H3M12 15v6M15 12h6M21 12v3"/></symbol>
+  <symbol id="i-bell" viewBox="0 0 24 24"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M10.3 21a2 2 0 0 0 3.4 0"/></symbol>
+  <symbol id="i-bell-off" viewBox="0 0 24 24"><path d="m3 3 18 18"/><path d="M13.7 21a2 2 0 0 1-3.4 0"/><path d="M8.6 4.6A6 6 0 0 1 18 8c0 2.7.5 4.8 1.1 6.3M6.3 6.3A6 6 0 0 0 6 8c0 7-3 9-3 9h14"/></symbol>
 </svg>
 
 <a class="visually-hidden-focusable nb-skip" href="#main">Skip to content</a>
@@ -124,7 +126,7 @@
           <li><span class="nb-opt-icon"><svg class="nb-i" aria-hidden="true"><use href="#i-refresh"/></svg></span><span><strong>Forward secrecy.</strong> Every message has its own key, deleted once it’s used.</span></li>
           <li><span class="nb-opt-icon"><svg class="nb-i" aria-hidden="true"><use href="#i-check"/></svg></span><span><strong>Safety codes.</strong> Compare codes with each other to be sure no one is listening in, the server included.</span></li>
           <li><span class="nb-opt-icon"><svg class="nb-i" aria-hidden="true"><use href="#i-user-plus"/></svg></span><span><strong>Invite only.</strong> Each invite link lets one person in, works for as long as you choose (5 minutes to an hour), and can be revoked.</span></li>
-          <li><span class="nb-opt-icon"><svg class="nb-i" aria-hidden="true"><use href="#i-flame"/></svg></span><span><strong>Never on disk.</strong> Chats live only in the server’s memory, so a restart also ends them.</span></li>
+          <li><span class="nb-opt-icon"><svg class="nb-i" aria-hidden="true"><use href="#i-flame"/></svg></span><span><strong>Messages never on disk.</strong> Messages live only in the server’s memory, so a restart also ends them. Attached files are stored encrypted on the server’s disk as pastes until they expire (up to 1 week).</span></li>
           <li><span class="nb-opt-icon"><svg class="nb-i" aria-hidden="true"><use href="#i-key"/></svg></span><span><strong>Tied to this tab.</strong> If you close it, you’ll need a new invite to get back in.</span></li>
         </ul>
       </div>
@@ -476,12 +478,14 @@
           </div>
         </div>
         <div class="nb-chat-tools">
+          <button id="room-sound-toggle" type="button" class="nb-chat-tool nb-room-desktop" aria-pressed="false" aria-label="Message sound" title="Play a local chime on new messages (off by default)"><svg class="nb-i" aria-hidden="true"><use id="room-sound-icon" href="#i-bell-off"/></svg></button>
           <button id="room-invite-open" type="button" class="btn nb-btn-primary nb-chat-invite" aria-label="Invite someone" aria-haspopup="dialog" aria-controls="room-invite-dialog" hidden><svg class="nb-i" aria-hidden="true"><use href="#i-user-plus"/></svg><span>Invite</span></button>
           <button id="room-destroy" type="button" class="btn nb-btn-secondary nb-chat-destroy" aria-label="Self-destruct" aria-haspopup="dialog" aria-controls="room-destroy-dialog" title="End this chat for everyone, now"><svg class="nb-i" aria-hidden="true"><use href="#i-flame"/></svg><span>Self-destruct</span></button>
           <button id="room-menu-open" type="button" class="nb-chat-tool nb-room-mobile" aria-label="Chat menu" popovertarget="room-menu"><svg class="nb-i" aria-hidden="true"><use href="#i-more"/></svg></button>
         </div>
       </header>
       <div id="room-menu" class="nb-room-menu" popover aria-label="Chat options">
+        <button id="room-menu-sound" type="button" aria-pressed="false" aria-label="Message sound"><svg class="nb-i" aria-hidden="true"><use id="room-menu-sound-icon" href="#i-bell-off"/></svg><span>Message sound</span><span class="nb-menu-switch" aria-hidden="true"></span></button>
         <button id="room-theme-toggle" type="button" aria-pressed="false" aria-label="Dark theme"><svg class="nb-i" aria-hidden="true"><use href="#i-moon"/></svg><span>Dark theme</span><span class="nb-menu-switch" aria-hidden="true"></span></button>
         <button id="room-menu-destroy" type="button" class="nb-room-menu-danger" aria-haspopup="dialog" aria-controls="room-destroy-dialog"><svg class="nb-i" aria-hidden="true"><use href="#i-flame"/></svg><span>Self-destruct</span></button>
       </div>
@@ -498,7 +502,18 @@
             </div>
             <button id="room-context-cancel" type="button" class="nb-chat-tool" aria-label="Cancel"><svg class="nb-i" aria-hidden="true"><use href="#i-x"/></svg></button>
           </div>
+          <div id="room-attach-bar" class="nb-chat-context nb-chat-attach-bar" hidden>
+            <svg class="nb-i" aria-hidden="true"><use href="#i-file"/></svg>
+            <div class="nb-chat-context-text">
+              <span id="room-attach-name" class="nb-chat-context-title"></span>
+              <span id="room-attach-meta" class="nb-chat-context-quote"></span>
+            </div>
+            <label class="nb-chat-attach-expiry" title="How long the encrypted file stays on the server. It always expires before this chat ends."><span class="visually-hidden">File expires in</span><select id="room-attach-expiry" class="form-select"></select></label>
+            <button id="room-attach-clear" type="button" class="nb-chat-tool" aria-label="Remove attachment"><svg class="nb-i" aria-hidden="true"><use href="#i-x"/></svg></button>
+          </div>
           <form id="room-composer" class="nb-chat-composer" novalidate>
+            <input id="room-file" type="file" class="nb-file-input" aria-label="Attach encrypted file">
+            <button id="room-attach" type="button" class="nb-chat-tool nb-chat-attach" aria-label="Attach file" title="Attach an encrypted file (stored as an encrypted paste until it expires)"><svg class="nb-i" aria-hidden="true"><use href="#i-clip"/></svg></button>
             <label for="room-text" class="visually-hidden">Message</label>
             <textarea id="room-text" rows="1" maxlength="2000" placeholder="Write a message…" spellcheck="false" autocomplete="off" autocorrect="off" autocapitalize="off" enterkeyhint="send" dir="auto"></textarea>
             <button id="room-send" type="submit" class="nb-chat-send" aria-label="Send"><svg class="nb-i" aria-hidden="true"><use href="#i-send"/></svg></button>
@@ -559,7 +574,7 @@
     <h2 id="room-destroy-title" class="nb-h2">Self-destruct this chat?</h2>
     <button id="room-destroy-close" type="button" class="btn nb-btn-ghost nb-dialog-close" aria-label="Close"><svg class="nb-i" aria-hidden="true"><use href="#i-x"/></svg></button>
   </div>
-  <p id="room-destroy-text" class="nb-muted">It ends right now for everyone, with all its messages. This can’t be undone.</p>
+  <p id="room-destroy-text" class="nb-muted">It ends right now for everyone, with all its messages. Attached files are stored encrypted on the server’s disk as pastes and may remain until they expire. This can’t be undone.</p>
   <p id="room-destroy-error" class="nb-note nb-tone-danger" role="alert" hidden></p>
   <div class="nb-actions">
     <button id="room-destroy-cancel" type="button" class="btn nb-btn-secondary" autofocus>Cancel</button>
@@ -588,7 +603,12 @@
     <p class="nb-muted">Send this link to <strong id="room-invite-who"></strong> only. It works once, within the next <span id="room-invite-ttl-text">hour</span>, and lets them read what is sent in this chat from when they join.</p>
     <p id="room-invite-password-note" class="nb-note nb-tone-warn" hidden><svg class="nb-i" aria-hidden="true"><use href="#i-key"/></svg><span>They’ll also need the chat’s password. Send it a different way from the link, so one leaked message isn’t enough to get in.</span></p>
     <p id="room-invite-link" class="nb-link" tabindex="0" aria-label="Invite link"></p>
+    <div id="room-invite-qr-wrap" class="nb-invite-qr" hidden>
+      <div id="room-invite-qr" class="nb-qr-image"></div>
+      <p class="nb-meta mb-0">Scan on a phone to join. The code contains this one-time invite link.</p>
+    </div>
     <button id="room-invite-copy" type="button" class="btn nb-btn-primary nb-copy-btn w-100 mt-3"><svg class="nb-i" aria-hidden="true"><use href="#i-copy"/></svg><span>Copy link</span></button>
+    <button id="room-invite-qr-toggle" type="button" class="btn nb-btn-secondary w-100 mt-2" aria-expanded="false" aria-controls="room-invite-qr-wrap"><svg class="nb-i" aria-hidden="true"><use href="#i-qr"/></svg><span>Show QR code</span></button>
     <button id="room-invite-another" type="button" class="btn nb-btn-secondary w-100 mt-2">Invite someone else</button>
     <button id="room-invite-revoke" type="button" class="btn nb-btn-secondary nb-btn-remove w-100 mt-2">Revoke this invite</button>
   </div>

@@ -2,6 +2,7 @@ package rooms
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"sync"
 	"testing"
@@ -650,5 +651,111 @@ func TestEachInviteChoosesItsLifetime(t *testing.T) {
 	}
 	if _, _, err := s.Join(c.ID, long); err != nil {
 		t.Fatalf("the fifteen-minute invite: %v", err)
+	}
+}
+
+func TestReadWaitWakesOnPostRemoveAndDestroy(t *testing.T) {
+	s, _ := newStore(t)
+	c, err := s.Create(time.Hour, someone)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Wrong token and unknown room return immediately without waiting.
+	start := time.Now()
+	if _, _, _, err := s.ReadWait(context.Background(), c.ID, "wrong", 0, 5*time.Second); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("wrong token: %v", err)
+	}
+	if time.Since(start) > 250*time.Millisecond {
+		t.Fatalf("wrong token waited too long: %v", time.Since(start))
+	}
+
+	// Wakes immediately when a record is posted.
+	payload := bytes.Repeat([]byte{0x42}, MinRecordBytes)
+	done := make(chan []Record, 1)
+	go func() {
+		recs, _, _, err := s.ReadWait(context.Background(), c.ID, c.MemberToken, 0, 5*time.Second)
+		if err != nil {
+			t.Errorf("ReadWait: %v", err)
+			return
+		}
+		done <- recs
+	}()
+	time.Sleep(30 * time.Millisecond)
+	if _, err := s.Post(c.ID, c.MemberToken, payload); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case recs := <-done:
+		if len(recs) != 1 || !bytes.Equal(recs[0].Data, payload) {
+			t.Fatalf("unexpected records: %d", len(recs))
+		}
+	case <-time.After(time.Second):
+		t.Fatal("ReadWait did not wake on Post")
+	}
+
+	// Wakes immediately with ErrNotFound when member is removed.
+	inv, n, err := s.Invite(c.ID, c.OwnerToken)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mt, _, err := s.Join(c.ID, inv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	removedErr := make(chan error, 1)
+	go func() {
+		_, _, _, err := s.ReadWait(context.Background(), c.ID, mt, 1, 5*time.Second)
+		removedErr <- err
+	}()
+	time.Sleep(30 * time.Millisecond)
+	if err := s.Remove(c.ID, c.OwnerToken, n); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-removedErr:
+		if !errors.Is(err, ErrNotFound) {
+			t.Fatalf("removed waiter got %v, want ErrNotFound", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("ReadWait did not wake on Remove")
+	}
+
+	// Wakes immediately with ErrNotFound when room is destroyed.
+	destroyedErr := make(chan error, 1)
+	go func() {
+		_, _, _, err := s.ReadWait(context.Background(), c.ID, c.MemberToken, 1, 5*time.Second)
+		destroyedErr <- err
+	}()
+	time.Sleep(30 * time.Millisecond)
+	if err := s.Destroy(c.ID, c.OwnerToken); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-destroyedErr:
+		if !errors.Is(err, ErrNotFound) {
+			t.Fatalf("destroyed waiter got %v, want ErrNotFound", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("ReadWait did not wake on Destroy")
+	}
+}
+
+func TestReadWaitRespectsContextAndTimeout(t *testing.T) {
+	s, _ := newStore(t)
+	c, err := s.Create(time.Hour, someone)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		time.Sleep(30 * time.Millisecond)
+		cancel()
+	}()
+	if _, _, _, err := s.ReadWait(ctx, c.ID, c.MemberToken, 0, 5*time.Second); !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled wait: %v", err)
+	}
+	recs, next, _, err := s.ReadWait(context.Background(), c.ID, c.MemberToken, 0, 30*time.Millisecond)
+	if err != nil || len(recs) != 0 || next != 0 {
+		t.Fatalf("timeout wait: recs=%d next=%d err=%v", len(recs), next, err)
 	}
 }

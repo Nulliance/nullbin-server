@@ -1273,6 +1273,7 @@ test('Null Chat: create, invite once, chat, reply, react, edit, unsend, remove, 
   assert.equal(await b.page.inputValue('#room-text'), 'Hi Ada');
   await b.page.fill('#room-text', 'Hi Ada, see you Saturday');
   await b.page.press('#room-text', 'Enter');
+  await waitText(b, 'Hi Ada, see you Saturday');
   await waitText(a, 'Hi Ada, see you Saturday');
   assert.match((await a.page.textContent('#room-messages .nb-m:not(.nb-own) .nb-m-meta')) ?? '', /\(edited\)/);
   // Bob sends and unsends a message: Ada sees that it was unsent, not its text.
@@ -2890,4 +2891,171 @@ test('joining refuses already expired signed settings before posting or saving k
   assert.equal(h.sent.filter((s) => s.method === 'POST' && s.path.endsWith('/records')).length, 0, 'an expired join never announces keys');
   assert.equal(await h.page.isVisible('#room-chat'), false);
   await h.check();
+});
+
+test('Null Chat: invite QR clears on close, sound toggle works, and encrypted files keep real extensions visible without auto-fetching', { timeout: 60_000 }, async (t) => {
+  await restartAPI();
+  t.after(() => restartAPI());
+  const a = await open();
+  t.after(() => a.context.close());
+  await goto(a, `${origin}/chat`);
+  await a.page.fill('#room-you', 'Ada');
+  await a.page.click('#room-create-submit');
+  await a.page.waitForSelector('#room-chat:not([hidden])');
+  await a.page.waitForFunction(() => !(document.getElementById('room-text') as HTMLTextAreaElement).disabled);
+
+  // Sound toggle starts off and flips aria-pressed cleanly under CSP.
+  assert.equal(await a.page.getAttribute('#room-sound-toggle', 'aria-pressed'), 'false');
+  await a.page.click('#room-sound-toggle');
+  assert.equal(await a.page.getAttribute('#room-sound-toggle', 'aria-pressed'), 'true');
+
+  // Local QR code inside Invite dialog renders SVG and wipes it when closed.
+  await a.page.click('#room-invite-open');
+  await a.page.fill('#room-invite-label', 'Bob');
+  await a.page.click('#room-invite-create');
+  await a.page.waitForSelector('#room-invite-result:not([hidden])');
+  const link = (await a.page.textContent('#room-invite-link'))!;
+  assert.equal(await a.page.getAttribute('#room-invite-qr-toggle', 'aria-expanded'), 'false');
+  await a.page.click('#room-invite-qr-toggle');
+  assert.equal(await a.page.getAttribute('#room-invite-qr-toggle', 'aria-expanded'), 'true');
+  assert.equal(await a.page.locator('#room-invite-qr svg').count(), 1, 'invite QR rendered locally as SVG');
+  await a.page.click('#room-invite-close');
+  assert.equal(await a.page.locator('#room-invite-qr svg').count(), 0, 'invite QR cleared on dialog close');
+  assert.equal(await a.page.getAttribute('#room-invite-qr-toggle', 'aria-expanded'), 'false');
+
+  // Bob joins.
+  const b = await open();
+  t.after(() => b.context.close());
+  await goto(b, link);
+  await b.page.waitForSelector('#room-join:not([hidden])');
+  await b.page.fill('#room-join-name', 'Bob');
+  await b.page.click('#room-join-submit');
+  await b.page.waitForSelector('#room-chat:not([hidden])');
+  await b.page.waitForFunction(() => !(document.getElementById('room-text') as HTMLTextAreaElement).disabled);
+
+  // Ada attaches and sends a PNG image; Bob never auto-fetches the paste.
+  await a.page.setInputFiles('#room-file', { name: 'secret-photo.png', mimeType: 'image/png', buffer: makePng(20, 12) });
+  await a.page.waitForSelector('#room-attach-bar:not([hidden])');
+  await a.page.click('#room-send');
+  await b.page.waitForSelector('#room-messages .nb-m-file', { timeout: 30_000 });
+  assert.equal(b.sent.filter((s) => s.method === 'GET' && s.path.startsWith('/api/v1/pastes/')).length, 0, 'attachments must never auto-fetch');
+
+  // Explicit click loads, authenticates, and renders the image, then hides it cleanly.
+  await b.page.click('#room-messages .nb-m-file button:has-text("Show image")');
+  await b.page.waitForSelector('#room-messages .nb-m-file-img', { timeout: 30_000 });
+  const dims = await b.page.evaluate(() => {
+    const img = document.querySelector<HTMLImageElement>('#room-messages .nb-m-file-img');
+    return img ? { complete: img.complete, w: img.naturalWidth, h: img.naturalHeight } : null;
+  });
+  assert.deepEqual(dims, { complete: true, w: 20, h: 12 });
+  await b.page.click('#room-messages .nb-m-file button:has-text("Hide image")');
+  assert.equal(await b.page.locator('#room-messages .nb-m-file-img').count(), 0);
+  await b.page.waitForTimeout(100);
+  assert.equal(await b.page.locator('#room-messages .nb-m-file-note:not([hidden])').count(), 0, 'hiding an image must not trigger a decode error');
+
+  // A long decoy filename ending in .pdf.exe keeps .exe visible on narrow mobile viewports.
+  const decoyName = `${'quarterly-financial-report-'.repeat(6)}final-v2-copy.pdf.exe`;
+  assert.ok(decoyName.length > 170);
+  await a.page.setInputFiles('#room-file', { name: decoyName, mimeType: 'application/octet-stream', buffer: Buffer.from('not a pdf') });
+  await a.page.waitForSelector('#room-attach-bar:not([hidden])');
+  await a.page.click('#room-send');
+  await b.page.waitForFunction(() => document.querySelectorAll('#room-messages .nb-m-file').length === 2, undefined, { timeout: 30_000 });
+  await b.page.setViewportSize({ width: 360, height: 740 });
+  const secondCard = b.page.locator('#room-messages .nb-m-file').nth(1);
+  const ext = secondCard.locator('.nb-m-file-ext');
+  assert.equal(await ext.isVisible(), true);
+  assert.equal(await ext.textContent(), '.exe');
+  const cardBox = await secondCard.boundingBox();
+  const extBox = await ext.boundingBox();
+  assert.ok(cardBox && extBox && extBox.width > 0 && extBox.x + extBox.width <= cardBox.x + cardBox.width + 1 && extBox.x + extBox.width <= 360, `trailing .exe extension stays visible inside the card on mobile: ${JSON.stringify({ cardBox, extBox })}`);
+
+  await a.check();
+  await b.check();
+});
+
+test('Null Chat: self-destruct right after uploading a file ends cleanly with no 404 and deletes the paste', { timeout: 60_000 }, async (t) => {
+  await restartAPI();
+  t.after(() => restartAPI());
+  const a = await open();
+  t.after(() => a.context.close());
+  await goto(a, `${origin}/chat`);
+  await a.page.fill('#room-you', 'Ada');
+  await a.page.click('#room-create-submit');
+  await a.page.waitForSelector('#room-chat:not([hidden])');
+  await a.page.waitForFunction(() => !(document.getElementById('room-text') as HTMLTextAreaElement).disabled);
+
+  await a.page.setInputFiles('#room-file', { name: 'ephemeral.txt', mimeType: 'text/plain', buffer: Buffer.from('burn with chat') });
+  await a.page.waitForSelector('#room-attach-bar:not([hidden])');
+  await a.page.click('#room-send');
+  await a.page.waitForSelector('#room-messages .nb-m-file', { timeout: 30_000 });
+
+  const fin = a.sent.find((s) => s.method === 'POST' && /^\/api\/v1\/pastes\/[0-9a-f]{32}\/finalize$/.test(s.path));
+  assert.ok(fin, 'file attachment uploaded as a paste');
+  const pasteId = fin.path.split('/')[4]!;
+
+  // Self-destruct immediately while long-polling is active.
+  await a.page.click('#room-destroy');
+  await a.page.waitForSelector('#room-destroy-dialog[open]');
+  await a.page.click('#room-destroy-confirm');
+  await a.page.waitForSelector('#problem:not([hidden])');
+  assert.equal(await a.page.textContent('#problem-title'), 'Null Chat destroyed');
+  await a.check(); // fails on any stray console 404
+
+  // The uploaded paste was deleted on the server.
+  const check = await fetch(`${apiOrigin}/api/v1/pastes/${pasteId}`);
+  assert.equal(check.status, 404, 'uploaded paste was deleted on self-destruct');
+});
+
+test('Null Chat: a file’s lifetime is the sender’s choice, and never outlives the chat', { timeout: 60_000 }, async (t) => {
+  await restartAPI();
+  t.after(() => restartAPI());
+  const a = await open();
+  t.after(() => a.context.close());
+  await goto(a, `${origin}/chat`);
+  await a.page.fill('#room-you', 'Ada');
+  await a.page.click('#room-create-submit'); // the default: a chat for 1 day
+  await a.page.waitForSelector('#room-chat:not([hidden])');
+  await a.page.waitForFunction(() => !(document.getElementById('room-text') as HTMLTextAreaElement).disabled);
+
+  await a.page.setInputFiles('#room-file', { name: 'notes.txt', mimeType: 'text/plain', buffer: Buffer.from('short-lived') });
+  await a.page.waitForSelector('#room-attach-bar:not([hidden])');
+  // A 1-day chat has just under a day left: a 1-day file would outlive it.
+  const offered = await a.page.$$eval('#room-attach-expiry option', (os) => os.map((o) => (o as HTMLOptionElement).value));
+  assert.deepEqual(offered, ['300', '1800', '3600', '10800', '43200']);
+  assert.equal(await a.page.inputValue('#room-attach-expiry'), '43200', 'the longest lifetime that ends before the chat is preselected');
+
+  await a.page.selectOption('#room-attach-expiry', '3600');
+  await a.page.click('#room-send');
+  await a.page.waitForSelector('#room-messages .nb-m-file', { timeout: 30_000 });
+  const create = a.sent.find((s) => s.method === 'POST' && s.path === '/api/v1/pastes');
+  assert.ok(create?.body, 'file attachment created as a paste');
+  assert.equal(JSON.parse(create.body.toString()).expires_in, 3600, 'the paste gets the chosen lifetime');
+
+  // The choice carries over to the next attachment while it still fits.
+  await a.page.setInputFiles('#room-file', { name: 'more.txt', mimeType: 'text/plain', buffer: Buffer.from('again') });
+  await a.page.waitForSelector('#room-attach-bar:not([hidden])');
+  assert.equal(await a.page.inputValue('#room-attach-expiry'), '3600');
+  await a.page.click('#room-attach-clear');
+  assert.equal(await a.page.locator('#room-attach-expiry option').count(), 0, 'clearing the attachment clears its choices');
+  await a.check();
+});
+
+test('Null Chat: attaching is off in a chat too short for any file lifetime', { timeout: 60_000 }, async (t) => {
+  await restartAPI();
+  t.after(() => restartAPI());
+  const a = await open();
+  t.after(() => a.context.close());
+  await goto(a, `${origin}/chat`);
+  await a.page.selectOption('#room-expiry', '300'); // 5 minutes: no lifetime ends before it
+  await a.page.fill('#room-you', 'Ada');
+  await a.page.click('#room-create-submit');
+  await a.page.waitForSelector('#room-chat:not([hidden])');
+  await a.page.waitForFunction(() => !(document.getElementById('room-text') as HTMLTextAreaElement).disabled);
+  assert.equal(await a.page.isDisabled('#room-attach'), true, 'the attach button is disabled');
+  assert.equal(await a.page.getAttribute('#room-attach', 'title'), 'This chat ends too soon to attach a file.');
+  // Pasted or dropped files are refused too, and nothing is uploaded.
+  await a.page.setInputFiles('#room-file', { name: 'late.txt', mimeType: 'text/plain', buffer: Buffer.from('late') });
+  assert.equal(await a.page.isHidden('#room-attach-bar'), true);
+  assert.equal(a.sent.some((s) => s.path.startsWith('/api/v1/pastes')), false, 'no paste was created');
+  await a.check();
 });

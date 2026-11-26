@@ -17,6 +17,7 @@
 
 import {
   ApiError,
+  MAX_ROOM_WAIT,
   admitMember,
   createInvite,
   createRoom,
@@ -29,14 +30,17 @@ import {
   type SlotState,
 } from './api.ts';
 import { cleanName } from './comments.ts';
-import { announce, bindCopy, bindReveal, busy, copyText, el, formatCountdown, nextFrame, reveal, show, showProblem, showSection, swap, toast } from './dom.ts';
+import { announce, bindCopy, bindReveal, busy, copyText, el, formatBytes, formatCountdown, nextFrame, reveal, show, showProblem, showSection, swap, toast } from './dom.ts';
 import { generatePassword, MIN_PASSWORD_LENGTH } from './create.ts';
 import { encodeInviteFragment, parseInviteFragment } from './link.ts';
+import { qrSvg } from './share.ts';
+import { deleteUploadedRoomFiles, expiryChoices, expiryLabel, loadRoomImage, looksLikeImage, saveRoomFile, uploadRoomFile } from './room-files.ts';
 import {
   MAX_BOX_N,
   MAX_COUNTER,
   MAX_MESSAGE_LENGTH,
   ROOM_KEY_BYTES,
+  cleanChatFileName,
   controlKey,
   encodeKey,
   newChain,
@@ -56,6 +60,7 @@ import {
   safetyCode,
   openControl,
   sealMessage,
+  validMessage,
   verifySignature,
   joinProof,
   inviteCheck,
@@ -933,8 +938,28 @@ function openChat(sodium: Sodium, id: string, session: Session): void {
   let ended = false;
   let unread = 0;
   let timer = 0;
+  let fetchAbort: AbortController | null = null;
+  let hiddenAbort = false;
+  let pollingPaused = false;
+  const pausePolling = () => {
+    pollingPaused = true;
+    clearTimeout(timer);
+    fetchAbort?.abort();
+    fetchAbort = null;
+  };
+  const resumePolling = () => {
+    if (ended || !pollingPaused) return;
+    pollingPaused = false;
+    schedule(false);
+  };
   let synced = 0; // when the last complete poll finished, Date.now()
   let rejoined = 0;
+  let soundOn = false;
+  let audioCtx: AudioContext | null = null;
+  let lastChime = 0;
+  let pendingFile: File | null = null;
+  const activePreviewUrls = new Set<string>();
+  const uploadedFiles = new Map<string, { id: string; deleteToken: string }>();
   /** Slots this tab has admitted and is waiting to see the admit for. */
   const admitting = new Set<number>();
   const admits = new Map<number, ControlRecord>();
@@ -973,6 +998,14 @@ function openChat(sodium: Sodium, id: string, session: Session): void {
   // --- Ending: everything decrypted and every key leaves the page. ---
   const shutdown = () => {
     ended = true;
+    pausePolling();
+    soundOn = false;
+    void audioCtx?.close().catch(() => {});
+    audioCtx = null;
+    for (const u of activePreviewUrls) URL.revokeObjectURL(u);
+    activePreviewUrls.clear();
+    uploadedFiles.clear();
+    pendingFile = null;
     hideRoomMenu();
     releaseLock?.();
     listening.abort();
@@ -1007,6 +1040,20 @@ function openChat(sodium: Sodium, id: string, session: Session): void {
     for (const id of ['room-text', 'room-join-name', 'room-join-password', 'room-invite-label']) {
       el<HTMLInputElement | HTMLTextAreaElement>(id).value = '';
     }
+    el<HTMLInputElement>('room-file').value = '';
+    show(el('room-attach-bar'), false);
+    el('room-attach-name').textContent = '';
+    el('room-attach-meta').textContent = '';
+    el('room-attach-expiry').replaceChildren();
+    show(el('room-invite-qr-wrap'), false);
+    el('room-invite-qr').replaceChildren();
+    el('room-invite-qr-toggle').setAttribute('aria-expanded', 'false');
+    const qrSpan = el('room-invite-qr-toggle').querySelector('span');
+    if (qrSpan) qrSpan.textContent = 'Show QR code';
+    el('room-sound-toggle').setAttribute('aria-pressed', 'false');
+    el('room-menu-sound').setAttribute('aria-pressed', 'false');
+    el('room-sound-icon').setAttribute('href', '#i-bell-off');
+    el('room-menu-sound-icon').setAttribute('href', '#i-bell-off');
     mode = null;
     show(context, false);
     for (const e of ['room-context-title', 'room-context-quote', 'room-member-list', 'room-member-count', 'room-invite-link', 'room-invite-who', 'room-invite-error', 'room-join-error', 'room-status', 'room-expires', 'announce']) el(e).replaceChildren();
@@ -1024,6 +1071,11 @@ function openChat(sodium: Sodium, id: string, session: Session): void {
   };
   const end = (heading: string, body: string) => {
     if (ended) return;
+    if (uploadedFiles.size > 0) {
+      const toDelete = [...uploadedFiles.values()];
+      uploadedFiles.clear();
+      void deleteUploadedRoomFiles(toDelete);
+    }
     shutdown();
     clearSession(id);
     showProblem(heading, body);
@@ -1039,11 +1091,16 @@ function openChat(sodium: Sodium, id: string, session: Session): void {
   // The server stops answering once our place is closed. Someone never let
   // in most likely had their place closed by the creator (a wrong
   // password, an expired or revoked invite); the chat may also have ended.
-  const gone = () => (session.slot !== 0 && !state.members.has(session.slot)
-    ? end('You weren’t let in', state.passwordRequired
-      ? 'The person who invited you closed your place without letting you in: the password may have been wrong, or the invite expired or was revoked. The chat may also have ended. Ask them for a new invite, and check the password with them.'
-      : 'The person who invited you closed your place without letting you in, perhaps because the invite expired or was revoked, or the chat ended. Ask them for a new invite, sent another way.')
-    : end('This Null Chat has ended', 'It self-destructed, expired, or the server restarted, or you were removed. Nothing in it can be read any more.'));
+  const gone = () => {
+    if (pollingPaused) return;
+    if (session.slot !== 0 && !state.members.has(session.slot)) {
+      end('You weren’t let in', state.passwordRequired
+        ? 'The person who invited you closed your place without letting you in: the password may have been wrong, or the invite expired or was revoked. The chat may also have ended. Ask them for a new invite, and check the password with them.'
+        : 'The person who invited you closed your place without letting you in, perhaps because the invite expired or was revoked, or the chat ended. Ask them for a new invite, sent another way.');
+    } else {
+      end('This Null Chat has ended', 'It self-destructed, expired, or the server restarted, or you were removed. Nothing in it can be read any more.');
+    }
+  };
 
   // One tab at a time: a duplicated tab carries a copy of this session and
   // would send with the same keys. The first tab holds a lock on this place
@@ -1353,9 +1410,9 @@ function openChat(sodium: Sodium, id: string, session: Session): void {
     }
   };
 
-  /** Encrypts, signs and posts one chat record; it is applied here at once. */
-  const sendChat = async (record: MessageRecord) => {
-    if (expired()) return;
+  /** Encrypts, signs and posts one chat record; it is applied here at once. Returns true if sent. */
+  const sendChat = async (record: MessageRecord): Promise<boolean> => {
+    if (expired()) return false;
     // Keys go to the members we know of. An old view may miss a new member
     // or a new receiving key: fetch the room again first.
     if (Date.now() - synced > STALE_MS) {
@@ -1375,11 +1432,12 @@ function openChat(sodium: Sodium, id: string, session: Session): void {
       await post(bytes);
       sent = true;
     });
-    if (!sent || ended) return;
+    if (!sent || ended) return false;
     show(status, false);
     const e = state.applyOwn(record, at);
     if (e) show1(e, true);
     void poll();
+    return true;
   };
   const failed = (e: unknown, what: string) => {
     if (ended) return;
@@ -1659,6 +1717,127 @@ function openChat(sodium: Sodium, id: string, session: Session): void {
     }
     // The time (and "(edited)") floats at the end of the last line of
     // text, and drops below it only when the line is full.
+    if (m.file && !m.deleted) {
+      const f = m.file;
+      const card = make('div', 'nb-m-file');
+      const head = make('div', 'nb-m-file-head');
+      const info = make('div', 'nb-m-file-info');
+      const fname = make('span', 'nb-m-file-name');
+      fname.title = f.name;
+      const dot = f.name.lastIndexOf('.');
+      if (dot > 0 && f.name.length - dot <= 16) {
+        fname.append(make('span', 'nb-m-file-stem', f.name.slice(0, dot)), make('span', 'nb-m-file-ext', f.name.slice(dot)));
+      } else {
+        fname.append(make('span', 'nb-m-file-stem', f.name));
+      }
+      info.append(fname, make('span', 'nb-m-file-size', `${formatBytes(f.size)} · Encrypted file`));
+      head.append(icon('file'), info);
+      const actions = make('div', 'nb-m-file-actions');
+      const note = make('p', 'nb-m-file-note');
+      note.hidden = true;
+      const saveBtn = make('button', 'btn nb-btn-secondary');
+      saveBtn.type = 'button';
+      saveBtn.append(icon('download'), make('span', '', 'Save file'));
+      saveBtn.addEventListener('click', async () => {
+        if (saveBtn.disabled || ended || m.deleted) return;
+        note.hidden = true;
+        note.classList.remove('nb-tone-danger');
+        const done = busy(saveBtn, 'Decrypting…');
+        try {
+          await saveRoomFile(sodium, f, () => ended || m.deleted, (frac) => {
+            if (frac > 0 && frac < 1) note.textContent = `Decrypting ${Math.round(frac * 100)}%…`, note.hidden = false;
+          });
+          note.hidden = true;
+        } catch (e) {
+          if (ended || m.deleted) return;
+          note.classList.add('nb-tone-danger');
+          note.textContent = e instanceof ApiError && e.status === 404
+            ? 'This file expired or was deleted.'
+            : e instanceof Error && e.message ? e.message : 'The file could not be downloaded.';
+          note.hidden = false;
+        } finally {
+          done();
+        }
+      }, { signal: listening.signal });
+      actions.append(saveBtn);
+      let imgEl: HTMLImageElement | null = null;
+      let imgUrl: string | null = null;
+      if (looksLikeImage(f.name, f.size)) {
+        const previewBtn = make('button', 'btn nb-btn-secondary');
+        previewBtn.type = 'button';
+        const previewLabel = make('span', '', 'Show image');
+        previewBtn.append(icon('eye'), previewLabel);
+        previewBtn.addEventListener('click', async () => {
+          if (previewBtn.disabled || ended || m.deleted || !card.isConnected) return;
+          if (imgEl) {
+            const old = imgEl;
+            imgEl = null;
+            if (imgUrl && activePreviewUrls.has(imgUrl)) {
+              URL.revokeObjectURL(imgUrl);
+              activePreviewUrls.delete(imgUrl);
+            }
+            imgUrl = null;
+            old.removeAttribute('src');
+            old.remove();
+            previewLabel.textContent = 'Show image';
+            note.hidden = true;
+            return;
+          }
+          note.hidden = true;
+          note.classList.remove('nb-tone-danger');
+          const done = busy(previewBtn, 'Loading…');
+          try {
+            const loaded = await loadRoomImage(sodium, f, () => ended || m.deleted || !card.isConnected);
+            if (ended || m.deleted || !card.isConnected) {
+              URL.revokeObjectURL(loaded.url);
+              return;
+            }
+            activePreviewUrls.add(loaded.url);
+            imgUrl = loaded.url;
+            const img = document.createElement('img');
+            img.className = 'nb-m-file-img';
+            img.alt = loaded.name;
+            img.width = loaded.width;
+            img.height = loaded.height;
+            img.decoding = 'async';
+            img.src = loaded.url;
+            const releaseUrl = () => {
+              if (activePreviewUrls.has(loaded.url)) {
+                URL.revokeObjectURL(loaded.url);
+                activePreviewUrls.delete(loaded.url);
+              }
+              if (imgUrl === loaded.url) imgUrl = null;
+            };
+            img.addEventListener('load', releaseUrl, { once: true });
+            img.addEventListener('error', () => {
+              releaseUrl();
+              if (imgEl !== img) return;
+              img.remove();
+              imgEl = null;
+              previewLabel.textContent = 'Show image';
+              note.classList.add('nb-tone-danger');
+              note.textContent = 'This image could not be decoded; use Save file instead.';
+              note.hidden = false;
+            }, { once: true });
+            imgEl = img;
+            card.insertBefore(img, actions);
+          } catch (e) {
+            if (ended || m.deleted || !card.isConnected) return;
+            note.classList.add('nb-tone-danger');
+            note.textContent = e instanceof ApiError && e.status === 404
+              ? 'This file expired or was deleted.'
+              : e instanceof Error && e.message ? e.message : 'The image could not be shown.';
+            note.hidden = false;
+          } finally {
+            done();
+            previewLabel.textContent = imgEl ? 'Hide image' : 'Show image';
+          }
+        }, { signal: listening.signal });
+        actions.append(previewBtn);
+      }
+      card.append(head, actions, note);
+      bubble.append(card);
+    }
     const meta = make('span', 'nb-m-meta');
     if (m.edited && !m.deleted) meta.append(make('span', 'nb-m-edited', '(edited) '));
     const t = timeOf(m);
@@ -1779,17 +1958,21 @@ function openChat(sodium: Sodium, id: string, session: Session): void {
       menuItem('Reply', 'reply', () => {
         closeMenu(false);
         startContext('reply', m);
-      }),
-      menuItem('Copy text', 'copy', async () => {
+      }));
+    if (m.text !== '') {
+      menu.append(menuItem('Copy text', 'copy', async () => {
         closeMenu(true);
         if (await copyText(m.text)) announce('Message copied.', listening.signal);
       }));
+    }
     if (own) {
-      menu.append(
-        menuItem('Edit', 'edit', () => {
+      if (m.text !== '') {
+        menu.append(menuItem('Edit', 'edit', () => {
           closeMenu(false);
           startContext('edit', m);
-        }),
+        }));
+      }
+      menu.append(
         menuItem('Unsend', 'trash', (b) => {
           // Two steps: unsending removes it for everyone.
           if (!b.classList.contains('nb-armed')) {
@@ -1800,7 +1983,14 @@ function openChat(sodium: Sodium, id: string, session: Session): void {
           }
           if (Date.now() - Number(b.dataset['armed']) < CONFIRM_GAP_MS) return; // a double-click does not confirm
           closeMenu(true);
-          sendChat({ t: 'unsend', id: newRecordId(sodium), time: Date.now(), target: m.id }).catch((e) => failed(e, 'The message was not unsent.'));
+          sendChat({ t: 'unsend', id: newRecordId(sodium), time: Date.now(), target: m.id }).then((ok) => {
+            if (!ok) return;
+            const up = uploadedFiles.get(m.id);
+            if (up) {
+              uploadedFiles.delete(m.id);
+              void deleteUploadedRoomFiles([up]);
+            }
+          }).catch((e) => failed(e, 'The message was not unsent.'));
         }, true));
     }
     menu.hidden = false;
@@ -1928,6 +2118,7 @@ function openChat(sodium: Sodium, id: string, session: Session): void {
         }
         add(li, mine, !mine);
         if (!mine && document.hidden) unread++;
+        if (!mine && synced > 0 && soundOn) playChime();
         return;
       }
       case 'updated': {
@@ -2003,18 +2194,66 @@ function openChat(sodium: Sodium, id: string, session: Session): void {
   };
   const countdown = window.setInterval(updateCountdown, 1000);
 
-  // --- Fetching ---
+  // Optional, off-by-default local chime synthesized via Web Audio API (zero network/asset use).
+  const playChime = () => {
+    const nowMs = Date.now();
+    if (nowMs - lastChime < 250) return;
+    lastChime = nowMs;
+    try {
+      const Ctx = window.AudioContext ?? (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+      if (!Ctx) return;
+      audioCtx ??= new Ctx();
+      if (audioCtx.state === 'suspended') void audioCtx.resume();
+      const now = audioCtx.currentTime;
+      const osc = audioCtx.createOscillator();
+      const gain = audioCtx.createGain();
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(587.33, now);
+      osc.frequency.setValueAtTime(880, now + 0.06);
+      gain.gain.setValueAtTime(0.0001, now);
+      gain.gain.exponentialRampToValueAtTime(0.06, now + 0.015);
+      gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.16);
+      osc.connect(gain);
+      gain.connect(audioCtx.destination);
+      osc.onended = () => {
+        osc.disconnect();
+        gain.disconnect();
+      };
+      osc.start(now);
+      osc.stop(now + 0.17);
+    } catch {
+      // Audio unavailable or blocked before user interaction.
+    }
+  };
+  const syncSoundUI = () => {
+    const on = String(soundOn);
+    const href = soundOn ? '#i-bell' : '#i-bell-off';
+    el('room-sound-toggle').setAttribute('aria-pressed', on);
+    el('room-menu-sound').setAttribute('aria-pressed', on);
+    el('room-sound-icon').setAttribute('href', href);
+    el('room-menu-sound-icon').setAttribute('href', href);
+  };
+  const toggleSound = () => {
+    soundOn = !soundOn;
+    syncSoundUI();
+    if (soundOn) playChime();
+    announce(soundOn ? 'Message sound on.' : 'Message sound off.', listening.signal);
+  };
+  el('room-sound-toggle').addEventListener('click', toggleSound, { signal: listening.signal });
+  el('room-menu-sound').addEventListener('click', toggleSound, { signal: listening.signal });
+
+  // --- Fetching (long-polling when visible, gentle interval when hidden) ---
   let soon = false; // check again shortly, to show what we just posted
-  const schedule = () => {
+  const schedule = (quick = false) => {
     clearTimeout(timer);
-    const wait = soon ? 400 : document.hidden ? HIDDEN_POLL_MS : VISIBLE_POLL_MS;
+    const wait = quick ? 50 : soon ? 400 : document.hidden ? HIDDEN_POLL_MS : VISIBLE_POLL_MS;
     soon = false;
-    if (!ended) timer = window.setTimeout(() => void poll(), wait);
+    if (!ended && !pollingPaused) timer = window.setTimeout(() => void poll(), wait);
   };
   let polling: Promise<void> | null = null;
   /** Fetches and applies everything new; callers share a fetch in progress. */
   function poll(): Promise<void> {
-    if (expired()) return Promise.resolve();
+    if (expired() || pollingPaused) return Promise.resolve();
     polling ??= fetchAll().finally(() => {
       polling = null;
     });
@@ -2022,15 +2261,35 @@ function openChat(sodium: Sodium, id: string, session: Session): void {
   }
   async function fetchAll(): Promise<void> {
     let delay: number | null = null;
+    let quickNext = false;
     // Old receiving keys go before anything is read, also after the tab
     // was asleep, and their deletion is saved at once, even if the fetch
     // then fails.
     dropRetired();
     persist();
     try {
+      let first = true;
       for (;;) {
-        const batch = await fetchRecords(id, session.member, after);
-        if (expired()) return;
+        if (pollingPaused) return;
+        const fresh = synced > 0 && Date.now() - synced <= STALE_MS;
+        const waitSec = first && !document.hidden && fresh && after < 1000 ? MAX_ROOM_WAIT : 0;
+        first = false;
+        const reqStart = Date.now();
+        hiddenAbort = false;
+        fetchAbort = new AbortController();
+        let batch;
+        try {
+          batch = await fetchRecords(id, session.member, after, waitSec, fetchAbort.signal);
+          hiddenAbort = false;
+        } finally {
+          fetchAbort = null;
+        }
+        if (expired() || pollingPaused) return;
+        const elapsed = Date.now() - reqStart;
+        // If we long-polled and either received records or waited normally,
+        // start the next long-poll right away. If the server returned 0 records
+        // immediately (e.g. wait pool saturated), fall back to VISIBLE_POLL_MS.
+        if (waitSec > 0 && (batch.records.length > 0 || elapsed >= 1000)) quickNext = true;
         // The countdown is the server's; it never runs past the end the
         // creator signed. Only a gap bigger than clocks usually have is
         // worth a warning.
@@ -2159,7 +2418,13 @@ function openChat(sodium: Sodium, id: string, session: Session): void {
         if (composerLocked) unlockComposer();
       }
     } catch (e) {
-      if (ended) return;
+      const wasHiddenAbort = hiddenAbort;
+      hiddenAbort = false;
+      if (ended || pollingPaused) return;
+      if (wasHiddenAbort && !(e instanceof ApiError)) {
+        schedule(false);
+        return;
+      }
       if (e instanceof ApiError && e.status === 404) {
         gone();
         return;
@@ -2176,20 +2441,33 @@ function openChat(sodium: Sodium, id: string, session: Session): void {
       if (!waiting.hidden) waitingStatus.textContent = status.textContent;
       show(status);
     }
-    if (ended) return;
+    if (ended || pollingPaused) return;
     if (delay !== null) {
       clearTimeout(timer);
       timer = window.setTimeout(() => void poll(), delay);
     } else {
-      schedule();
+      schedule(quickNext && !document.hidden);
     }
   }
-  document.addEventListener('visibilitychange', () => {
-    if (!document.hidden && !expired()) {
+  const clearUnread = () => {
+    if (unread > 0) {
       unread = 0;
       document.title = baseTitle;
+    }
+  };
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) {
+      if (fetchAbort) {
+        hiddenAbort = true;
+        fetchAbort.abort();
+      }
+    } else if (!expired()) {
+      clearUnread();
       void poll();
     }
+  }, { signal: listening.signal });
+  window.addEventListener('focus', () => {
+    if (!ended) clearUnread();
   }, { signal: listening.signal });
   // Leaving the page (for another page in this tab, or closing it) clears
   // the conversation and every key from it, as a reload would, so a page
@@ -2234,17 +2512,114 @@ function openChat(sodium: Sodium, id: string, session: Session): void {
     timer = window.setTimeout(start, 500);
   }
 
-  // --- Composing: replies and edits show above the box. ---
+  // --- Composing: replies, edits, and optional encrypted file attachment. ---
   // Until our keys have reached the room, a message would be unreadable to
   // everyone: the box opens after the first complete sync.
   let composerLocked = true;
   let sending = false;
+  const attachBtn = el<HTMLButtonElement>('room-attach');
+  const fileInput = el<HTMLInputElement>('room-file');
+  const attachBar = el('room-attach-bar');
+  const attachName = el('room-attach-name');
+  const attachMeta = el('room-attach-meta');
+  const attachExpiry = el<HTMLSelectElement>('room-attach-expiry');
+  /** The lifetime the sender picked; kept across attachments, but never longer than the chat has left. */
+  let chosenExpiry: number | null = null;
+  const clearAttachment = () => {
+    pendingFile = null;
+    fileInput.value = '';
+    attachName.textContent = '';
+    attachMeta.textContent = '';
+    attachExpiry.replaceChildren();
+    show(attachBar, false);
+  };
+  /** Lifetimes a file sent now may have: none outlives the chat. Empty if its end is unknown. */
+  const fileExpiryChoices = () => {
+    const until = state.ends === null ? deadline : deadline === null ? state.ends : Math.min(deadline, state.ends);
+    return until === null ? [] : expiryChoices((until - Date.now()) / 1000);
+  };
+  /** The picked lifetime if it still fits, else the longest that does (null when none does). */
+  const fitExpiry = (choices: readonly number[]) =>
+    chosenExpiry !== null && choices.includes(chosenExpiry) ? chosenExpiry : choices.at(-1) ?? null;
+  /** A file refused because it would outlive the chat; its message is shown as is. */
+  class AttachTimeError extends Error {}
+  const TOO_LATE_TO_ATTACH = 'This chat ends too soon to attach a file.';
+  const UPLOAD_TOO_SLOW = 'The upload took too long: the file would have outlived this chat. Send it again to use a shorter lifetime.';
+  attachExpiry.addEventListener('change', () => {
+    const v = Number(attachExpiry.value);
+    if (fileExpiryChoices().includes(v)) chosenExpiry = v;
+  }, { signal: listening.signal });
+  const setAttachment = (f: File, restore = false) => {
+    if (ended || composerLocked || (sending && !restore)) return;
+    const choices = fileExpiryChoices();
+    const expiry = fitExpiry(choices);
+    if (expiry === null) {
+      toast(TOO_LATE_TO_ATTACH, 'warn');
+      return;
+    }
+    if (mode?.kind === 'edit') stopContext();
+    pendingFile = f;
+    attachName.textContent = cleanChatFileName(f.name);
+    attachMeta.textContent = `${formatBytes(f.size)} · Stored encrypted on the server’s disk until it expires`;
+    attachExpiry.replaceChildren(...choices.map((s) => {
+      const o = document.createElement('option');
+      o.value = String(s);
+      o.textContent = expiryLabel(s);
+      return o;
+    }));
+    attachExpiry.value = String(expiry);
+    show(attachBar);
+    updateSend();
+  };
   text.disabled = true;
+  attachBtn.disabled = true;
   text.placeholder = 'Connecting…';
+  const attachTitle = attachBtn.title;
   const updateSend = () => {
-    send.disabled = composerLocked || sending || text.value.trim() === '';
+    send.disabled = composerLocked || sending || (text.value.trim() === '' && (pendingFile === null || mode?.kind === 'edit'));
+    // In a chat's last minutes no lifetime ends before the chat does.
+    const tooLate = !composerLocked && fileExpiryChoices().length === 0;
+    attachBtn.disabled = composerLocked || sending || mode?.kind === 'edit' || tooLate;
+    attachBtn.title = tooLate ? TOO_LATE_TO_ATTACH : attachTitle;
   };
   updateSend();
+  // Time running out disables attaching even when nothing else happens.
+  const attachClock = window.setInterval(() => {
+    if (!ended) updateSend();
+  }, 5000);
+  listening.signal.addEventListener('abort', () => clearInterval(attachClock), { once: true });
+  attachBtn.addEventListener('click', () => {
+    if (!attachBtn.disabled) fileInput.click();
+  }, { signal: listening.signal });
+  fileInput.addEventListener('change', () => {
+    const picked = fileInput.files?.[0];
+    fileInput.value = '';
+    if (picked) setAttachment(picked);
+  }, { signal: listening.signal });
+  el('room-attach-clear').addEventListener('click', () => {
+    clearAttachment();
+    updateSend();
+    text.focus({ preventScroll: true });
+  }, { signal: listening.signal });
+  // Pasting a screenshot or copied image attaches it to the next message.
+  text.addEventListener('paste', (e) => {
+    if (ended || composerLocked || sending || mode?.kind === 'edit') return;
+    const data = e.clipboardData;
+    if (!data || data.files.length === 0 || data.getData('text/plain') !== '') return;
+    e.preventDefault();
+    const f = data.files[0]!;
+    const ext: Record<string, string> = { 'image/png': '.png', 'image/jpeg': '.jpg', 'image/gif': '.gif', 'image/webp': '.webp' };
+    setAttachment(f.name ? f : new File([f], `pasted-image${ext[f.type] ?? ''}`, { type: f.type }));
+  }, { signal: listening.signal });
+  chat.addEventListener('dragover', (e) => {
+    if (e.dataTransfer?.types.includes('Files')) e.preventDefault();
+  }, { signal: listening.signal });
+  chat.addEventListener('drop', (e) => {
+    if (!e.dataTransfer?.types.includes('Files')) return;
+    e.preventDefault();
+    const f = e.dataTransfer.files[0];
+    if (f) setAttachment(f);
+  }, { signal: listening.signal });
   function unlockComposer(): void {
     if (ended) return;
     show(waiting, false);
@@ -2282,7 +2657,7 @@ function openChat(sodium: Sodium, id: string, session: Session): void {
     if (mode?.kind === 'edit' && kind !== 'edit') text.value = '';
     mode = { kind, target };
     el('room-context-title').textContent = kind === 'edit' ? 'Edit message' : `Reply to ${target.from === session.slot ? 'yourself' : state.nameOf(target.from)}`;
-    el('room-context-quote').textContent = target.text;
+    el('room-context-quote').textContent = target.text || target.file?.name || '';
     context.querySelector('use')?.setAttribute('href', kind === 'edit' ? '#i-edit' : '#i-reply');
     show(context);
     if (kind === 'edit') text.value = target.text;
@@ -2313,8 +2688,8 @@ function openChat(sodium: Sodium, id: string, session: Session): void {
       e.preventDefault();
       stopContext();
     } else if (e.key === 'ArrowUp' && text.value === '' && !mode) {
-      // Like most chat apps: edit your last message.
-      const mine = [...state.messages].reverse().find((m) => m.from === session.slot && !m.deleted);
+      // Like most chat apps: edit your last text message.
+      const mine = [...state.messages].reverse().find((m) => m.from === session.slot && !m.deleted && m.text !== '');
       if (mine) {
         e.preventDefault();
         startContext('edit', mine);
@@ -2340,7 +2715,7 @@ function openChat(sodium: Sodium, id: string, session: Session): void {
       const quote = make('span', 'nb-m-quote');
       const who = make('strong', '');
       who.append(nameNode(target.from));
-      const quoted = make('span', '', target.text);
+      const quoted = make('span', '', target.text || target.file?.name || '');
       quoted.dir = 'auto';
       quote.append(who, quoted);
       bubble.append(quote);
@@ -2368,12 +2743,17 @@ function openChat(sodium: Sodium, id: string, session: Session): void {
     let value = cleanText(text.value);
     if (value.length > MAX_MESSAGE_LENGTH) value = cleanText(value.slice(0, MAX_MESSAGE_LENGTH));
     if (ended || sending || composerLocked) return;
-    if (value === '') {
+    const current = mode;
+    const fileToSend = current?.kind === 'edit' ? null : pendingFile;
+    if (fileToSend) {
+      const v = Number(attachExpiry.value);
+      if (fileExpiryChoices().includes(v)) chosenExpiry = v;
+    }
+    if (value === '' && !fileToSend) {
       if (text.value.trim() !== '') toast('Write a message with visible text.', 'warn');
       if (mode?.kind === 'edit') stopContext();
       return;
     }
-    const current = mode;
     if (current && current.target.deleted) {
       stopContext();
       return;
@@ -2386,19 +2766,53 @@ function openChat(sodium: Sodium, id: string, session: Session): void {
     const draft = text.value;
     let sendingLi: HTMLLIElement | null = null;
     if (current?.kind !== 'edit') {
-      sendingLi = showSending(value, current?.kind === 'reply' ? current.target : null);
+      sendingLi = showSending(value || (fileToSend ? `Encrypting ${cleanChatFileName(fileToSend.name)}…` : ''), current?.kind === 'reply' ? current.target : null);
       text.value = '';
+      clearAttachment();
       mode = null;
       show(context, false);
       grow();
     }
+    let uploaded: { id: string; deleteToken: string } | null = null;
     try {
       if (current?.kind === 'edit') {
         if (value !== current.target.text) await sendChat({ t: 'edit', id: newRecordId(sodium), time: Date.now(), target: current.target.id, text: value });
       } else {
+        let chatFile = undefined;
+        if (fileToSend) {
+          // Checked again now: time passed since the file was attached, and
+          // a lifetime only ever shrinks to one that still ends first.
+          const expiry = fitExpiry(fileExpiryChoices());
+          if (expiry === null) throw new AttachTimeError(TOO_LATE_TO_ATTACH);
+          status.textContent = `Encrypting ${cleanChatFileName(fileToSend.name)}…`;
+          show(status);
+          const up = await uploadRoomFile(sodium, fileToSend, expiry, () => ended, (frac) => {
+            if (!ended) status.textContent = `Uploading encrypted file (${Math.round(frac * 100)}%)…`;
+          }, () => {
+            // The lifetime starts now, at finalize: it must still end first.
+            if (!fileExpiryChoices().includes(expiry)) throw new AttachTimeError(UPLOAD_TOO_SLOW);
+          });
+          if (ended) {
+            void deleteUploadedRoomFiles([{ id: up.file.id, deleteToken: up.deleteToken }]);
+            return;
+          }
+          uploaded = { id: up.file.id, deleteToken: up.deleteToken };
+          chatFile = up.file;
+          show(status, false);
+        }
         // Receipts: the newest place read from each member, so others can
         // see whether they read the same.
-        await sendChat({ t: 'msg', id: newRecordId(sodium), time: Date.now(), text: value, reply: current?.kind === 'reply' ? { id: current.target.id, author: current.target.from } : null, seen: state.acks() });
+        const msgId = newRecordId(sodium);
+        const msg: MessageRecord = chatFile
+          ? { t: 'msg', id: msgId, time: Date.now(), text: value, reply: current?.kind === 'reply' ? { id: current.target.id, author: current.target.from } : null, seen: state.acks(), file: chatFile }
+          : { t: 'msg', id: msgId, time: Date.now(), text: value, reply: current?.kind === 'reply' ? { id: current.target.id, author: current.target.from } : null, seen: state.acks() };
+        if (!validMessage(msg)) throw new Error('Invalid message.');
+        const ok = await sendChat(msg);
+        if (uploaded) {
+          if (ok && !ended) uploadedFiles.set(msgId, uploaded);
+          else void deleteUploadedRoomFiles([uploaded]);
+          uploaded = null;
+        }
       }
       if (ended || sendingLi) return; // a new message's box may hold the next one by now
       text.value = '';
@@ -2406,18 +2820,31 @@ function openChat(sodium: Sodium, id: string, session: Session): void {
       show(context, false);
       grow();
     } catch (e) {
+      if (uploaded) {
+        // Best-effort cleanup of an uploaded paste whose chat message failed to send.
+        void deleteUploadedRoomFiles([uploaded]);
+        uploaded = null;
+      }
+      show(status, false);
       if (sendingLi && !ended) {
         // Back in the box: alone if it is still empty, else before
         // whatever was typed since.
         if (text.value.trim() === '' && !mode) {
           text.value = draft;
           if (current?.kind === 'reply' && !current.target.deleted) startContext('reply', current.target);
-        } else {
+        } else if (draft !== '') {
           text.value = `${draft}\n${text.value}`;
         }
+        if (fileToSend && !pendingFile) setAttachment(fileToSend, true);
         grow();
       }
-      failed(e, current?.kind === 'edit' ? 'Your edit was not saved.' : 'Your message was not sent; it’s still in the box.');
+      if (e instanceof AttachTimeError && !ended) {
+        // With no shorter lifetime left, sending again cannot help.
+        status.textContent = fileExpiryChoices().length === 0 ? TOO_LATE_TO_ATTACH : e.message;
+        show(status);
+      } else {
+        failed(e, current?.kind === 'edit' ? 'Your edit was not saved.' : 'Your message was not sent; it’s still in the box.');
+      }
     } finally {
       if (sendingLi) dropSending(sendingLi);
       sending = false;
@@ -2446,11 +2873,11 @@ function openChat(sodium: Sodium, id: string, session: Session): void {
   if (owner !== null) initOwner(sodium, id, session, owner, control, gone, signPublic, isEnded, state, listening.signal, revokePlace);
   // (Invites made in this tab add their secrets to the session; persist()
   // saves them with everything else.)
-  initDestroy(id, session, end, () => state.members.has(session.slot) && !state.removed.has(session.slot), listening.signal);
+  initDestroy(id, session, end, () => state.members.has(session.slot) && !state.removed.has(session.slot), pausePolling, resumePolling, listening.signal);
 }
 
 /** Anyone in the room can self-destruct it, after confirming in a dialog. */
-function initDestroy(id: string, session: Session, end: (heading: string, text: string) => void, admitted: () => boolean, signal: AbortSignal): void {
+function initDestroy(id: string, session: Session, end: (heading: string, text: string) => void, admitted: () => boolean, pausePolling: () => void, resumePolling: () => void, signal: AbortSignal): void {
   const dialog = el<HTMLDialogElement>('room-destroy-dialog');
   const confirm = el<HTMLButtonElement>('room-destroy-confirm');
   const error = el('room-destroy-error');
@@ -2469,16 +2896,18 @@ function initDestroy(id: string, session: Session, end: (heading: string, text: 
     if (confirm.disabled || !admitted()) return;
     show(error, false);
     const done = busy(confirm, 'Self-destructing…');
+    pausePolling();
     try {
       await destroyRoom(id, session.member);
       done();
-      end('Null Chat destroyed', 'It’s gone for everyone, with all its messages.');
+      end('Null Chat destroyed', 'It’s gone for everyone, with all its messages. Attached files are stored encrypted on the server’s disk as pastes and may remain until they expire.');
     } catch (e) {
       done();
       if (e instanceof ApiError && e.status === 404) {
         end('This Null Chat has ended', 'It self-destructed, expired, or the server restarted, or you were removed.');
         return;
       }
+      resumePolling();
       error.textContent = roomError(e, 'The chat could not be self-destructed. Check your connection and try again.');
       show(error);
     }
@@ -2645,16 +3074,40 @@ function initOwner(sodium: Sodium, id: string, session: Session, owner: string, 
   // the signed copy, and could hide it from us.
   const settings = session.settings!;
   const revoke = el<HTMLButtonElement>('room-invite-revoke');
+  const qrWrap = el('room-invite-qr-wrap');
+  const qrBox = el('room-invite-qr');
+  const qrToggle = el<HTMLButtonElement>('room-invite-qr-toggle');
+  const clearInviteQR = () => {
+    qrBox.replaceChildren();
+    show(qrWrap, false);
+    qrToggle.setAttribute('aria-expanded', 'false');
+    const span = qrToggle.querySelector('span');
+    if (span) span.textContent = 'Show QR code';
+  };
   /** The place of the link shown, so Revoke closes that invite. */
   let shown: number | null = null;
   const reset = () => {
     label.value = '';
     linkBox.textContent = '';
     shown = null;
+    clearInviteQR();
     show(result, false);
     show(form);
     show(error, false);
   };
+  qrToggle.addEventListener('click', () => {
+    const url = linkBox.textContent ?? '';
+    if (!url) return;
+    if (qrWrap.hidden) {
+      qrBox.replaceChildren(qrSvg(url));
+      show(qrWrap);
+      qrToggle.setAttribute('aria-expanded', 'true');
+      const span = qrToggle.querySelector('span');
+      if (span) span.textContent = 'Hide QR code';
+    } else {
+      clearInviteQR();
+    }
+  }, { signal });
   /** Places that count against the member limit: members, and invites that can still be used. */
   const placesTaken = () => {
     const taken = new Set<number>([0]);
@@ -2710,7 +3163,10 @@ function initOwner(sodium: Sodium, id: string, session: Session, owner: string, 
     dialog.showModal();
     label.focus();
   }, { signal });
-  el('room-invite-close').addEventListener('click', () => dialog.close(), { signal });
+  el('room-invite-close').addEventListener('click', () => {
+    reset();
+    dialog.close();
+  }, { signal });
   dialog.addEventListener('close', reset, { signal });
   el('room-invite-another').addEventListener('click', () => {
     reset();

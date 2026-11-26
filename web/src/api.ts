@@ -79,6 +79,7 @@ const API_ERRORS = new Set([
   "upload busy",
   "upload incomplete",
   "upload too slow",
+  "wait must be 0 to 20",
   "waiting for the creator to let you in",
 ]);
 
@@ -506,14 +507,43 @@ export interface RoomRecords {
   expiresIn: number;
 }
 
-/** Fetches the records after the first `after`, in server order. */
-export async function fetchRecords(id: string, memberToken: string, after: number): Promise<RoomRecords> {
+/** Maximum long-poll wait in seconds (must match server maxRoomWaitSeconds). */
+export const MAX_ROOM_WAIT = 20;
+
+/** Combines a timeout with an optional caller AbortSignal (works on Safari 16.4+). */
+function timedSignal(ms: number, external?: AbortSignal): { signal: AbortSignal; done: () => void } {
+  const ac = new AbortController();
+  const timer = setTimeout(() => ac.abort(), ms);
+  const onAbort = () => ac.abort();
+  if (external) {
+    if (external.aborted) ac.abort();
+    else external.addEventListener('abort', onAbort, { once: true });
+  }
+  return {
+    signal: ac.signal,
+    done: () => {
+      clearTimeout(timer);
+      external?.removeEventListener('abort', onAbort);
+    },
+  };
+}
+
+/** Fetches the records after the first `after`, in server order. With wait > 0, long-polls up to `wait` seconds. */
+export async function fetchRecords(id: string, memberToken: string, after: number, wait = 0, signal?: AbortSignal): Promise<RoomRecords> {
   if (!Number.isSafeInteger(after) || after < 0 || after > ROOM_RECORDS) throw new Error('Invalid room record index.');
-  const resp = await fetch(apiURL(`/api/v1/rooms/${id}/records?after=${after}`), {
-    ...base, signal: AbortSignal.timeout(REQUEST_MS),
-    method: 'GET',
-    headers: { 'Nullbin-Member-Token': memberToken },
-  });
+  if (!Number.isSafeInteger(wait) || wait < 0 || wait > MAX_ROOM_WAIT) throw new Error('Invalid room wait duration.');
+  const qs = wait > 0 ? `?after=${after}&wait=${wait}` : `?after=${after}`;
+  const req = timedSignal(REQUEST_MS + wait * 1000, signal);
+  let resp: Response;
+  try {
+    resp = await fetch(apiURL(`/api/v1/rooms/${id}/records${qs}`), {
+      ...base, signal: req.signal,
+      method: 'GET',
+      headers: { 'Nullbin-Member-Token': memberToken },
+    });
+  } finally {
+    req.done();
+  }
   if (resp.status !== 200) throw await errorFrom(resp, ROOM_JSON_BYTES);
   const v = await roomJSON(resp);
   const { records, next, expires_in: left } = v;

@@ -57,6 +57,7 @@ import {
   safetyCode,
   verifySignature,
   type Chain,
+  type ChatFile,
   type Ack,
   type MessageRecord,
   type Ref,
@@ -85,6 +86,7 @@ export interface Message {
   key: string;
   from: number;
   text: string;
+  file: ChatFile | null;
   time: number;
   reply: Ref | null;
   /**
@@ -834,9 +836,10 @@ export class RoomState {
       let quote: Message['quote'] = null;
       if (r.reply) {
         const target = this.byId.get(`${r.reply.author}:${r.reply.id}`) ?? null;
-        quote = { author: r.reply.author, text: target && !target.deleted ? target.text : null, target: target && !target.deleted ? target : null };
+        const preview = target && !target.deleted ? (target.text || target.file?.name || null) : null;
+        quote = { author: r.reply.author, text: preview, target: target && !target.deleted ? target : null };
       }
-      const message: Message = { id: r.id, key, from, text: r.text, time: r.time, reply: r.reply, quote, edited: false, deleted: false, reactions: new Map() };
+      const message: Message = { id: r.id, key, from, text: r.text, file: r.file ?? null, time: r.time, reply: r.reply, quote, edited: false, deleted: false, reactions: new Map() };
       this.messages.push(message);
       this.byId.set(key, message);
       return { kind: 'message', message };
@@ -854,6 +857,7 @@ export class RoomState {
         if (target.from !== from) return null;
         target.deleted = true;
         target.text = '';
+        target.file = null;
         target.reactions.clear();
         break;
       case 'react': {
@@ -985,6 +989,7 @@ export class RoomState {
     this.creatorNameKey = null;
     for (const m of this.messages) {
       m.text = '';
+      m.file = null;
       if (m.quote) m.quote.text = null;
     }
     this.messages.length = 0;

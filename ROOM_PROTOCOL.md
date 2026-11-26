@@ -174,7 +174,7 @@ removed. `room`, `invite`, `remove` and `admit` must come from place 0.
 
 | `t` | Fields | Meaning |
 |---|---|---|
-| `msg` | `text`, `reply` (`{id, author}` or null), `seen` (20 receipts) | a message |
+| `msg` | `text`, `reply` (`{id, author}` or null), `seen` (20 receipts), optional `file` (`{id, key, name, size}`) | a message (text may be empty when `file` is present) |
 | `edit` | `target`, `text` | replace the text of the sender's own message `target` |
 | `unsend` | `target` | delete the sender's own message `target` |
 | `react` | `target`, `author`, `emoji` (one of six), `on` | add or remove a reaction |

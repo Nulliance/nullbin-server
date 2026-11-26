@@ -351,3 +351,47 @@ func TestRoomInviteLifetimeOverHTTP(t *testing.T) {
 		}
 	}
 }
+
+func TestRoomLongPollWaitValidationAndWake(t *testing.T) {
+	e := roomEnv(t)
+	c := createRoom(t, e)
+	member := map[string]string{"Nullbin-Member-Token": c.MemberToken}
+	for _, bad := range []string{"-1", "21", "abc", "01"} {
+		if resp, _ := e.do(t, "GET", "/api/v1/rooms/"+c.ID+"/records?after=0&wait="+bad, nil, member); resp.StatusCode != http.StatusBadRequest {
+			t.Errorf("wait=%s: got %d, want 400", bad, resp.StatusCode)
+		}
+	}
+	payload := bytes.Repeat([]byte{0x55}, rooms.MinRecordBytes)
+	done := make(chan []byte, 1)
+	go func() {
+		resp, data := e.do(t, "GET", "/api/v1/rooms/"+c.ID+"/records?after=0&wait=5", nil, member)
+		if resp.StatusCode != http.StatusOK {
+			t.Errorf("long-poll status: %d %s", resp.StatusCode, data)
+			return
+		}
+		done <- data
+	}()
+	time.Sleep(40 * time.Millisecond)
+	postHeaders := map[string]string{"Nullbin-Member-Token": c.MemberToken, "Content-Type": "application/octet-stream"}
+	if resp, data := e.do(t, "POST", "/api/v1/rooms/"+c.ID+"/records", payload, postHeaders); resp.StatusCode != http.StatusCreated {
+		t.Fatalf("post: %d %s", resp.StatusCode, data)
+	}
+	select {
+	case data := <-done:
+		var out struct {
+			Next    int `json:"next"`
+			Records []struct {
+				From int    `json:"from"`
+				Data string `json:"data"`
+			} `json:"records"`
+		}
+		if err := json.Unmarshal(data, &out); err != nil {
+			t.Fatalf("unmarshal: %v", err)
+		}
+		if out.Next != 1 || len(out.Records) != 1 || out.Records[0].Data != base64.StdEncoding.EncodeToString(payload) {
+			t.Fatalf("unexpected long-poll response: %s", data)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("HTTP long-poll did not wake on record post")
+	}
+}

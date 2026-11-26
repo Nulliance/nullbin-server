@@ -25,7 +25,10 @@ const (
 	InviteTokenHeader = "Nullbin-Invite-Token"
 )
 
-const maxRoomCreateBody = 128 // {"expires_in": 604800, "max_members": 20, "invite_ttl": 3600}
+const (
+	maxRoomCreateBody  = 128 // {"expires_in": 604800, "max_members": 20, "invite_ttl": 3600}
+	maxRoomWaitSeconds = 20  // long-poll cap; well below writeTimeout (30s) and proxy timeouts
+)
 
 // registerRooms adds the room API. Without a room store the routes do not
 // exist, so a server with rooms turned off answers 404 as for any unknown
@@ -231,22 +234,6 @@ func (s *Server) handleRoomRead(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	// Like paste downloads and comments, a response holds a download slot,
-	// so a client that reads slowly cannot pin many responses at once, and
-	// is charged to the per-client and total download bandwidth.
-	ip := s.ips.clientIP(r)
-	release, ok := s.downloadSlots.acquire(ip)
-	if !ok {
-		w.Header().Set("Retry-After", "5")
-		writeError(w, http.StatusServiceUnavailable, "too many active downloads")
-		return
-	}
-	defer release()
-	if ok, _ := s.downloadBytes.allowN(ip, time.Now(), 0); !ok {
-		w.Header().Set("Retry-After", "60")
-		writeError(w, http.StatusTooManyRequests, "rate limited")
-		return
-	}
 	after := 0
 	if v := r.URL.Query().Get("after"); v != "" {
 		n, ok := parseChunkIndex(v)
@@ -256,9 +243,66 @@ func (s *Server) handleRoomRead(w http.ResponseWriter, r *http.Request) {
 		}
 		after = n
 	}
-	recs, next, expires, err := s.cfg.Rooms.Read(id, r.Header.Get(MemberTokenHeader), after)
+	var wait time.Duration
+	if v := r.URL.Query().Get("wait"); v != "" {
+		n, ok := parseChunkIndex(v)
+		if !ok || n > maxRoomWaitSeconds {
+			writeError(w, http.StatusBadRequest, "wait must be 0 to 20")
+			return
+		}
+		wait = time.Duration(n) * time.Second
+	}
+	ip := s.ips.clientIP(r)
+	token := r.Header.Get(MemberTokenHeader)
+	var (
+		recs    []rooms.Record
+		next    int
+		expires time.Time
+		err     error
+	)
+	if wait > 0 {
+		// Long-poll uses its own slot pool so waiting readers can never starve
+		// paste downloads. If the wait pool is full, degrade gracefully to an
+		// immediate non-blocking read rather than failing the request.
+		if releaseWait, ok := s.roomWaitSlots.acquire(ip); ok {
+			func() {
+				defer releaseWait()
+				rc := http.NewResponseController(w)
+				_ = rc.SetWriteDeadline(time.Now().Add(wait + writeTimeout))
+				recs, next, expires, err = s.cfg.Rooms.ReadWait(r.Context(), id, token, after, wait)
+			}()
+		} else {
+			recs, next, expires, err = s.cfg.Rooms.Read(id, token, after)
+		}
+	} else {
+		recs, next, expires, err = s.cfg.Rooms.Read(id, token, after)
+	}
 	if err != nil {
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) || r.Context().Err() != nil {
+			return
+		}
 		s.roomError(w, "room read", err)
+		return
+	}
+	// Like paste downloads and comments, writing the response holds a download
+	// slot (never held while waiting), so a client that reads slowly cannot pin
+	// many responses at once, and is charged to the download bandwidth budgets.
+	release, ok := s.downloadSlots.acquire(ip)
+	if !ok {
+		for _, rec := range recs {
+			clear(rec.Data)
+		}
+		w.Header().Set("Retry-After", "5")
+		writeError(w, http.StatusServiceUnavailable, "too many active downloads")
+		return
+	}
+	defer release()
+	if ok, _ := s.downloadBytes.allowN(ip, time.Now(), 0); !ok {
+		for _, rec := range recs {
+			clear(rec.Data)
+		}
+		w.Header().Set("Retry-After", "60")
+		writeError(w, http.StatusTooManyRequests, "rate limited")
 		return
 	}
 	left := max(int64(expires.Sub(s.cfg.Rooms.Now())/time.Second), 0)

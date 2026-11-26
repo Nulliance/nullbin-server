@@ -17,6 +17,7 @@ package rooms
 
 import (
 	"bytes"
+	"context"
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
@@ -147,8 +148,9 @@ type room struct {
 	creator    Creator
 	slots      [MaxSlots]slot
 	records    []Record
-	bytes      int64 // accounted: overhead and records
-	data       int64 // record bytes only
+	bytes      int64         // accounted: overhead and records
+	data       int64         // record bytes only
+	notify     chan struct{} // closed and replaced whenever records arrive or room/member state changes
 }
 
 // Creator identifies the network a room was created from, by the keyed
@@ -310,7 +312,7 @@ func (s *Store) CreateWith(o Options, by Creator) (Created, error) {
 	rand.Read(idb[:])
 	c := Created{ID: hex.EncodeToString(idb[:]), OwnerToken: newToken(), MemberToken: newToken()}
 	c.ExpiresAt = s.now().Add(expiresIn)
-	r := &room{expires: c.ExpiresAt, maxMembers: o.MaxMembers, inviteTTL: o.InviteTTL, owner: hash(c.OwnerToken), creator: by, bytes: roomOverhead}
+	r := &room{expires: c.ExpiresAt, maxMembers: o.MaxMembers, inviteTTL: o.InviteTTL, owner: hash(c.OwnerToken), creator: by, bytes: roomOverhead, notify: make(chan struct{})}
 	r.slots[0] = slot{state: slotJoined, member: hash(c.MemberToken)}
 	s.rooms[c.ID] = r
 	s.bytes += r.bytes
@@ -337,6 +339,10 @@ func (s *Store) live(id string) *room {
 
 // dropLocked forgets a room and zeroes what it held.
 func (s *Store) dropLocked(id string, r *room) {
+	if r.notify != nil {
+		close(r.notify)
+		r.notify = nil
+	}
 	for _, rec := range r.records {
 		clear(rec.Data)
 	}
@@ -344,6 +350,14 @@ func (s *Store) dropLocked(id string, r *room) {
 	s.bytes -= r.bytes
 	s.charge(r.creator, -1, -r.data)
 	delete(s.rooms, id)
+}
+
+// wakeLocked notifies any long-polling readers of a room. Caller holds s.mu.
+func wakeLocked(r *room) {
+	if r.notify != nil {
+		close(r.notify)
+		r.notify = make(chan struct{})
+	}
 }
 
 // owned returns the room if the presented token is its owner's.
@@ -547,22 +561,73 @@ func (s *Store) Post(id, memberToken string, data []byte) (int, error) {
 	r.data += n
 	s.bytes += cost
 	s.charge(r.creator, 0, n)
+	wakeLocked(r)
 	return len(r.records) - 1, nil
 }
 
 // Read returns copies of up to MaxReadBatch records after the first
 // `after` ones, the index to ask for next, and when the room expires.
 func (s *Store) Read(id, memberToken string, after int) ([]Record, int, time.Time, error) {
+	return s.ReadWait(context.Background(), id, memberToken, after, 0)
+}
+
+// ReadWait is Read, but when no records are available after `after` and
+// wait > 0 it waits up to wait (or until ctx is done, a record arrives, the
+// member is removed, or the room ends) before returning. Invalid tokens,
+// unknown or expired rooms, and bad indices always return immediately.
+func (s *Store) ReadWait(ctx context.Context, id, memberToken string, after int, wait time.Duration) ([]Record, int, time.Time, error) {
 	member := present(memberToken)
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	r, _ := s.member(id, member)
-	if r == nil {
-		return nil, 0, time.Time{}, ErrNotFound
+	var deadline time.Time
+	if wait > 0 {
+		deadline = time.Now().Add(wait)
 	}
-	if after < 0 || after > len(r.records) {
-		return nil, 0, time.Time{}, ErrInvalid
+	for {
+		s.mu.Lock()
+		r, from := s.member(id, member)
+		if r == nil {
+			s.mu.Unlock()
+			return nil, 0, time.Time{}, ErrNotFound
+		}
+		if after < 0 || after > len(r.records) {
+			s.mu.Unlock()
+			return nil, 0, time.Time{}, ErrInvalid
+		}
+		if after < len(r.records) || wait <= 0 {
+			out, end, exp := readBatchLocked(r, after)
+			s.mu.Unlock()
+			return out, end, exp, nil
+		}
+		ch := r.notify
+		rem := time.Until(deadline)
+		if expRem := r.expires.Sub(s.now()); expRem < rem {
+			rem = expRem
+		}
+		if r.slots[from].state == slotPending {
+			if pendRem := r.slots[from].invited.Add(r.slots[from].ttl).Sub(s.now()); pendRem < rem {
+				rem = pendRem
+			}
+		}
+		if rem <= 0 {
+			out, end, exp := readBatchLocked(r, after)
+			s.mu.Unlock()
+			return out, end, exp, nil
+		}
+		s.mu.Unlock()
+
+		timer := time.NewTimer(rem)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return nil, 0, time.Time{}, ctx.Err()
+		case <-ch:
+			timer.Stop()
+		case <-timer.C:
+			wait = 0
+		}
 	}
+}
+
+func readBatchLocked(r *room, after int) ([]Record, int, time.Time) {
 	end := after
 	size := 0
 	for end < len(r.records) && end-after < MaxReadBatch && (end == after || size+len(r.records[end].Data) <= MaxReadBytes) {
@@ -573,7 +638,7 @@ func (s *Store) Read(id, memberToken string, after int) ([]Record, int, time.Tim
 	for _, rec := range r.records[after:end] {
 		out = append(out, Record{From: rec.From, Data: append([]byte(nil), rec.Data...)})
 	}
-	return out, end, r.expires, nil
+	return out, end, r.expires
 }
 
 // MemberState is what the owner sees about one slot.
@@ -638,6 +703,7 @@ func (s *Store) Remove(id, ownerToken string, n int) error {
 	}
 	r.slots[n].state = slotRemoved
 	r.slots[n].member = [sha256.Size]byte{}
+	wakeLocked(r)
 	return nil
 }
 

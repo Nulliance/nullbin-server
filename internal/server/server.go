@@ -57,7 +57,10 @@ const (
 	downloadGrace          = 2 * time.Minute // password and save dialogs pause a download
 	downloadSlotsTotal     = 512
 	downloadSlotsPerClient = 16
-	downloadSlotsPerSite   = 32       // per IPv6 /48
+	downloadSlotsPerSite   = 32 // per IPv6 /48
+	roomWaitSlotsTotal     = 512
+	roomWaitSlotsPerClient = 16
+	roomWaitSlotsPerSite   = 32       // per IPv6 /48
 	pendingPerClient       = 8        // unfinished uploads per client network
 	pendingPerSite         = 32       // unfinished uploads per IPv6 /48
 	downloadMinRate        = 32 << 10 // bytes per second
@@ -126,6 +129,7 @@ type Server struct {
 	globalBytes   *limiter
 	chunkSlots    *slotPool
 	downloadSlots *slotPool
+	roomWaitSlots *slotPool
 	pending       *pendingTracker
 	diskWrites    chan struct{}
 	handler       http.Handler
@@ -157,6 +161,7 @@ func New(cfg Config) *Server {
 		globalBytes:   newLimiter(globalBytesPerSecond, globalBytesPerSecond, 1),
 		chunkSlots:    newSlotPool(chunkSlotsTotal, chunkSlotsPerClient, chunkSlotsPerSite),
 		downloadSlots: newSlotPool(downloadSlotsTotal, downloadSlotsPerClient, downloadSlotsPerSite),
+		roomWaitSlots: newSlotPool(roomWaitSlotsTotal, roomWaitSlotsPerClient, roomWaitSlotsPerSite),
 		pending:       newPendingTracker(pendingPerClient, pendingPerSite, storage.PendingTTL),
 		diskWrites:    make(chan struct{}, diskWritesTotal),
 		logger:        cfg.Logger,

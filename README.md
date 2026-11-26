@@ -131,17 +131,23 @@ Messages are end-to-end encrypted with forward secrecy: every message has its
 own key, which is deleted once used, and keys change when someone is
 removed. Names, the room's name and invite labels are encrypted too, so an
 invite link alone shows none of them. Only people in the room can read it, not even the server, which
-keeps rooms only in memory: a server restart also ends them. Your access
+keeps room messages only in memory: a server restart also ends them. Your access
 stays in the browser tab where you joined (one tab at a time); closing it
 ends your access unless the browser restores the tab (ask for a new invite
 to come back), and after a reload you see new messages only. New members
 cannot read messages from before they joined. If the room ever shows that
 someone else took your place, leave and tell the person who invited you.
-Rooms are text only: up to 20 places (each invite uses one, even if it is
+Rooms hold up to 20 places (each invite uses one, even if it is
 revoked, expires or the person is removed) and 1,000 records (messages,
 reactions, edits and key changes all count). Keys take more of them the
 more people join: a room of 5 keeps roughly 900 for messages, a full room
-of 20 roughly 400 to 500.
+of 20 roughly 400 to 500. You can also attach encrypted files or images
+in chat: each file is uploaded as an encrypted paste stored on disk until
+it expires, after a lifetime you pick that always ends before the chat
+does (attaching is refused in a chat's last few minutes), and its link and
+key travel only inside
+the encrypted chat message. Files are never fetched automatically; click
+**Save file** or **Show image** to decrypt them.
 
 ### Large attachments
 

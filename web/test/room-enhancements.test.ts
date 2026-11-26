@@ -14,6 +14,7 @@ import {
   type MessageRecord,
 } from '../src/room-crypto.ts';
 import { expiryChoices, looksLikeImage, uploadRoomFile } from '../src/room-files.ts';
+import { isProgramFile } from '../src/files.ts';
 import { encodeInviteFragment } from '../src/link.ts';
 import { qrcodegen } from '../vendor/qrcodegen.js';
 
@@ -179,4 +180,11 @@ test('an upload whose lifetime no longer ends before the chat is never finalized
   } finally {
     g.fetch = orig;
   }
+});
+
+test('programs are saved through the browser downloads, documents may go straight to disk', () => {
+  // Audit A19: a save written through the save dialog may skip the marks and
+  // checks the browser gives its own downloads.
+  for (const n of ['setup.exe', 'SETUP.EXE', 'install.msi', 'run.bat', 'script.ps1', 'a.lnk', 'x.js', 'app.dmg', 'tool.sh', 'disk.iso', 'macro.docm', 'invoice.pdf.exe']) assert.ok(isProgramFile(n), n);
+  for (const n of ['photo.png', 'report.pdf', 'notes.txt', 'data.csv', 'archive.zip', 'exe', 'my.exe.txt', 'readme']) assert.ok(!isProgramFile(n), n);
 });

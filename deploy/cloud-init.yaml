@@ -51,12 +51,14 @@ runcmd:
   - [sh, -euc, "sshd -t && (systemctl reload ssh || systemctl restart ssh)"]
   - [sh, -euc, "ufw default deny incoming && ufw default allow outgoing && ufw allow OpenSSH && ufw allow 80/tcp && ufw allow 443/tcp && ufw --force enable"]
   - [systemctl, enable, --now, docker]
+  # The clone is on main, whose helper script checks that the latest release
+  # is one (on main, published, signed by the Release workflow) before
+  # selecting it, as "nullbin update" does; nothing from the release runs
+  # before that. One block, so a failed check stops here: runcmd itself
+  # would go on to the next command.
   - |
     set -eu
-    version=$(curl -fsSL https://api.github.com/repos/jacobzymet/nullbin-go/releases/latest | sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p')
-    test -n "$version"
-    printf "%s" "$version" | grep -Eqx "v[0-9]+[.][0-9]+[.][0-9]+" || { echo "nullbin: could not look up the latest release" >&2; exit 1; }
-    git clone --no-checkout https://github.com/jacobzymet/nullbin-go.git /opt/nullbin
-    git -C /opt/nullbin checkout --detach "refs/tags/$version"
-  - [install, -m, "0600", /opt/nullbin-settings.env, /opt/nullbin/deploy/.env]
-  - [/opt/nullbin/deploy/nullbin, start]
+    git clone https://github.com/jacobzymet/nullbin-go.git /opt/nullbin
+    /opt/nullbin/deploy/nullbin install
+    install -m 0600 /opt/nullbin-settings.env /opt/nullbin/deploy/.env
+    /opt/nullbin/deploy/nullbin start

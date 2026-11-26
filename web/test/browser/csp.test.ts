@@ -3164,3 +3164,146 @@ test('Null Chat: replies to a file keep its extension visible, are not marked ed
   assert.equal(await reply.locator('.nb-m-quote-edited').isHidden(), true, 'a file-only message is not shown as edited since');
   await a.check();
 });
+
+test('burn after reading: leaving at the warning lets go of the link, so Back cannot use an open', async () => {
+  // Audit A7: the warning kept the key, and a page restored with Back could
+  // still be opened, using an open the first reader never used.
+  const { share } = await createPaste({ text: 'not opened yet', burn: true });
+  const h = await open();
+  await goto(h, share);
+  await h.page.waitForSelector('#gate-burn', { state: 'visible' });
+  await h.page.evaluate(() => {
+    window.dispatchEvent(new PageTransitionEvent('pagehide', { persisted: true }));
+    window.dispatchEvent(new PageTransitionEvent('pageshow', { persisted: true }));
+  });
+  await h.page.waitForSelector('#problem', { state: 'visible' });
+  assert.match((await h.page.textContent('#problem-title')) ?? '', /wasn’t opened/);
+  assert.equal(await h.page.isVisible('#gate-burn'), false, 'the warning and its Open button are gone');
+  assert.deepEqual(h.apiCalls, [], 'nothing was fetched, so no open was used');
+  await h.check();
+  await h.context.close();
+  // The link still works for its reader.
+  const r = await open();
+  await goto(r, share);
+  await r.page.click('#burn-open');
+  await r.page.waitForSelector('#view-text-card', { state: 'visible' });
+  assert.equal(await viewerText(r.page), 'not opened yet');
+  await r.check();
+  await r.context.close();
+});
+
+test('a draft cloned from a burn paste is not cleared when leaving it later', async () => {
+  // Audit A14: the burn paste's leave handler stayed after Clone, and later
+  // replaced the draft (or a new paste's result) with "cleared".
+  const { share } = await createPaste({ text: 'clone me', burn: true });
+  const h = await open();
+  await goto(h, share);
+  await h.page.click('#burn-open');
+  await h.page.waitForSelector('#view-text-card', { state: 'visible' });
+  await h.page.click('#view-clone');
+  await h.page.waitForSelector('#create:not([hidden])');
+  await h.page.evaluate(() => {
+    window.dispatchEvent(new PageTransitionEvent('pagehide', { persisted: true }));
+    window.dispatchEvent(new PageTransitionEvent('pageshow', { persisted: true }));
+  });
+  await h.page.waitForTimeout(200);
+  assert.equal(await h.page.isVisible('#problem'), false, 'the draft was not replaced');
+  assert.equal(await h.page.isVisible('#create'), true);
+  assert.equal(await h.page.inputValue('#text'), 'clone me');
+  await h.check();
+  await h.context.close();
+});
+
+test('on /chat, a pasted image never lands in the hidden paste draft', async () => {
+  // Audit A15: the paste form is hidden on /chat, but its clipboard handler
+  // still attached images pasted anywhere on the page.
+  const h = await open();
+  const pasteImage = () => h.page.evaluate(() => {
+    const dt = new DataTransfer();
+    dt.items.add(new File([new Uint8Array([0x89, 0x50, 0x4e, 0x47])], 'shot.png', { type: 'image/png' }));
+    document.body.dispatchEvent(new ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true }));
+  });
+  await goto(h, `${origin}/chat`);
+  await h.page.waitForSelector('#room-create-form:not([hidden])');
+  await pasteImage();
+  assert.equal(await h.page.locator('#file-list li').count(), 0, 'nothing attached to the hidden draft');
+  // The same paste on the paste page attaches it, so the event did reach it.
+  await goto(h, `${origin}/`);
+  await h.page.waitForSelector('#create-form:not([hidden])');
+  await pasteImage();
+  await h.page.waitForSelector('#file-list li');
+  await h.check();
+  await h.context.close();
+});
+
+test('Null Chat: Revoke needs its own confirmation for each invite', async (t) => {
+  // Audit A13: "Sure? Revoke it" survived closing the dialog, so one click
+  // could revoke a newer invite without asking.
+  await restartAPI();
+  t.after(() => restartAPI());
+  const a = await open();
+  t.after(() => a.context.close());
+  await goto(a, `${origin}/chat`);
+  await a.page.fill('#room-you', 'Ada');
+  await a.page.click('#room-create-submit');
+  await a.page.waitForSelector('#room-chat:not([hidden])');
+  await a.page.waitForFunction(() => !(document.getElementById('room-text') as HTMLTextAreaElement).disabled);
+  const create = async (who: string) => {
+    await a.page.click('#room-invite-open');
+    await a.page.fill('#room-invite-label', who);
+    await a.page.click('#room-invite-create');
+    await a.page.waitForSelector('#room-invite-result:not([hidden])');
+  };
+  await create('Bob');
+  await a.page.click('#room-invite-revoke');
+  assert.equal(await a.page.textContent('#room-invite-revoke'), 'Sure? Revoke it');
+  await a.page.click('#room-invite-close');
+  await create('Cy');
+  assert.equal(await a.page.textContent('#room-invite-revoke'), 'Revoke this invite', 'a new invite starts unarmed');
+  await a.page.click('#room-invite-revoke');
+  assert.equal(await a.page.textContent('#room-invite-revoke'), 'Sure? Revoke it', 'one click only asks');
+  assert.equal(await a.page.isVisible('#room-invite-dialog'), true);
+  assert.equal(a.sent.some((s) => s.path.endsWith('/remove')), false, 'nothing was revoked');
+  await a.check();
+});
+
+test('Null Chat: an invite that expired before the creator could let them in is closed at once, without blaming them', { timeout: 90_000 }, async (t) => {
+  // Audit A11: the creator's tab retried the refused admit on every check for
+  // minutes, then said the invite was used after it expired, though it was
+  // used in time. The server answers an admit for an expired place with 404;
+  // here it is made to, with the members list saying the place expired.
+  await restartAPI();
+  t.after(() => restartAPI());
+  const a = await open();
+  t.after(() => a.context.close());
+  await goto(a, `${origin}/chat`);
+  await a.page.fill('#room-you', 'Ada');
+  await a.page.click('#room-create-submit');
+  await a.page.waitForSelector('#room-chat:not([hidden])');
+  await a.page.waitForFunction(() => !(document.getElementById('room-text') as HTMLTextAreaElement).disabled);
+  await a.page.click('#room-invite-open');
+  await a.page.fill('#room-invite-label', 'Bob');
+  await a.page.click('#room-invite-create');
+  await a.page.waitForSelector('#room-invite-result:not([hidden])');
+  const link = (await a.page.textContent('#room-invite-link')) ?? '';
+  await a.page.click('#room-invite-close');
+  let admits = 0;
+  await a.page.route('**/api/v1/rooms/*/members/*/admit', (route) => {
+    admits++;
+    return route.fulfill({ status: 404, contentType: 'application/json', body: '{"error":"not found"}' });
+  });
+  await a.page.route('**/api/v1/rooms/*/members', (route) =>
+    route.fulfill({ status: 200, contentType: 'application/json', body: '{"members":{"0":"joined","1":"expired"}}' }));
+  const b = await open();
+  t.after(() => b.context.close());
+  await goto(b, link);
+  await b.page.waitForSelector('#room-join:not([hidden])');
+  await b.page.fill('#room-join-name', 'Bob');
+  await b.page.click('#room-join-submit');
+  await a.page.waitForFunction(() => /was used in time, but it expired before this tab could let them in/.test(document.getElementById('room-messages')?.textContent ?? ''), null, { timeout: 30_000 });
+  assert.ok(!/after it expired/.test((await a.page.textContent('#room-messages')) ?? ''), 'the invitee is not said to be late');
+  await a.page.waitForTimeout(6000); // a few more checks
+  assert.equal(admits, 1, 'the refused admit is not retried');
+  assert.ok(a.sent.some((s) => s.method === 'POST' && s.path.endsWith('/members/1/remove')), 'the place was closed');
+  await a.check(/404/);
+});

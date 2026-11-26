@@ -1365,9 +1365,34 @@ function openChat(sodium: Sodium, id: string, session: Session): void {
         if (!state.removed.has(slot)) await control(record);
       });
       soon = true;
-    } catch {
+    } catch (e) {
+      // The server refuses to admit a waiting place after its invite's
+      // lifetime (the same 404 as for a room that is gone). Ask what the
+      // place is: if it expired, close it now instead of retrying it on every
+      // check until this tab's own grace period ends.
+      if (e instanceof ApiError && e.status === 404 && owner !== null) {
+        const states = await fetchMembers(id, owner).catch(() => null);
+        const invite = session.invites.find((i) => i.slot === slot);
+        if (states?.get(slot) === 'expired' && invite) {
+          closeExpired(slot, join, invite.exp);
+          return; // stays in admitting: nothing more to try
+        }
+      }
       admitting.delete(slot); // tried again on the next check
     }
+  };
+  /**
+   * Closes a place whose invite expired before it was let in. Whose fault it
+   * was is told by the join's own time: one made in time just found this tab
+   * closed, and nothing about it says the person was late.
+   */
+  const closeExpired = (slot: number, join: Member, exp: number) => {
+    if (lateShown.has(slot)) return;
+    lateShown.add(slot);
+    add(join.joinedAt <= exp
+      ? system('The invite for ', nameNode(slot), ' was used in time, but it expired before this tab could let them in (that needs the chat open here). Its place was closed: send them a new invite.')
+      : system('Someone used the invite for ', nameNode(slot), ' after it expired, so they weren’t let in and its place was closed. If it was them, send a new invite.'), false, false);
+    void closePlace(slot);
   };
   /** Closes a place nobody should hold: here, on the server, then for everyone. */
   const closePlace = async (slot: number) => {
@@ -1385,7 +1410,7 @@ function openChat(sodium: Sodium, id: string, session: Session): void {
     for (const slot of state.contested) {
       if (contested.has(slot) || state.removed.has(slot)) continue;
       contested.add(slot);
-      add(system('A second person used the invite for ', nameNode(slot), ' after they were let in, so the link was shared or leaked. Their place was closed: if they are who you meant, send them a new invite another way.'), false, false);
+      add(system('A second person used the invite for ', nameNode(slot), ', so the link was shared or leaked. Their place was closed: if they are who you meant, send them a new invite another way.'), false, false);
       void closePlace(slot);
     }
     for (const slot of state.badProof) {
@@ -1418,11 +1443,7 @@ function openChat(sodium: Sodium, id: string, session: Session): void {
       // invite expired is nobody it lets in (clocks and a sleeping tab get
       // ten minutes).
       if (Date.now() > invite.exp + INVITE_SLACK_MS) {
-        if (!lateShown.has(slot)) {
-          lateShown.add(slot);
-          add(system('Someone used the invite for ', nameNode(slot), ' after it expired, so they weren’t let in and its place was closed. If it was them, send a new invite.'), false, false);
-          void closePlace(slot);
-        }
+        closeExpired(slot, m, invite.exp);
         continue;
       }
       // Never past the chat's own member limit. Counted from this tab's own
@@ -2398,12 +2419,22 @@ function openChat(sodium: Sodium, id: string, session: Session): void {
         add(system('Keys from ', nameNode(slot), ' keep going to others but not to you: they, or the server, are leaving you out. Compare safety codes, and leave if in doubt.'), false, false);
       }
       for (const note of state.forkNotes) {
-        // Whose message the receipt is about is the claimer's choice too,
-        // so the notice names only the claimer.
-        const claimer = Number(note.split(':')[0]);
-        if (warnedForks.has(`receipts:${claimer}`)) continue;
-        warnedForks.add(`receipts:${claimer}`);
-        add(system(nameNode(claimer), '’s read receipts don’t match the conversation you saw. Either their receipts are false, or someone, maybe with the server’s help, is showing people different conversations. Compare with the others another way, and leave if in doubt.'), false, false);
+        // A receipt that disagrees with what we read at a place has two
+        // possible causes, and nothing here tells which: the receipt is
+        // false, or the place's sender (maybe with the server's help) sent
+        // us and the claimer different messages there. Naming only the
+        // claimer blamed whoever was shown the other message, while the
+        // sender who did it went unnamed; so the notice names both, as the
+        // two possibilities. (A false receipt can point at any sender, which
+        // is why it names its claimer too.) Our own messages cannot differ
+        // without our key, so for them only the receipt can be false.
+        const [claimer, author] = note.split(':').map(Number) as [number, number];
+        const key = `receipts:${claimer}:${author}`;
+        if (warnedForks.has(key)) continue;
+        warnedForks.add(key);
+        add(author === session.slot || author === claimer
+          ? system(nameNode(claimer), '’s read receipts don’t match the conversation you saw: their receipts are false, or someone, maybe with the server’s help, is showing people different conversations. Compare with the others another way, and leave if in doubt.')
+          : system(nameNode(claimer), '’s read receipt for a message from ', nameNode(author), ' doesn’t match the one you got. Either ', nameNode(claimer), '’s receipt is false, or ', nameNode(author), ', maybe with the server’s help, sent the two of you different messages. Nothing here tells which: compare with the others another way, and leave if in doubt.'), false, false);
       }
       // Every room has a signed room record (its name and end), right after
       // the creator's join: a history without it was cut.
@@ -3152,10 +3183,14 @@ function initOwner(sodium: Sodium, id: string, session: Session, owner: string, 
   };
   /** The place of the link shown, so Revoke closes that invite. */
   let shown: number | null = null;
+  // Revoke's "Sure?" step belongs to one invite: a new one, or the dialog
+  // starting over, needs its own (set below, where the step is defined).
+  let disarmRevoke = () => {};
   const reset = () => {
     label.value = '';
     linkBox.textContent = '';
     shown = null;
+    disarmRevoke();
     clearInviteQR();
     show(result, false);
     show(form);
@@ -3190,24 +3225,32 @@ function initOwner(sodium: Sodium, id: string, session: Session, owner: string, 
   // once), then for everyone, by a signed removal. Two steps, like Remove.
   let armed = 0;
   let armedAt = 0;
+  let armedFor: number | null = null;
+  disarmRevoke = () => {
+    clearTimeout(armed);
+    armed = 0;
+    armedFor = null;
+    revoke.classList.remove('nb-armed');
+    if (!revoke.disabled) revoke.textContent = 'Revoke this invite';
+  };
   noRepeat(revoke);
   revoke.addEventListener('click', async () => {
     const slot = shown;
     if (slot === null) return;
-    if (!armed) {
+    // Armed for another invite (or none): this click only arms it for this one.
+    if (!armed || armedFor !== slot) {
+      disarmRevoke();
       revoke.classList.add('nb-armed');
       revoke.textContent = 'Sure? Revoke it';
       armedAt = Date.now();
-      armed = window.setTimeout(() => {
-        armed = 0;
-        revoke.classList.remove('nb-armed');
-        revoke.textContent = 'Revoke this invite';
-      }, 4000);
+      armedFor = slot;
+      armed = window.setTimeout(disarmRevoke, 4000);
       return;
     }
     if (Date.now() - armedAt < CONFIRM_GAP_MS) return;
     clearTimeout(armed);
     armed = 0;
+    armedFor = null;
     revoke.classList.remove('nb-armed');
     const done = busy(revoke, 'Revoking…');
     try {

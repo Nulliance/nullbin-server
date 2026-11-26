@@ -17,7 +17,7 @@
 import { UPLOAD_CHUNK, createPaste, deletePaste, fetchPaste, finalizePaste, putChunk, rechunk } from './api.ts';
 import { MAX_BUFFERED_DOWNLOAD } from './attachments.ts';
 import { openPaste, preparePaste } from './crypto.ts';
-import { downloadBlob } from './files.ts';
+import { downloadBlob, isProgramFile } from './files.ts';
 import { ByteReader, PasteError } from './format.ts';
 import { MAX_PREVIEW_BYTES, previewInfo } from './image.ts';
 import { cleanChatFileName, type ChatFile } from './room-crypto.ts';
@@ -159,7 +159,10 @@ export async function saveRoomFile(
   let reader: ByteReader | null = null;
   let writable: FileSystemWritableFileStream | null = null;
   const chunks: Uint8Array<ArrayBuffer>[] = [];
-  const picker = (window as unknown as SaveFilePickerWindow).showSaveFilePicker;
+  // A program goes through the browser's downloads, with their protections
+  // (see isProgramFile), whenever it fits in memory.
+  const direct = !(isProgramFile(file.name) && file.size <= MAX_BUFFERED_DOWNLOAD);
+  const picker = direct ? (window as unknown as SaveFilePickerWindow).showSaveFilePicker : undefined;
   // Ask for the save destination immediately inside the click gesture if available.
   let handle: FileSystemFileHandle | null = null;
   if (picker) {

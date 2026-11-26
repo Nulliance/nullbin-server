@@ -101,6 +101,13 @@ func TestConfigRejectsBadValues(t *testing.T) {
 		"NULLBIN_TRUSTED_PROXIES=11.0.0.0/8",
 		"NULLBIN_TRUSTED_PROXIES=104.0.0.0/11",
 		"NULLBIN_TRUSTED_PROXIES=2400::/28",
+		// Public ranges wider than a proxy fleet (audit A6: 0.0.0.0/12 was
+		// accepted, so rotating X-Forwarded-For defeated every limit).
+		"NULLBIN_TRUSTED_PROXIES=0.0.0.0/12",
+		"NULLBIN_TRUSTED_PROXIES=104.16.0.0/13",
+		"NULLBIN_TRUSTED_PROXIES=198.51.100.0/23",
+		"NULLBIN_TRUSTED_PROXIES=2400:cb00::/32",
+		"NULLBIN_TRUSTED_PROXIES=2001:db8::/47",
 		"NULLBIN_MAXSIZE=100MiB", // typo: unknown variable
 		"NULLBIN_DEBUG=1",
 	}
@@ -113,7 +120,7 @@ func TestConfigRejectsBadValues(t *testing.T) {
 
 func TestProxyRanges(t *testing.T) {
 	// Private and loopback space may be wide; public ranges as wide as a CDN's.
-	for _, v := range []string{"10.0.0.0/8", "127.0.0.0/8", "172.16.0.0/12", "100.64.0.0/10", "fc00::/7", "fe80::/10", "104.16.0.0/12", "2400:cb00::/32", "2a06:98c0::/29", "192.0.2.1", "2001:db8::1"} {
+	for _, v := range []string{"10.0.0.0/8", "127.0.0.0/8", "172.16.0.0/12", "100.64.0.0/10", "fc00::/7", "fe80::/10", "198.51.100.0/24", "2001:db8:1::/48", "192.0.2.1", "2001:db8::1"} {
 		if _, err := loadConfig([]string{"NULLBIN_TRUSTED_PROXIES=" + v}); err != nil {
 			t.Errorf("%s refused: %v", v, err)
 		}
@@ -222,5 +229,19 @@ func TestConfigRooms(t *testing.T) {
 	}
 	if _, err := loadConfig([]string{"NULLBIN_ROOMS=maybe"}); err == nil {
 		t.Fatal("NULLBIN_ROOMS=maybe accepted")
+	}
+}
+
+// A data directory that can only be a mistake is refused (audit A16).
+func TestDataDirRefusesRootAndClimbing(t *testing.T) {
+	for _, v := range []string{"/", "//", "data/../..", "../data", "/srv/nullbin/../../etc"} {
+		if _, err := loadConfig([]string{"NULLBIN_DATA_DIR=" + v}); err == nil || !strings.Contains(err.Error(), "NULLBIN_DATA_DIR") {
+			t.Errorf("NULLBIN_DATA_DIR=%q accepted: %v", v, err)
+		}
+	}
+	for _, v := range []string{"data", "/data", "/srv/nullbin/data", "./data"} {
+		if _, err := loadConfig([]string{"NULLBIN_DATA_DIR=" + v}); err != nil {
+			t.Errorf("NULLBIN_DATA_DIR=%q refused: %v", v, err)
+		}
 	}
 }

@@ -27,6 +27,21 @@ export function downloadBlob(blob: Blob, name: string): () => void {
   return revoke;
 }
 
+/**
+ * File types an operating system runs or opens as a program when they are
+ * double-clicked. Saved through the browser's own downloads, they get its
+ * protections, whatever the browser does for files written through the
+ * save dialog: the downloaded-from-the-internet mark (Windows'
+ * Mark-of-the-Web, macOS quarantine), and the checks that warn before
+ * running one.
+ */
+const PROGRAM = /\.(?:exe|msi|msix|msixbundle|appx|appxbundle|com|scr|pif|cpl|bat|cmd|ps1|psm1|vbs|vbe|js|jse|wsf|wsh|hta|lnk|url|scf|reg|msc|jar|app|dmg|pkg|mpkg|command|sh|bash|zsh|csh|run|bin|appimage|deb|rpm|apk|iso|img|vhd|vhdx|xll|docm|xlsm|pptm|application|gadget|inf|settingcontent-ms)$/i;
+
+/** Whether a file of this name should go through the browser's downloads rather than straight to disk. */
+export function isProgramFile(name: string): boolean {
+  return PROGRAM.test(name);
+}
+
 /** A text/plain document cannot interpret paste content as HTML or script. */
 export function openRawText(text: string): void {
   const { link } = localLink(new Blob([text], { type: 'text/plain;charset=utf-8' }));

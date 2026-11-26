@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"net/netip"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -107,6 +108,8 @@ func loadConfig(environ []string) (config, error) {
 	if v, ok := env["NULLBIN_DATA_DIR"]; ok {
 		if strings.TrimSpace(v) == "" || strings.ContainsRune(v, 0) {
 			errs = append(errs, errors.New("NULLBIN_DATA_DIR: must be a non-empty path"))
+		} else if err := dataDirOK(v); err != nil {
+			errs = append(errs, fmt.Errorf("NULLBIN_DATA_DIR: %w", err))
 		}
 		cfg.DataDir = v
 	}
@@ -223,9 +226,31 @@ var privateRanges = []netip.Prefix{
 	netip.MustParsePrefix("fe80::/10"),
 }
 
-// proxyRangeOK reports whether p is narrow enough to name proxies.
+// dataDirOK refuses data directories that can only be mistakes: a
+// filesystem root, or a path that climbs with "..". (Startup also refuses
+// links and directories holding other things; see storage.)
+func dataDirOK(v string) error {
+	for _, part := range strings.FieldsFunc(filepath.ToSlash(v), func(r rune) bool { return r == '/' }) {
+		if part == ".." {
+			return errors.New(`must not contain ".."`)
+		}
+	}
+	// A root is nothing but separators after its volume name (/, C:\, or a bare UNC prefix).
+	if clean := filepath.Clean(v); strings.Trim(clean[len(filepath.VolumeName(clean)):], `/\`) == "" {
+		return errors.New("must not be the filesystem root; give a directory of its own, such as /data")
+	}
+	return nil
+}
+
+// proxyRangeOK reports whether p is narrow enough to name proxies. A public
+// range may be as wide as a proxy fleet one runs (/24 for IPv4, /48 for
+// IPv6). Anything wider would trust X-Forwarded-For from strangers who can
+// reach the server from inside it, so every per-network limit would key on an
+// address they chose: 0.0.0.0/12 holds cloud providers' addresses, and a /29
+// of IPv6 holds whole networks. Wider ranges only inside private, shared or
+// loopback space, which the internet cannot send from.
 func proxyRangeOK(p netip.Prefix) bool {
-	if (p.Addr().Is4() && p.Bits() >= 12) || (p.Addr().Is6() && p.Bits() >= 29) {
+	if (p.Addr().Is4() && p.Bits() >= 24) || (p.Addr().Is6() && p.Bits() >= 48) {
 		return true
 	}
 	for _, r := range privateRanges {
@@ -256,12 +281,10 @@ func parseProxies(v string) ([]netip.Prefix, error) {
 				return nil, fmt.Errorf("%q: write IPv4 prefixes in IPv4 form, without zones", item)
 			}
 			// A range this wide is no proxy: it would trust X-Forwarded-For
-			// from almost anyone, so every per-network limit would key on an
-			// address the client chose. Public ranges may be as wide as a
-			// CDN's (/12 for IPv4, /29 for IPv6); wider ones only inside
-			// private, shared or loopback space (10.0.0.0/8, fc00::/7).
+			// from strangers, so every per-network limit would key on an
+			// address the client chose (see proxyRangeOK).
 			if !proxyRangeOK(p) {
-				return nil, fmt.Errorf("%q is too wide to be a proxy range (at most /12 for IPv4 and /29 for IPv6, or a private range such as 10.0.0.0/8 or fc00::/7)", item)
+				return nil, fmt.Errorf("%q is too wide to be a proxy range (public ranges at most /24 for IPv4 and /48 for IPv6; wider only inside private space such as 10.0.0.0/8 or fc00::/7)", item)
 			}
 			out = append(out, p)
 			continue

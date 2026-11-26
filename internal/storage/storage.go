@@ -219,7 +219,9 @@ type Store struct {
 	mu     sync.Mutex
 	busy   map[string]bool // pending uploads with an operation in progress
 	claims map[string]bool // claimed/ entries that are still in use
-	readMu sync.Mutex      // serializes durable limited-read reservations
+	// Limited opens and revocations of one paste wait their turn, so its
+	// count is written by one at a time; different pastes go in parallel.
+	readLocks map[string]*idLock
 
 	now      func() time.Time
 	minChunk int64
@@ -230,6 +232,46 @@ func Open(dir string) (*Store, error) {
 	return OpenWithLimits(dir, Limits{MaxBytes: DefaultMaxBytes, MaxPending: DefaultMaxPending})
 }
 
+// dedicatedDir refuses a data directory Nullbin should not take over: a
+// link to somewhere else, or an existing directory holding other things,
+// such as / or /etc given by mistake. Startup tightens the directory to 0700
+// and creates its folders there, which would break such a directory. An
+// empty or missing one, or one Nullbin already uses, is fine; so is a
+// volume's lost+found.
+func dedicatedDir(dir string) error {
+	fi, err := os.Lstat(dir)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("check data directory: %w", err)
+	}
+	if fi.Mode()&fs.ModeSymlink != 0 {
+		return fmt.Errorf("data directory %s is a symbolic link; give the directory it points to", dir)
+	}
+	if !fi.IsDir() {
+		return fmt.Errorf("data directory %s is not a directory", dir)
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return fmt.Errorf("read data directory: %w", err)
+	}
+	ours, others := false, false
+	for _, e := range entries {
+		switch e.Name() {
+		case dirPending, dirPastes, dirClaimed:
+			ours = true
+		case "lost+found":
+		default:
+			others = true
+		}
+	}
+	if others && !ours {
+		return fmt.Errorf("data directory %s already holds other files; give Nullbin an empty directory of its own", dir)
+	}
+	return nil
+}
+
 // OpenWithLimits reconstructs reservations before accepting any requests.
 func OpenWithLimits(dir string, limits Limits) (*Store, error) {
 	if limits.MaxPastes == 0 {
@@ -237,6 +279,9 @@ func OpenWithLimits(dir string, limits Limits) (*Store, error) {
 	}
 	if limits.MaxBytes <= 0 || limits.MaxPending <= 0 || limits.MaxPastes < 0 {
 		return nil, errors.New("invalid storage limits")
+	}
+	if err := dedicatedDir(dir); err != nil {
+		return nil, err
 	}
 	if err := os.MkdirAll(dir, dirPerm); err != nil {
 		return nil, fmt.Errorf("create data directory: %w", err)
@@ -271,6 +316,7 @@ func OpenWithLimits(dir string, limits Limits) (*Store, error) {
 		root:         root,
 		busy:         make(map[string]bool),
 		claims:       make(map[string]bool),
+		readLocks:    make(map[string]*idLock),
 		now:          time.Now,
 		minChunk:     MinChunkBytes,
 	}
@@ -777,8 +823,7 @@ func (s *Store) get(id, token string, consume bool) (*Paste, error) {
 // readLimited commits one open before returning any ciphertext. The counter
 // remains on disk, including when a connection drops or the process restarts.
 func (s *Store) readLimited(id, token string) (*Paste, error) {
-	s.readMu.Lock()
-	defer s.readMu.Unlock()
+	defer s.readLock(id)()
 	if !s.lock(id) {
 		return nil, ErrNotFound
 	}
@@ -937,8 +982,7 @@ func (s *Store) Revoke(id, deleteToken string, n int) error {
 	gone, err := func() (bool, error) {
 		// The same locks as an open, so a reservation and a revocation never
 		// overwrite each other's metadata.
-		s.readMu.Lock()
-		defer s.readMu.Unlock()
+		defer s.readLock(id)()
 		if !s.lock(id) {
 			return false, ErrConflict
 		}
@@ -1226,7 +1270,18 @@ func (s *Store) Sweep() SweepStats {
 		switch {
 		case err == nil:
 			if now.Before(m.ExpiresAt) && !exhausted(m) {
-				continue
+				// Valid metadata with a blob that is missing or the wrong
+				// size (a disk fault, or a change to the data directory) can
+				// never be served, but would hold its quota until it expired.
+				intact, gone, berr := s.blobIntact(dir, m)
+				switch {
+				case berr != nil:
+					st.Errors++
+					continue
+				case gone || intact:
+					continue // removed or claimed meanwhile, or fine
+				}
+				unreadable = true
 			}
 		case errors.Is(err, ErrNewerFormat):
 			// Written by a newer release. Its expiry is still known, so it
@@ -1382,6 +1437,35 @@ func (s *Store) discard(dir, id string) error {
 		return err
 	}
 	return s.removeClaim(claim)
+}
+
+// idLock is one paste's turn for limited opens and revocations.
+type idLock struct {
+	mu      sync.Mutex
+	waiting int // holders and waiters; the entry goes when none are left
+}
+
+// readLock waits for id's turn and returns the function that ends it. One
+// lock for all pastes made every limited open on the server wait for every
+// other, each holding it through a durable write.
+func (s *Store) readLock(id string) (unlock func()) {
+	s.mu.Lock()
+	l := s.readLocks[id]
+	if l == nil {
+		l = &idLock{}
+		s.readLocks[id] = l
+	}
+	l.waiting++
+	s.mu.Unlock()
+	l.mu.Lock()
+	return func() {
+		l.mu.Unlock()
+		s.mu.Lock()
+		if l.waiting--; l.waiting == 0 {
+			delete(s.readLocks, id)
+		}
+		s.mu.Unlock()
+	}
 }
 
 func (s *Store) lock(id string) bool {
@@ -1587,6 +1671,25 @@ func (s *Store) syncDir(dir string) error {
 	}
 	defer f.Close()
 	return f.Sync()
+}
+
+// blobIntact reports whether a paste's blob is a regular file of its
+// recorded size. gone is true when the whole paste disappeared meanwhile
+// (deleted, or claimed by a reader), which says nothing about the blob.
+func (s *Store) blobIntact(dir string, m Meta) (intact, gone bool, err error) {
+	fi, err := s.root.Lstat(path.Join(dir, fileBlob))
+	if errors.Is(err, fs.ErrNotExist) {
+		if _, derr := s.root.Lstat(dir); errors.Is(derr, fs.ErrNotExist) {
+			return false, true, nil
+		} else if derr != nil {
+			return false, false, derr
+		}
+		return false, false, nil
+	}
+	if err != nil {
+		return false, false, err
+	}
+	return fi.Mode().IsRegular() && fi.Size() == m.Size, false, nil
 }
 
 func checkSize(f *os.File, want int64) error {

@@ -25,6 +25,12 @@ services:
     security_opt: ["no-new-privileges:true"]
     # Process limit (threads count). Generous for full load; stops a runaway.
     pids_limit: 4096
+    # Memory: Null Chats (at most 128 MiB), streaming buffers and Go's own
+    # use fit well inside this. A flood then fails this container, not the
+    # host and whatever else runs on it; GOMEMLIMIT makes Go collect
+    # garbage harder before it gets there.
+    mem_limit: 512m
+    memswap_limit: 512m
     # No core dumps: Null Chats live in this process's memory.
     ulimits:
       core: 0
@@ -40,6 +46,7 @@ services:
       NULLBIN_MAX_PENDING: ${MAX_PENDING:-1024}
       NULLBIN_MAX_PASTES: ${MAX_PASTES:-100000}
       NULLBIN_ROOMS: ${ROOMS:-true}
+      GOMEMLIMIT: "384MiB"
     volumes:
       - nullbin-data:/data
     networks:
@@ -67,6 +74,8 @@ services:
     cap_drop: [ALL]
     security_opt: ["no-new-privileges:true"]
     pids_limit: 1024
+    mem_limit: 256m
+    memswap_limit: 256m
     environment:
       DOMAIN: ${API_DOMAIN:?Set API_DOMAIN in deploy/.env.api}
       # true only when Cloudflare's proxy is in front (README: Behind Cloudflare).

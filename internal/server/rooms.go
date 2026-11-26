@@ -37,17 +37,43 @@ func (s *Server) registerRooms(mux *http.ServeMux) {
 	if s.cfg.Rooms == nil {
 		return
 	}
+	// A request with a valid credential for what it does is charged to that
+	// action's budget for its network; any other request to the strangers'
+	// budget. Requests anyone can make (wrong tokens, or someone else's room)
+	// then cannot use up the budget of a member or owner on the same network,
+	// so nobody nearby can stop the owner removing them or members posting.
+	owner := func(c rooms.Credential) bool { return c.Owner }
+	member := func(c rooms.Credential) bool { return c.Member || c.Pending }
+	ownerOrMember := func(c rooms.Credential) bool { return c.Owner || c.Member }
 	mux.Handle("POST /api/v1/rooms", s.route(maxRoomCreateBody, s.roomCreates, s.handleRoomCreate))
-	mux.Handle("POST /api/v1/rooms/{id}/invites", s.route(0, s.roomWrites, s.handleRoomInvite))
-	mux.Handle("POST /api/v1/rooms/{id}/join", s.route(0, s.roomWrites, s.handleRoomJoin))
-	mux.Handle("POST /api/v1/rooms/{id}/records", s.route(rooms.MaxRecordBytes, s.roomWrites, s.handleRoomPost))
-	mux.Handle("GET /api/v1/rooms/{id}/records", s.route(0, s.roomReads, s.handleRoomRead))
-	mux.Handle("GET /api/v1/rooms/{id}/members", s.route(0, s.roomReads, s.handleRoomMembers))
-	mux.Handle("POST /api/v1/rooms/{id}/members/{n}/admit", s.route(0, s.roomWrites, s.handleRoomAdmit))
-	mux.Handle("POST /api/v1/rooms/{id}/members/{n}/remove", s.route(0, s.roomWrites, s.handleRoomRemove))
-	mux.Handle("DELETE /api/v1/rooms/{id}", s.route(0, s.roomWrites, s.handleRoomDelete))
+	mux.Handle("POST /api/v1/rooms/{id}/invites", s.route(0, nil, s.roomLimited(s.roomAdmin, owner, s.handleRoomInvite)))
+	mux.Handle("POST /api/v1/rooms/{id}/join", s.route(0, s.roomJoins, s.handleRoomJoin))
+	mux.Handle("POST /api/v1/rooms/{id}/records", s.route(rooms.MaxRecordBytes, nil, s.roomLimited(s.roomWrites, member, s.handleRoomPost)))
+	mux.Handle("GET /api/v1/rooms/{id}/records", s.route(0, nil, s.roomLimited(s.roomReads, member, s.handleRoomRead)))
+	mux.Handle("GET /api/v1/rooms/{id}/members", s.route(0, nil, s.roomLimited(s.roomReads, owner, s.handleRoomMembers)))
+	mux.Handle("POST /api/v1/rooms/{id}/members/{n}/admit", s.route(0, nil, s.roomLimited(s.roomAdmin, owner, s.handleRoomAdmit)))
+	mux.Handle("POST /api/v1/rooms/{id}/members/{n}/remove", s.route(0, nil, s.roomLimited(s.roomAdmin, owner, s.handleRoomRemove)))
+	mux.Handle("DELETE /api/v1/rooms/{id}", s.route(0, nil, s.roomLimited(s.roomAdmin, ownerOrMember, s.handleRoomDelete)))
 	if !s.cfg.APIOnly {
 		mux.Handle("GET /r/{id}", s.route(0, s.pages, s.roomPage))
+	}
+}
+
+// roomLimited rate-limits a room request: to lim when its tokens are a
+// credential that accepts takes for this room, otherwise to roomStrangers.
+func (s *Server) roomLimited(lim *limiter, accepts func(rooms.Credential) bool, h http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		budget := s.roomStrangers
+		if id := r.PathValue("id"); rooms.ValidID(id) &&
+			accepts(s.cfg.Rooms.Credentials(id, r.Header.Get(OwnerTokenHeader), r.Header.Get(MemberTokenHeader))) {
+			budget = lim
+		}
+		if ok, wait := budget.allow(s.ips.clientIP(r), s.nowFunc()); !ok {
+			w.Header().Set("Retry-After", strconv.Itoa(int(wait.Seconds()+0.999)))
+			writeError(w, http.StatusTooManyRequests, "rate limited")
+			return
+		}
+		h(w, r)
 	}
 }
 

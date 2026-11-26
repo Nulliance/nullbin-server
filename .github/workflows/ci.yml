@@ -393,6 +393,18 @@ jobs:
           # A local release tag on this commit; CI cannot fetch the real ones
           # while the repository is private.
           git tag v9.9.9
+          # A new clone selects a release only through install, which checks
+          # it first: this tag is not on main, published or signed.
+          git clone --quiet .. "$RUNNER_TEMP/fresh"
+          if sudo "$RUNNER_TEMP/fresh/deploy/nullbin" install v9.9.9; then exit 1; fi
+          if sudo "$RUNNER_TEMP/fresh/deploy/nullbin" install main; then exit 1; fi
+          sudo NULLBIN_TEST_UNRELEASED=1 "$RUNNER_TEMP/fresh/deploy/nullbin" install v9.9.9 | tee "$RUNNER_TEMP/install.txt"
+          grep -q '^Installed v9.9.9 (commit ' "$RUNNER_TEMP/install.txt"
+          test "$(git -C "$RUNNER_TEMP/fresh" rev-parse HEAD)" = "$(git rev-parse 'v9.9.9^{commit}')"
+          # Once set up, install refuses: changing versions is update's job.
+          sudo touch "$RUNNER_TEMP/fresh/deploy/.env"
+          if sudo NULLBIN_TEST_UNRELEASED=1 "$RUNNER_TEMP/fresh/deploy/nullbin" install v9.9.9; then exit 1; fi
+          sudo rm -rf "$RUNNER_TEMP/fresh"
           # Earlier steps left scratch files in the checkout; a server's has none.
           git -C .. clean -fdq
           # Only published releases on main are installed; this tag is neither.

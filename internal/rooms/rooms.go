@@ -360,6 +360,30 @@ func wakeLocked(r *room) {
 	}
 }
 
+// Credential says what a request's tokens are good for in one room.
+type Credential struct {
+	Owner   bool // the owner token
+	Member  bool // an admitted member's token
+	Pending bool // the token of someone waiting to be let in
+}
+
+// Credentials checks an owner token and a member token for room id. The
+// server uses it to charge requests with a valid credential to their own
+// budget, apart from requests anyone can make. Every comparison runs, as in
+// owned and member, so timing shows nothing about which one matched.
+func (s *Store) Credentials(id, ownerToken, memberToken string) Credential {
+	owner, member := present(ownerToken), present(memberToken)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var c Credential
+	c.Owner = s.owned(id, owner) != nil
+	if r, n := s.member(id, member); r != nil {
+		c.Member = r.slots[n].state == slotJoined
+		c.Pending = r.slots[n].state == slotPending
+	}
+	return c
+}
+
 // owned returns the room if the presented token is its owner's.
 func (s *Store) owned(id string, owner presented) *room {
 	r := s.live(id)

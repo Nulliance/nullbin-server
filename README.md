@@ -243,16 +243,17 @@ server with SSH and run:
 ```bash
 sudo apt-get update
 sudo apt-get install -y docker.io docker-compose-v2 git curl
-VERSION=$(curl -fsSL https://api.github.com/repos/jacobzymet/nullbin-go/releases/latest | grep -o '"tag_name": *"[^"]*"' | head -n 1 | cut -d '"' -f 4)
-echo "Installing $VERSION"
-git clone --no-checkout https://github.com/jacobzymet/nullbin-go.git nullbin &&
-git -C nullbin checkout --detach "refs/tags/$VERSION" &&
-cd nullbin/deploy
+git clone https://github.com/jacobzymet/nullbin-go.git nullbin &&
+cd nullbin/deploy &&
+sudo ./nullbin install
 ```
 
-It should print a version such as `Installing v1.2.3`. If it prints only
-`Installing`, stop: see [troubleshooting](#troubleshooting). A message about
-a "detached HEAD" is normal.
+It should end with a line such as `Installed v1.2.3 (commit 1a2b3c…)`.
+`install` selects the latest release only after checking that it is one:
+a tag on the main branch, published on the Releases page, and signed by this
+repository's Release workflow (the same checks as `update`; see
+[Update](#update)). If it stops with an error instead, do not continue: see
+[troubleshooting](#troubleshooting).
 
 **2. Set your domain.** Give the domain name only, without `https://`:
 
@@ -292,15 +293,14 @@ connect with SSH and run:
 ```bash
 sudo apt-get update
 sudo apt-get install -y docker.io docker-compose-v2 git curl
-VERSION=$(curl -fsSL https://api.github.com/repos/jacobzymet/nullbin-go/releases/latest | grep -o '"tag_name": *"[^"]*"' | head -n 1 | cut -d '"' -f 4)
-echo "Installing $VERSION"
-git clone --no-checkout https://github.com/jacobzymet/nullbin-go.git nullbin &&
-git -C nullbin checkout --detach "refs/tags/$VERSION" &&
-cd nullbin/deploy
+git clone https://github.com/jacobzymet/nullbin-go.git nullbin &&
+cd nullbin/deploy &&
+sudo ./nullbin install
 ```
 
-**Write down the version it prints** (such as `v1.2.3`); you will build the
-website from the same one. If it prints only `Installing`, stop: see
+**Write down the version and commit it prints** (such as
+`Installed v1.2.3 (commit 1a2b3c…)`); you will build the website from that
+exact commit. If it stops with an error instead, do not continue: see
 [troubleshooting](#troubleshooting).
 
 Configure the API with its domain name, then the website's exact address
@@ -314,14 +314,19 @@ sudo ./nullbin start
 Check: `https://api.example.com/api/v1/version` should show `"mode":"api"`
 and your version. The API's home page showing "Not found" is expected.
 
-**2. Build the website on your own computer.** Use the version you wrote
-down:
+**2. Build the website on your own computer.** Use the commit your server
+checked and printed (the whole one: `git -C ~/nullbin rev-parse HEAD` on the
+server shows it again), never just a version name, which anyone who could
+push a tag could point at other code:
 
 ```sh
-git clone --no-checkout https://github.com/jacobzymet/nullbin-go.git nullbin
-git -C nullbin checkout --detach refs/tags/v1.2.3
+git clone https://github.com/jacobzymet/nullbin-go.git nullbin
 cd nullbin
+git checkout --detach 1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b
+git describe --tags --exact-match
 ```
+
+The last command should print the version you wrote down.
 
 Then build it with your API's address and the website's own address (the
 second one only gives link previews in chat apps their image), using
@@ -449,8 +454,9 @@ the last cached result available at login.
 **Option B:** after updating the server, build the website from the same
 version and upload it again (steps 2 and 3 of
 [Option B](#option-b-separate-hosting)). In your existing copy on your
-computer, switch versions with `git fetch --tags` and
-`git checkout --detach refs/tags/v1.2.3`.
+computer, switch to the commit the server now runs (`git -C ~/nullbin
+rev-parse HEAD` there) with `git fetch --tags` and
+`git checkout --detach 1a2b3c4d…`.
 Always update the server first.
 
 `update` installs only versions published on the Releases page from the
@@ -638,7 +644,7 @@ snapshots may keep copies.
 
 | Problem | What to do |
 |---|---|
-| The install prints only `Installing`, or `nullbin update` cannot find the latest release | The server could not reach GitHub, or no release exists yet. Check the [Releases page](https://github.com/jacobzymet/nullbin-go/releases) and try again. Do not continue without a version. |
+| `nullbin install` or `nullbin update` cannot find the latest release, or says a version is not a release | The server could not reach GitHub, or no release exists yet. Check the [Releases page](https://github.com/jacobzymet/nullbin-go/releases) and try again. If it says a tag is not on the main branch, not published, or not signed by the Release workflow, do not install it: report it, since that is what someone who took over a release tag would leave behind. |
 | The site does not open, or HTTPS is not ready | Check that DNS points at the right server and ports 80 and 443 are open in both firewalls. Then check `sudo ./nullbin status` and `sudo ./nullbin logs`. |
 | The site says "This site is served only through Cloudflare." | Cloudflare mode is on, but visitors reach the server directly. Set the DNS record to **Proxied** in Cloudflare, or turn the mode off with `sudo ./nullbin cloudflare off`. |
 | Cloudflare shows error 526 (invalid SSL certificate) | The server is using its own certificate while Cloudflare is set to **Full (strict)**. Run `sudo ./nullbin cloudflare` and set the mode it shows. |
@@ -851,7 +857,7 @@ startup.
 | `NULLBIN_MAX_PASTES` | `100000` | Pastes at once, including unfinished ones (1 to 10,000,000). Keeps a volume from running out of inodes before bytes. |
 | `NULLBIN_MAX_SIZE` | `100MiB` | Largest paste, `64KiB` to `2GiB`. |
 | `NULLBIN_BEHIND_HTTPS` | `false` | `true` sends `Strict-Transport-Security: max-age=31536000`. |
-| `NULLBIN_TRUSTED_PROXIES` | empty | IPs or CIDR ranges whose `X-Forwarded-For` header is trusted. Public ranges wider than /12 (IPv4) or /29 (IPv6) are refused; private, shared and loopback ranges may be wider (such as 10.0.0.0/8 or fc00::/7). |
+| `NULLBIN_TRUSTED_PROXIES` | empty | IPs or CIDR ranges of your own proxies, whose `X-Forwarded-For` header is trusted. Public ranges wider than /24 (IPv4) or /48 (IPv6) are refused, since anyone who can send from inside one could choose the address every limit counts against; private, shared and loopback ranges may be wider (such as 10.0.0.0/8 or fc00::/7). Put a CDN such as Cloudflare in front of a proxy you run (as the shipped Caddy does), never in this list. |
 | `NULLBIN_ROOMS` | `true` | Null Chats. `false` removes their API: a separately hosted website's room page then says rooms are off, and the all-in-one server answers room links with 404. They are kept in memory only: at most 1,000 rooms and 128 MiB in total; 4 MiB of messages per room; and per client network (IPv4 address or IPv6 /64) at most 10 live rooms holding 4 MiB of messages together, four times that per IPv6 /48. |
 
 The `nullbin` program also has `nullbin healthcheck` (used by the container

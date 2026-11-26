@@ -1369,6 +1369,43 @@ test('the creator closes a place two people proved they had the link for, and no
   assert.ok(s.contested.has(1));
 });
 
+test('a second valid join that came before the admit was read back still closes the place', () => {
+  // Audit A12: the creator admits one joiner, and another valid join for the
+  // same place arrives before that admit comes back. It used to wait
+  // unexamined, and the creator was never told the link had leaked.
+  const a = person(0);
+  const b = person(1);
+  const b2 = person(1);
+  const secret = sodium.randombytes_buf(32);
+  const s = new RoomState(sodium, key, ROOM, {
+    slot: 0, signPublic: a.sign.publicKey, boxes: new Map([[0, { publicKey: a.box.publicKey, secretKey: a.box.privateKey }]]),
+    roster: ROSTER, nameSecret: NAMES.privateKey,
+    checkProof: (slot, j) => (slot === 1 ? j.proof !== null && checkJoinProof(sodium, secret, ROOM, slot, j.key, j.box, j.proof) : null),
+  });
+  const withProof = (p: Person): ControlRecord => {
+    const j = join(p, 'Bob') as ControlRecord & { t: 'join' };
+    return { ...j, proof: joinProof(sodium, secret, ROOM, p.slot, j.key, j.box) };
+  };
+  s.apply(0, ctl(a, join(a, 'Ada')));
+  s.apply(0, ctl(a, inviteRec(1, 'Bob')));
+  s.apply(1, ctl(b, withProof(b)));
+  s.apply(1, ctl(b2, withProof(b2)));
+  assert.equal(s.contested.size, 0, 'before any admit, the page itself sees both joins');
+  s.apply(0, ctl(a, admit(b, 'Bob')));
+  assert.ok(s.contested.has(1), 'the admit finds the other valid join');
+});
+
+test('names made only of symbols still show their codes when they look alike', () => {
+  // Audit A8: two members named "😀" had no skeleton to compare.
+  assert.ok(resembles('😀', '😀'));
+  assert.ok(resembles('👍', '👍🏽'), 'a skin tone added');
+  assert.ok(resembles('★★', '★'), 'something added');
+  assert.ok(resembles('\u{1F468}\u200D\u{1F469}\u200D\u{1F467}', '\u{1F468}\u{1F469}\u{1F467}'), 'with or without joiners');
+  assert.ok(!resembles('😀', '🙂'));
+  assert.ok(!resembles('Ada', '😀'));
+  assert.ok(!resembles('Ada 😀', '😀'), 'a name with letters is compared by its letters');
+});
+
 test('wiping the state forgets keys and what was decrypted', () => {
   const a = person(0);
   const b = person(1);

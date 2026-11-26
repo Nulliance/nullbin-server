@@ -26,8 +26,14 @@ stores and relays opaque records and is not trusted. The protocol aims for:
 - **G4 Forward secrecy.** A key taken from a device later does not decrypt
   earlier messages, apart from a short window (section 9).
 - **G5 Fork detection.** If someone (a member, or the server with a
-  member's help) shows members different conversations, members are warned,
-  and the warning names only someone whose own signed records show it.
+  member's help) shows members different conversations, members are warned
+  once evidence of it reaches them, and the warning names only someone
+  whose own signed records show it. A sender who shows two members
+  different messages at one place is seen only when a receipt for that
+  place crosses: the warning then names the receipt's sender and the
+  message's sender as the two possible causes, since nothing tells a false
+  receipt from a split message. Until a deceived member posts again, no
+  receipt shows it, so nobody is warned (section 9).
 - **G6 Name privacy.** Names, invite labels and the room's name are hidden
   from the server and from anyone holding only the room key.
 
@@ -391,7 +397,16 @@ only the creator's key, or a copy of a member's own keys, can.
   chains it holds (from then on) and deliveries sealed to receiving keys
   not yet deleted.
 - **G5.** Commitments, forward-only places and receipts catch members shown
-  different chains or messages, once the evidence reaches them.
+  different chains or messages, once the evidence reaches them. Chains are
+  caught by commitments as soon as a member holding the real one reads
+  another's delivery. Different messages at one place of one chain are
+  caught only by receipts: the member shown one must post again after
+  reading it, and the member shown the other must read that post. Until
+  then nothing shows it (each tab sees one valid message at the place), and
+  the warning cannot tell a split message from a false receipt, so it names
+  both senders. A commitment that crosses recipients for every message
+  (such as a hash of each message in the next key delivery) would catch it
+  sooner; that is a protocol change for a later version.
 - **G6.** Names are encrypted under RO, which travels only sealed to admitted
   members; joiners' names travel sealed to the creator.
 

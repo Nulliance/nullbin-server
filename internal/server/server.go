@@ -124,9 +124,12 @@ type Server struct {
 	downloads     *limiter
 	roomCreates   *limiter
 	roomWrites    *limiter
+	roomJoins     *limiter
+	roomAdmin     *limiter
+	roomStrangers *limiter
 	roomReads     *limiter
 	downloadBytes *limiter
-	globalBytes   *limiter
+	globalBytes   *fairBudget
 	chunkSlots    *slotPool
 	downloadSlots *slotPool
 	roomWaitSlots *slotPool
@@ -155,10 +158,13 @@ func New(cfg Config) *Server {
 		pages:         newClientLimiter(5, 100),    // pages, static assets and the version
 		downloads:     newClientLimiter(1.0/3, 20),
 		roomCreates:   newClientLimiter(1.0/6, 10), // 10 rooms per minute
-		roomWrites:    newClientLimiter(2, 30),     // messages, invites, joins and owner actions
+		roomWrites:    newClientLimiter(2, 30),     // members' records
+		roomJoins:     newClientLimiter(2, 30),     // joins, with an invite token
+		roomAdmin:     newClientLimiter(2, 30),     // the owner's actions, and self-destruct
+		roomStrangers: newClientLimiter(2, 30),     // room requests without a valid credential
 		roomReads:     newClientLimiter(10, 100),   // a tab long-polls, and reads at most about twice a second in a busy room
-		downloadBytes: newLimiter(clientBytesPerSecond, clientBytesPerSecond, limiterMaxEntries),
-		globalBytes:   newLimiter(globalBytesPerSecond, globalBytesPerSecond, 1),
+		downloadBytes: newClientLimiter(clientBytesPerSecond, clientBytesPerSecond),
+		globalBytes:   newFairBudget(globalBytesPerSecond),
 		chunkSlots:    newSlotPool(chunkSlotsTotal, chunkSlotsPerClient, chunkSlotsPerSite),
 		downloadSlots: newSlotPool(downloadSlotsTotal, downloadSlotsPerClient, downloadSlotsPerSite),
 		roomWaitSlots: newSlotPool(roomWaitSlotsTotal, roomWaitSlotsPerClient, roomWaitSlotsPerSite),
@@ -250,9 +256,11 @@ func (s *Server) Prune() {
 	s.downloads.prune(now)
 	s.roomCreates.prune(now)
 	s.roomWrites.prune(now)
+	s.roomJoins.prune(now)
+	s.roomAdmin.prune(now)
+	s.roomStrangers.prune(now)
 	s.roomReads.prune(now)
 	s.downloadBytes.prune(time.Now())
-	s.globalBytes.prune(time.Now())
 	s.pending.prune(now)
 }
 
@@ -618,7 +626,14 @@ func (s *Server) download(w http.ResponseWriter, r *http.Request, burn bool) {
 		return // the reader already left: never use up an open for nobody
 	}
 	if burn {
+		// A limited open writes its count to disk (with fsync) before any
+		// bytes go out, so it takes a disk-write place like other writes.
+		endWrite, ok := s.writeSlot(w, r)
+		if !ok {
+			return
+		}
 		p, err = s.cfg.Store.ReadBurn(id, r.Header.Get(BurnTokenHeader))
+		endWrite()
 	} else {
 		p, err = s.cfg.Store.Get(id)
 	}

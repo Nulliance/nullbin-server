@@ -24,7 +24,7 @@ import {
   startCountdown,
 } from './dom.ts';
 import { ByteReader, PasteError, parsePrefix } from './format.ts';
-import { downloadBlob as download } from './files.ts';
+import { downloadBlob as download, isProgramFile } from './files.ts';
 import { initReaderActions, type CloneAttachment } from './reader-actions.ts';
 import { parseKeyFragment } from './link.ts';
 import { loadSodium } from './sodium.ts';
@@ -62,10 +62,24 @@ export async function initView(id: string, fragment: string): Promise<void> {
       el('burn-title').textContent = 'This link has a limited number of opens';
       el('burn-text').textContent = 'Opening uses one of this link’s allowed opens. Interrupted downloads also count.';
     }
+    // Leaving before Open clears the key and the gate, as leaving an opened
+    // paste does: a page the browser restores with Back must not still offer
+    // to open it, using up an open the first reader never used.
+    let leftGate = false;
+    const leaveGate = () => {
+      leftGate = true;
+      parsed.key.fill(0);
+      parsed.recipient?.fill(0);
+      show(gate, false);
+      showProblem('This paste wasn’t opened', 'Its link has an open limit, so this page let go of it when you left, before it was opened. No open was used. Open its link again to read it.');
+    };
+    window.addEventListener('pagehide', leaveGate, { once: true });
     reveal(gate);
     const button = el<HTMLButtonElement>('burn-open');
     el('burn-title').focus(); // announce the warning; the next Tab reaches the button
     await new Promise<void>((resolve) => button.addEventListener('click', () => resolve(), { once: true }));
+    window.removeEventListener('pagehide', leaveGate);
+    if (leftGate) return;
     show(gate, false);
   }
   await open(id, parsed.key, parsed.burn, parsed.recipient, `${window.location.origin}/p/${id}${fragment}`);
@@ -234,12 +248,19 @@ async function open(id: string, key: Uint8Array, burn: boolean, recipient: Uint8
 
   if (meta.text.length > 0 || !opened.file) renderText(meta.text);
   const attachment = file ? renderFile(file, meta.filename, meta.size, meta.mime, () => reader!.cancel()) : null;
-  initReaderActions(meta.text, shareURL, !burn || readsRemaining > 0, attachment, () => disposeDiscussion());
+  // Moving on to a draft (Clone) ends this view: its page listeners go too,
+  // or leaving the draft later would clear it as if it were this paste.
+  initReaderActions(meta.text, shareURL, !burn || readsRemaining > 0, attachment, () => {
+    disposeDiscussion();
+    window.removeEventListener('pagehide', leave);
+    if (restored) window.removeEventListener('pageshow', restored);
+  });
+  let restored: ((event: PageTransitionEvent) => void) | null = null;
   if (!burn && file) {
     // Leaving the page wipes the attachment. If the browser restores the page
     // from its back/forward cache, keep the text but say the file is gone
     // and turn off what needs it, instead of leaving buttons that fail.
-    window.addEventListener('pageshow', (event) => {
+    restored = (event) => {
       if (!event.persisted) return;
       show(el('save-file'), false);
       show(el('image-show'), false);
@@ -247,7 +268,8 @@ async function open(id: string, key: Uint8Array, burn: boolean, recipient: Uint8
       const err = el('file-error');
       err.textContent = `The attachment was cleared from memory when you left this page. ${burn ? 'This paste burns after reading, so it may no longer be available.' : 'Open the link again to get it.'}`;
       reveal(err);
-    });
+    };
+    window.addEventListener('pageshow', restored);
   }
   reveal(el('view-content'));
   el('view-title').focus();
@@ -474,7 +496,9 @@ function askPassword(attempt: number): Promise<string | null> {
  */
 async function saveFile(file: AsyncGenerator<Uint8Array>, name: string, size: number, verifiedFile: (file: File) => void): Promise<boolean> {
   const w = window as Window & SaveFilePickerWindow;
-  if (typeof w.showSaveFilePicker === 'function') {
+  // A program goes through the browser's downloads, with their protections
+  // (see isProgramFile), whenever it fits in memory.
+  if (typeof w.showSaveFilePicker === 'function' && !(isProgramFile(name) && size <= MAX_BUFFERED_DOWNLOAD)) {
     let handle: FileSystemFileHandle;
     try {
       handle = await w.showSaveFilePicker({ suggestedName: name });

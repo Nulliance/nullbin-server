@@ -123,11 +123,11 @@ func TestBandwidthCancellationAndSharedBudget(t *testing.T) {
 	if n, err := w.Write(make([]byte, bandwidthChunk)); n != 0 || !errors.Is(err, context.Canceled) {
 		t.Fatalf("%d, %v", n, err)
 	}
-	// Every IP competes for one global bucket; a depleted global budget
-	// cancels a different client's stream too, before any bytes are sent.
-	// Drain it as of a minute from now, so it cannot refill (32 KiB takes
-	// 2 ms) before the write below, however slow the machine is.
-	e.srv.globalBytes.allowN(netip.Addr{}, time.Now().Add(time.Minute), globalBytesPerSecond)
+	// Every network shares one total; once it is spent for this window, a
+	// different client's stream waits too, before any bytes are sent. Spend
+	// it in a window a minute from now, which the write below is still in
+	// however slow the machine is.
+	e.srv.globalBytes.take(netip.MustParseAddr("198.51.100.9"), time.Now().Add(time.Minute), globalBytesPerSecond*fairWindow.Seconds())
 	ctx, stop := context.WithTimeout(context.Background(), time.Millisecond)
 	defer stop()
 	w.ctx, w.ip = ctx, netip.MustParseAddr("192.0.2.2")
@@ -156,15 +156,15 @@ func TestStaticAssetsShareBandwidthAndConcurrencyLimits(t *testing.T) {
 				c.Assets = assets.New(make([]byte, bandwidthChunk), make([]byte, bandwidthChunk), make([]byte, bandwidthChunk))
 			})
 			ip := netip.MustParseAddr("192.0.2.1")
-			lim := newLimiter(1, bandwidthChunk, 10)
-			key := ip
 			if budget == "client" {
+				lim := newLimiter(1, bandwidthChunk, 10)
 				e.srv.downloadBytes = lim
+				lim.allowN(ip, time.Now(), bandwidthChunk)
 			} else {
-				e.srv.globalBytes = lim
-				key = netip.Addr{}
+				// A total of one chunk per window, spent by another network.
+				e.srv.globalBytes = newFairBudget(bandwidthChunk / fairWindow.Seconds())
+				e.srv.globalBytes.take(netip.MustParseAddr("198.51.100.9"), time.Now().Add(time.Minute), bandwidthChunk)
 			}
-			lim.allowN(key, time.Now(), bandwidthChunk)
 			for _, path := range []string{"/", "/p/0123456789abcdef0123456789abcdef", "/d/0123456789abcdef0123456789abcdef", "/assets/app.js", "/assets/app.css"} {
 				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Millisecond)
 				r := httptest.NewRequest("GET", path, nil).WithContext(ctx)

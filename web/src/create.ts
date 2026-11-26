@@ -163,7 +163,9 @@ export function initCreate(draft?: { text: string; file: File | null }): void {
   // files attaches them. Text on the clipboard always pastes as text, and
   // other fields (such as the password) are left alone.
   document.addEventListener('paste', (e) => {
-    if (el('create').hidden || form.getAttribute('aria-busy') === 'true') return;
+    // On /chat the section shows but the paste form is hidden: a pasted image
+    // must not land in a draft nobody can see.
+    if (el('create').hidden || form.hidden || form.getAttribute('aria-busy') === 'true') return;
     const target = e.target;
     if (target !== text && target instanceof HTMLElement && target.closest('input, textarea, select, [contenteditable]')) return;
     const data = e.clipboardData;

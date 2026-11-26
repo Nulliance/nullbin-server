@@ -395,3 +395,43 @@ func TestRoomLongPollWaitValidationAndWake(t *testing.T) {
 		t.Fatal("HTTP long-poll did not wake on record post")
 	}
 }
+
+// Requests anyone can make, with wrong tokens, are charged to their own
+// budget: from the owner's own network they can no longer stop the owner
+// inviting or self-destructing, or a member posting (audit A5).
+func TestRoomStrangersCannotUseUpMembersBudgets(t *testing.T) {
+	e := roomEnv(t)
+	c := createRoom(t, e)
+	garbage := strings.Repeat("A", 43)
+	statuses := func(method, path string, body []byte, hdr map[string]string) map[int]int {
+		out := map[int]int{}
+		for range 40 {
+			resp, _ := e.do(t, method, path, body, hdr)
+			out[resp.StatusCode]++
+		}
+		return out
+	}
+	joins := statuses("POST", "/api/v1/rooms/"+c.ID+"/join", nil, map[string]string{InviteTokenHeader: garbage})
+	deletes := statuses("DELETE", "/api/v1/rooms/"+c.ID, nil, map[string]string{MemberTokenHeader: garbage, OwnerTokenHeader: garbage})
+	posts := statuses("POST", "/api/v1/rooms/"+c.ID+"/records", bytes.Repeat([]byte{1}, rooms.MinRecordBytes), with(octet, MemberTokenHeader, garbage))
+	invites := statuses("POST", "/api/v1/rooms/"+c.ID+"/invites", nil, map[string]string{OwnerTokenHeader: garbage})
+	// They share one budget, so once it is spent they all get 429.
+	for name, got := range map[string]map[int]int{"joins": joins, "deletes": deletes, "posts": posts, "invites": invites} {
+		if got[http.StatusTooManyRequests] == 0 || got[http.StatusNotFound]+got[http.StatusTooManyRequests] != 40 {
+			t.Fatalf("bogus %s: %v, want only 404s and 429s, some 429s", name, got)
+		}
+	}
+	owner := map[string]string{OwnerTokenHeader: c.OwnerToken}
+	if resp, data := e.do(t, "POST", "/api/v1/rooms/"+c.ID+"/invites", nil, owner); resp.StatusCode != http.StatusCreated {
+		t.Fatalf("owner invite after the flood: %d %s", resp.StatusCode, data)
+	}
+	if resp, data := e.do(t, "POST", "/api/v1/rooms/"+c.ID+"/records", bytes.Repeat([]byte{2}, rooms.MinRecordBytes), with(octet, MemberTokenHeader, c.MemberToken)); resp.StatusCode != http.StatusCreated {
+		t.Fatalf("member post after the flood: %d %s", resp.StatusCode, data)
+	}
+	if resp, data := e.do(t, "GET", "/api/v1/rooms/"+c.ID+"/records?after=0", nil, map[string]string{MemberTokenHeader: c.MemberToken}); resp.StatusCode != http.StatusOK {
+		t.Fatalf("member read after the flood: %d %s", resp.StatusCode, data)
+	}
+	if resp, data := e.do(t, "DELETE", "/api/v1/rooms/"+c.ID, nil, owner); resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("owner self-destruct after the flood: %d %s", resp.StatusCode, data)
+	}
+}

@@ -10,6 +10,8 @@
 #   sudo ./nullbin cloudflare self-signed
 #                                   the same, but never use Let's Encrypt
 #   sudo ./nullbin cloudflare       Cloudflare mode and certificate status
+#   sudo ./nullbin install          in a new clone: check and select the latest release
+#   sudo ./nullbin install v1.2.3   ... or a specific one
 #   sudo ./nullbin start            build and start the installed release
 #   sudo ./nullbin update           update to the latest release
 #   sudo ./nullbin update v1.2.3    switch to a specific release (or back to one)
@@ -489,7 +491,58 @@ $changes" >&2
       "$tag" ||
       die "$tag does not have a valid signature from $slug's Release workflow"
   }
+  # Checks that target is a release Nullbin published: a tag on the main
+  # branch, published on GitHub, and signed by the Release workflow. Run it
+  # from code already trusted (a clone of main, or an installed release),
+  # never from the tag being checked: a tag that skipped these checks would
+  # vouch for itself. A tag already here is never replaced by GitHub's.
+  check_release() {
+    local target=$1
+    g fetch --quiet --tags origin "+refs/heads/main:refs/remotes/origin/main" ||
+      echo "Could not fetch new releases (see the message above); using releases already downloaded."
+    g rev-parse --quiet --verify "refs/tags/$target^{commit}" >/dev/null || die "release $target was not found"
+    if [[ ${NULLBIN_TEST_UNRELEASED:-} == 1 ]]; then
+      echo "NULLBIN_TEST_UNRELEASED=1: not checking that $target is a release (for testing only)." >&2
+      return 0
+    fi
+    g merge-base --is-ancestor "refs/tags/$target^{commit}" refs/remotes/origin/main 2>/dev/null ||
+      die "$target is not on Nullbin's main branch, so it is not a release"
+    case $(release_status "$target") in
+      200) ;;
+      404) die "$target is not a published release. See the Releases page on GitHub." ;;
+      *) die "could not confirm with GitHub that $target is a published release, so nothing was changed. Check that this server can reach api.github.com, then try again in a few minutes." ;;
+    esac
+    # Releases before v0.5.5 predate signed-tag enforcement. Keep them
+    # available for rollback; every later stable release must verify.
+    if [[ $(printf '%s\n' "$target" "v0.5.5" | sort -V | head -n 1) == "v0.5.5" ]]; then
+      verify_release_tag "$target"
+    fi
+  }
+
   case $cmd in
+    install)
+      # A new clone is on main, whose copy of this script is trusted: it
+      # checks the release before anything from the release runs as root.
+      local target changes
+      [[ $# -le 1 ]] || die "usage: sudo ./nullbin install [v1.2.3]"
+      [[ ! -f $deploy/.env && ! -f $deploy/.env.api ]] ||
+        die "Nullbin is already set up here; to change its version, run: sudo ./nullbin update"
+      if [[ $# -ge 1 ]]; then
+        target=$1
+      else
+        target=$(latest_release || true)
+        [[ -n $target ]] || die "could not look up the latest release. Check that this server can reach github.com, or give a version from the Releases page: sudo ./nullbin install v1.2.3"
+      fi
+      [[ $target =~ ^v[0-9]+[.][0-9]+[.][0-9]+$ ]] || die "not a release version: $target (expected something like v1.2.3)"
+      check_release "$target"
+      changes=$(local_changes)
+      [[ -z $changes ]] || die "the checkout has files that did not come with Nullbin, which would be built in:
+$changes
+Start again from a new clone."
+      g -c advice.detachedHead=false checkout --quiet --detach "refs/tags/$target"
+      echo "Installed $target (commit $(g rev-parse HEAD))."
+      echo "Next: sudo ./nullbin setup paste.example.com (or setup-api for a separate website)"
+      ;;
     setup)
       local domain=${1:-} cloudflare=()
       domain=${domain,,}
@@ -573,29 +626,11 @@ $changes" >&2
       [[ $target =~ ^v[0-9]+[.][0-9]+[.][0-9]+$ ]] || die "not a release version: $target (expected something like v1.2.3)"
       echo "Installed: $current"
       echo "Target:    $target"
-      # Git refuses to move a release tag that already exists here, so a tag
-      # changed on GitHub after release is never followed.
-      g fetch --quiet --tags origin "+refs/heads/main:refs/remotes/origin/main" ||
-        echo "Could not fetch new releases (see the message above); using releases already downloaded."
-      g rev-parse --quiet --verify "refs/tags/$target^{commit}" >/dev/null || die "release $target was not found"
       # Only a published release from the main branch is installed, never a
-      # tag pushed by mistake or by someone who took over an account.
-      if [[ ${NULLBIN_TEST_UNRELEASED:-} == 1 ]]; then
-        echo "NULLBIN_TEST_UNRELEASED=1: not checking that $target is a release (for testing only)." >&2
-      else
-        g merge-base --is-ancestor "refs/tags/$target^{commit}" refs/remotes/origin/main 2>/dev/null ||
-          die "$target is not on Nullbin's main branch, so it is not a release"
-        case $(release_status "$target") in
-          200) ;;
-          404) die "$target is not a published release. See the Releases page on GitHub." ;;
-          *) die "could not confirm with GitHub that $target is a published release, so nothing was changed. Check that this server can reach api.github.com, then try again in a few minutes." ;;
-        esac
-        # Releases before v0.5.5 predate signed-tag enforcement. Keep them
-        # available for rollback; every later stable release must verify.
-        if [[ $(printf '%s\n' "$target" "v0.5.5" | sort -V | head -n 1) == "v0.5.5" ]]; then
-          verify_release_tag "$target"
-        fi
-      fi
+      # tag pushed by mistake or by someone who took over an account. Git
+      # refuses to move a release tag that already exists here, so a tag
+      # changed on GitHub after release is never followed.
+      check_release "$target"
       # Edited files would be overwritten, and files added to the checkout
       # would be built into Nullbin along with the release. The settings
       # file is ignored by Git and checked separately.

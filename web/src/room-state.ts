@@ -147,12 +147,23 @@ function holds(outer: string[], inner: string[]): boolean {
 export function resembles(a: string, b: string): boolean {
   const sa = nameSkeleton(a);
   const sb = nameSkeleton(b);
-  if (sa === '' || sb === '') return false;
+  // A name of symbols alone ("😀", "★★") has no skeleton: compare what is
+  // left of it once marks, joiners, spaces and variation selectors go, so
+  // two people named "😀" (or "👍" and "👍🏽") still look alike.
+  if (sa === '' || sb === '') {
+    const ya = symbolSkeleton(a);
+    const yb = symbolSkeleton(b);
+    return sa === sb && ya !== '' && yb !== '' && (ya.startsWith(yb) || yb.startsWith(ya));
+  }
   if (sa.startsWith(sb) || sb.startsWith(sa)) return true;
   const ta = nameTokens(a);
   const tb = nameTokens(b);
   return holds(ta, tb) || holds(tb, ta);
 }
+
+/** A name with only marks, format characters, spaces and variation selectors dropped, lowercased. */
+const symbolSkeleton = (name: string): string =>
+  name.normalize('NFKD').replace(/[\p{M}\p{Cf}\p{Z}\s\u034F\u115F\u1160\u3164\uFE00-\uFE0F]/gu, '').toLowerCase();
 
 const LATIN = /\p{Script=Latin}/u;
 // Scripts with letters that look like Latin ones. A name in one of them can
@@ -584,6 +595,13 @@ export class RoomState {
         this.memberNameRaw.set(r.slot, r.name);
         this.openOwnRoster(r.slot, r.roster);
         this.resolve();
+        // A second valid join for this place that came before its admit was
+        // read back: the link leaked, as when one comes after (see join).
+        // Only the creator can check proofs, and only it has to act.
+        const check = this.me.checkProof;
+        if (check && r.slot !== 0 && (this.waiting.get(r.slot) ?? []).some((c) => !this.same(c.signKey, k) && check(r.slot, c.join) === true)) {
+          this.contested.add(r.slot);
+        }
         const m = (this.waiting.get(r.slot) ?? []).find((c) => this.same(c.signKey, k));
         this.waiting.delete(r.slot);
         if (!m) return null; // their join may come later

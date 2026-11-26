@@ -3113,3 +3113,54 @@ test('Null Chat: a saved file is freed when the chat ends, and stray file drops 
   assert.equal(await a.page.evaluate((u) => (window as unknown as { __revoked: string[] }).__revoked.includes(u), url), true, 'the decrypted copy is freed when the chat ends');
   await a.check();
 });
+
+test('Null Chat: replies to a file keep its extension visible, are not marked edited, and drop cursors tell the truth', { timeout: 60_000 }, async (t) => {
+  await restartAPI();
+  t.after(() => restartAPI());
+  const a = await open();
+  t.after(() => a.context.close());
+  await goto(a, `${origin}/chat`);
+  await a.page.fill('#room-you', 'Ada');
+  await a.page.click('#room-create-submit');
+  await a.page.waitForSelector('#room-chat:not([hidden])');
+  await a.page.waitForFunction(() => !(document.getElementById('room-text') as HTMLTextAreaElement).disabled);
+
+  // Dragging a file over the chat offers to attach it; anywhere else says no.
+  // (A script-made DataTransfer ignores dropEffect, so record what is set.)
+  const effects = await a.page.evaluate(() => {
+    const over = (target: Element) => {
+      const dt = new DataTransfer();
+      dt.items.add(new File(['x'], 'x.txt', { type: 'text/plain' }));
+      let effect = 'unset';
+      Object.defineProperty(dt, 'dropEffect', { get: () => effect, set: (v: string) => { effect = v; }, configurable: true });
+      const e = new DragEvent('dragover', { dataTransfer: dt, bubbles: true, cancelable: true });
+      target.dispatchEvent(e);
+      return `${effect}${e.defaultPrevented ? '' : ' (not cancelled)'}`;
+    };
+    return { chat: over(document.getElementById('room-messages')!), outside: over(document.querySelector('header') ?? document.body) };
+  });
+  assert.deepEqual(effects, { chat: 'copy', outside: 'none' });
+
+  const decoy = `${'quarterly-financial-report-'.repeat(6)}final.pdf.exe`;
+  await a.page.setInputFiles('#room-file', { name: decoy, mimeType: 'application/octet-stream', buffer: Buffer.from('x') });
+  await a.page.waitForSelector('#room-attach-bar:not([hidden])');
+  assert.equal(await a.page.textContent('#room-attach-name .nb-m-file-ext'), '.exe', 'the attach bar keeps the extension');
+  await a.page.click('#room-send');
+  const fileMsg = a.page.locator('#room-messages .nb-m', { has: a.page.locator('.nb-m-file') });
+  await fileMsg.waitFor({ timeout: 30_000 });
+
+  await fileMsg.locator('.nb-m-bubble').hover();
+  await fileMsg.locator('.nb-m-more').click();
+  await a.page.click('.nb-menu-item:has-text("Reply")');
+  assert.equal(await a.page.textContent('#room-context-quote .nb-m-file-ext'), '.exe', 'the reply bar keeps the extension');
+  await a.page.fill('#room-text', 'is this safe?');
+  await a.page.click('#room-send');
+  const reply = a.page.locator('#room-messages .nb-m', { hasText: 'is this safe?' }).last();
+  await reply.locator('.nb-m-quote').waitFor({ timeout: 30_000 });
+  assert.equal(await reply.locator('.nb-m-quote .nb-m-file-ext').textContent(), '.exe', 'the quote keeps the extension');
+  const ext = await reply.locator('.nb-m-quote .nb-m-file-ext').boundingBox();
+  const bubble = await reply.locator('.nb-m-bubble').boundingBox();
+  assert.ok(ext && bubble && ext.width > 0 && ext.x + ext.width <= bubble.x + bubble.width + 1, 'and it is on screen, inside the bubble');
+  assert.equal(await reply.locator('.nb-m-quote-edited').isHidden(), true, 'a file-only message is not shown as edited since');
+  await a.check();
+});

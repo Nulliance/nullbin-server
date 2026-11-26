@@ -832,6 +832,28 @@ function make<K extends keyof HTMLElementTagNameMap>(tag: K, cls: string, text?:
   return n;
 }
 
+/**
+ * A file name whose extension stays visible however short the rest is cut:
+ * a long name must not hide ".exe" behind an ellipsis.
+ */
+function fileNameNode(name: string, cls = ''): HTMLSpanElement {
+  const node = make('span', cls ? `nb-fname ${cls}` : 'nb-fname');
+  node.title = name;
+  const dot = name.lastIndexOf('.');
+  if (dot > 0 && name.length - dot <= 16) node.append(make('span', 'nb-m-file-stem', name.slice(0, dot)), make('span', 'nb-m-file-ext', name.slice(dot)));
+  else node.append(make('span', 'nb-m-file-stem', name));
+  return node;
+}
+
+/** What a reply shows of a message: its text, or for a file alone the file's name. */
+const quotePreview = (m: Message): string | null => (m.deleted ? null : m.text || m.file?.name || null);
+
+/** Fills a quote's text, showing a file-only message's name with its extension kept. */
+function fillQuote(node: HTMLElement, target: Message, text: string): void {
+  if (!target.deleted && target.text === '' && target.file && text === target.file.name) node.replaceChildren(fileNameNode(text));
+  else node.textContent = text;
+}
+
 function icon(name: string): SVGSVGElement {
   const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
   svg.setAttribute('class', 'nb-i');
@@ -1698,7 +1720,7 @@ function openChat(sodium: Sodium, id: string, session: Session): void {
   /** Whether the message a reply quotes was edited after the reply came. */
   const markEditedSince = (quote: HTMLElement, edited: HTMLElement, m: Message) => {
     const target = m.quote!.target!;
-    const since = !target.deleted && target.text !== m.quote!.text;
+    const since = !target.deleted && quotePreview(target) !== m.quote!.text;
     edited.hidden = !since;
     quote.setAttribute('aria-label', `Replying to ${nameFor(target.from)}${since ? ', a message edited since' : ''}. Show that message.`);
   };
@@ -1724,7 +1746,8 @@ function openChat(sodium: Sodium, id: string, session: Session): void {
       const target = q.target!;
       const quote = make('button', 'nb-m-quote');
       quote.type = 'button';
-      const quoted = make('span', '', target.deleted ? 'Unsent message' : q.text ?? '');
+      const quoted = make('span', '');
+      fillQuote(quoted, target, target.deleted ? 'Unsent message' : q.text ?? '');
       quoted.dir = 'auto';
       const who = make('strong', '');
       who.append(nameNode(target.from));
@@ -1749,14 +1772,7 @@ function openChat(sodium: Sodium, id: string, session: Session): void {
       const card = make('div', 'nb-m-file');
       const head = make('div', 'nb-m-file-head');
       const info = make('div', 'nb-m-file-info');
-      const fname = make('span', 'nb-m-file-name');
-      fname.title = f.name;
-      const dot = f.name.lastIndexOf('.');
-      if (dot > 0 && f.name.length - dot <= 16) {
-        fname.append(make('span', 'nb-m-file-stem', f.name.slice(0, dot)), make('span', 'nb-m-file-ext', f.name.slice(dot)));
-      } else {
-        fname.append(make('span', 'nb-m-file-stem', f.name));
-      }
+      const fname = fileNameNode(f.name, 'nb-m-file-name');
       info.append(fname, make('span', 'nb-m-file-size', `${formatBytes(f.size)} · Encrypted file`));
       head.append(icon('file'), info);
       const actions = make('div', 'nb-m-file-actions');
@@ -2596,7 +2612,7 @@ function openChat(sodium: Sodium, id: string, session: Session): void {
     }
     if (mode?.kind === 'edit') stopContext();
     pendingFile = f;
-    attachName.textContent = cleanChatFileName(f.name);
+    attachName.replaceChildren(fileNameNode(cleanChatFileName(f.name)));
     attachMeta.textContent = `${formatBytes(f.size)} · Stored encrypted on the server’s disk until it expires`;
     attachExpiry.replaceChildren(...choices.map((s) => {
       const o = document.createElement('option');
@@ -2649,7 +2665,10 @@ function openChat(sodium: Sodium, id: string, session: Session): void {
     setAttachment(f.name ? f : new File([f], `pasted-image${ext[f.type] ?? ''}`, { type: f.type }));
   }, { signal: listening.signal });
   chat.addEventListener('dragover', (e) => {
-    if (e.dataTransfer?.types.includes('Files')) e.preventDefault();
+    if (!e.dataTransfer?.types.includes('Files')) return;
+    e.preventDefault();
+    // A no-drop cursor whenever a file can't be attached right now.
+    e.dataTransfer.dropEffect = attachBtn.disabled ? 'none' : 'copy';
   }, { signal: listening.signal });
   chat.addEventListener('drop', (e) => {
     if (!e.dataTransfer?.types.includes('Files')) return;
@@ -2661,7 +2680,9 @@ function openChat(sodium: Sodium, id: string, session: Session): void {
   // leaving the page and ending the chat here: ignore it instead.
   for (const type of ['dragover', 'drop'] as const) {
     document.addEventListener(type, (e) => {
-      if (e.dataTransfer?.types.includes('Files')) e.preventDefault();
+      if (!e.dataTransfer?.types.includes('Files')) return;
+      e.preventDefault();
+      if (type === 'dragover' && !(e.target instanceof Node && chat.contains(e.target))) e.dataTransfer.dropEffect = 'none';
     }, { signal: listening.signal });
   }
   function unlockComposer(): void {
@@ -2701,7 +2722,7 @@ function openChat(sodium: Sodium, id: string, session: Session): void {
     if (mode?.kind === 'edit' && kind !== 'edit') text.value = '';
     mode = { kind, target };
     el('room-context-title').textContent = kind === 'edit' ? 'Edit message' : `Reply to ${target.from === session.slot ? 'yourself' : state.nameOf(target.from)}`;
-    el('room-context-quote').textContent = target.text || target.file?.name || '';
+    fillQuote(el('room-context-quote'), target, quotePreview(target) ?? '');
     context.querySelector('use')?.setAttribute('href', kind === 'edit' ? '#i-edit' : '#i-reply');
     show(context);
     if (kind === 'edit') text.value = target.text;
@@ -2759,7 +2780,8 @@ function openChat(sodium: Sodium, id: string, session: Session): void {
       const quote = make('span', 'nb-m-quote');
       const who = make('strong', '');
       who.append(nameNode(target.from));
-      const quoted = make('span', '', target.text || target.file?.name || '');
+      const quoted = make('span', '');
+      fillQuote(quoted, target, quotePreview(target) ?? '');
       quoted.dir = 'auto';
       quote.append(who, quoted);
       bubble.append(quote);

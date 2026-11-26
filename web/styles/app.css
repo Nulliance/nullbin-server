@@ -823,6 +823,8 @@ body.nb-in-room #room { display: flex; flex: 1; flex-direction: column; }
 .nb-m-file-name { display: flex; width: 100%; min-width: 0; font-weight: 500; font-size: 14px; }
 .nb-m-file-stem { flex: 0 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .nb-m-file-ext { flex: none; white-space: nowrap; }
+/* A file name in a quote or bar: the extension stays, the rest is cut. */
+.nb-fname { display: flex; max-width: 100%; min-width: 0; }
 .nb-m-file-size { display: block; font-size: 12px; color: var(--nb-muted); }
 .nb-m-file-actions { display: flex; flex-wrap: wrap; gap: 6px; }
 .nb-m-file-actions .btn { padding: 4px 10px; font-size: 13px; }

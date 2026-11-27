@@ -13,8 +13,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/jacobzymet/nullbin-go/internal/rooms"
-	"github.com/jacobzymet/nullbin-go/internal/storage"
+	"github.com/Nulliance/nullbin-server/internal/rooms"
+	"github.com/Nulliance/nullbin-server/internal/storage"
 )
 
 var chunkIndexPattern = regexp.MustCompile(`^(0|[1-9][0-9]{0,9})$`)

@@ -17,10 +17,10 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/jacobzymet/nullbin-go/internal/assets"
-	"github.com/jacobzymet/nullbin-go/internal/rooms"
-	"github.com/jacobzymet/nullbin-go/internal/server"
-	"github.com/jacobzymet/nullbin-go/internal/storage"
+	"github.com/Nulliance/nullbin-server/internal/assets"
+	"github.com/Nulliance/nullbin-server/internal/rooms"
+	"github.com/Nulliance/nullbin-server/internal/server"
+	"github.com/Nulliance/nullbin-server/internal/storage"
 )
 
 // version is set at build time with -ldflags "-X main.version=...".

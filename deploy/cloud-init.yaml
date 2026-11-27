@@ -58,7 +58,7 @@ runcmd:
   # would go on to the next command.
   - |
     set -eu
-    git clone https://github.com/jacobzymet/nullbin-go.git /opt/nullbin
+    git clone https://github.com/Nulliance/nullbin-server.git /opt/nullbin
     /opt/nullbin/deploy/nullbin install
     install -m 0600 /opt/nullbin-settings.env /opt/nullbin/deploy/.env
     /opt/nullbin/deploy/nullbin start

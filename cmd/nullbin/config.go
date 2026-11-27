@@ -10,8 +10,8 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/jacobzymet/nullbin-go/internal/server"
-	"github.com/jacobzymet/nullbin-go/internal/storage"
+	"github.com/Nulliance/nullbin-server/internal/server"
+	"github.com/Nulliance/nullbin-server/internal/storage"
 )
 
 type config struct {

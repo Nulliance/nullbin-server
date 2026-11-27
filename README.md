@@ -171,13 +171,13 @@ macOS.
 1. Download Nullbin:
 
    ```sh
-   git clone https://github.com/jacobzymet/nullbin-go.git nullbin
+   git clone https://github.com/Nulliance/nullbin-server.git nullbin
    cd nullbin
    ```
 
    This is the development version, which is fine for trying it out. For
    the latest release, also run `git checkout --detach refs/tags/v1.2.3`
-   with the version from the [Releases page](https://github.com/jacobzymet/nullbin-go/releases).
+   with the version from the [Releases page](https://github.com/Nulliance/nullbin-server/releases).
 
 2. Build it. The first build takes a few minutes:
 
@@ -243,7 +243,7 @@ server with SSH and run:
 ```bash
 sudo apt-get update
 sudo apt-get install -y docker.io docker-compose-v2 git curl
-git clone https://github.com/jacobzymet/nullbin-go.git nullbin &&
+git clone https://github.com/Nulliance/nullbin-server.git nullbin &&
 cd nullbin/deploy &&
 sudo ./nullbin install
 ```
@@ -293,7 +293,7 @@ connect with SSH and run:
 ```bash
 sudo apt-get update
 sudo apt-get install -y docker.io docker-compose-v2 git curl
-git clone https://github.com/jacobzymet/nullbin-go.git nullbin &&
+git clone https://github.com/Nulliance/nullbin-server.git nullbin &&
 cd nullbin/deploy &&
 sudo ./nullbin install
 ```
@@ -320,7 +320,7 @@ server shows it again), never just a version name, which anyone who could
 push a tag could point at other code:
 
 ```sh
-git clone https://github.com/jacobzymet/nullbin-go.git nullbin
+git clone https://github.com/Nulliance/nullbin-server.git nullbin
 cd nullbin
 git checkout --detach 1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b
 git describe --tags --exact-match
@@ -425,7 +425,7 @@ successful start. Development builds do not show release notices.
 Ubuntu/Debian use the login MOTD; on other hosts the notice uses
 `/etc/profile.d` and needs a shell that reads it. Hosts without systemd
 skip these notices. You can also choose **Watch → Custom → Releases** on
-the [repository](https://github.com/jacobzymet/nullbin-go).
+the [repository](https://github.com/Nulliance/nullbin-server).
 
 To check immediately, run
 `sudo systemctl start nullbin-update-check.service`. To turn off hourly
@@ -436,7 +436,7 @@ in `journalctl -u nullbin-update-check.service`. Disabling checks leaves
 the last cached result available at login.
 
 1. Read the release's notes on the
-   [Releases page](https://github.com/jacobzymet/nullbin-go/releases). They
+   [Releases page](https://github.com/Nulliance/nullbin-server/releases). They
    say if an update needs anything extra.
 2. Connect to the server with SSH and run:
 
@@ -644,7 +644,7 @@ snapshots may keep copies.
 
 | Problem | What to do |
 |---|---|
-| `nullbin install` or `nullbin update` cannot find the latest release, or says a version is not a release | The server could not reach GitHub, or no release exists yet. Check the [Releases page](https://github.com/jacobzymet/nullbin-go/releases) and try again. If it says a tag is not on the main branch, not published, or not signed by the Release workflow, do not install it: report it, since that is what someone who took over a release tag would leave behind. |
+| `nullbin install` or `nullbin update` cannot find the latest release, or says a version is not a release | The server could not reach GitHub, or no release exists yet. Check the [Releases page](https://github.com/Nulliance/nullbin-server/releases) and try again. If it says a tag is not on the main branch, not published, or not signed by the Release workflow, do not install it: report it, since that is what someone who took over a release tag would leave behind. |
 | The site does not open, or HTTPS is not ready | Check that DNS points at the right server and ports 80 and 443 are open in both firewalls. Then check `sudo ./nullbin status` and `sudo ./nullbin logs`. |
 | The site says "This site is served only through Cloudflare." | Cloudflare mode is on, but visitors reach the server directly. Set the DNS record to **Proxied** in Cloudflare, or turn the mode off with `sudo ./nullbin cloudflare off`. |
 | Cloudflare shows error 526 (invalid SSL certificate) | The server is using its own certificate while Cloudflare is set to **Full (strict)**. Run `sudo ./nullbin cloudflare` and set the mode it shows. |

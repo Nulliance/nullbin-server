@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/jacobzymet/nullbin-go/internal/storage"
+	"github.com/Nulliance/nullbin-server/internal/storage"
 )
 
 func tok(i int) string { return fmt.Sprintf("%042d%c", i, 'A') }

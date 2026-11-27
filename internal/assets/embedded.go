@@ -6,7 +6,7 @@ import (
 	"embed"
 	"io/fs"
 
-	buildinputs "github.com/jacobzymet/nullbin-go"
+	buildinputs "github.com/Nulliance/nullbin-server"
 )
 
 //go:embed all:dist

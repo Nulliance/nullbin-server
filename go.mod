@@ -1,4 +1,4 @@
-module github.com/jacobzymet/nullbin-go
+module github.com/Nulliance/nullbin-server
 
 go 1.25.0
 

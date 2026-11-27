@@ -36,7 +36,7 @@ func TestInstallsCheckTheReleaseFirst(t *testing.T) {
 		switch {
 		case strings.Contains(code, "sudo ./nullbin install"):
 			server++
-			clone := strings.Index(code, "git clone https://github.com/jacobzymet/nullbin-go.git nullbin")
+			clone := strings.Index(code, "git clone https://github.com/Nulliance/nullbin-server.git nullbin")
 			enter := strings.Index(code, "cd nullbin/deploy")
 			install := strings.Index(code, "sudo ./nullbin install")
 			if clone < 0 || enter < clone || install < enter || strings.Contains(code, "--no-checkout") || strings.Contains(code, "checkout --detach") {
@@ -61,7 +61,7 @@ func TestInstallsCheckTheReleaseFirst(t *testing.T) {
 	found := false
 	for _, b := range block {
 		code := b[1]
-		clone := strings.Index(code, "git clone https://github.com/jacobzymet/nullbin-go.git /opt/nullbin")
+		clone := strings.Index(code, "git clone https://github.com/Nulliance/nullbin-server.git /opt/nullbin")
 		install := strings.Index(code, "/opt/nullbin/deploy/nullbin install")
 		start := strings.Index(code, "/opt/nullbin/deploy/nullbin start")
 		if clone >= 0 && install > clone && start > install {

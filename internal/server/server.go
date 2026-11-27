@@ -15,9 +15,9 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/jacobzymet/nullbin-go/internal/assets"
-	"github.com/jacobzymet/nullbin-go/internal/rooms"
-	"github.com/jacobzymet/nullbin-go/internal/storage"
+	"github.com/Nulliance/nullbin-server/internal/assets"
+	"github.com/Nulliance/nullbin-server/internal/rooms"
+	"github.com/Nulliance/nullbin-server/internal/storage"
 )
 
 // Size limits.

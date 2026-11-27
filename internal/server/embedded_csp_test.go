@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/jacobzymet/nullbin-go/internal/assets"
+	"github.com/Nulliance/nullbin-server/internal/assets"
 )
 
 // The embedded page carries the server's policy as a <meta> tag too, so a

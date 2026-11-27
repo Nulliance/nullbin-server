@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jacobzymet/nullbin-go/internal/rooms"
+	"github.com/Nulliance/nullbin-server/internal/rooms"
 )
 
 func roomEnv(t *testing.T) *testEnv {

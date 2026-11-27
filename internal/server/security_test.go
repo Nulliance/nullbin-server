@@ -12,8 +12,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jacobzymet/nullbin-go/internal/assets"
-	"github.com/jacobzymet/nullbin-go/internal/storage"
+	"github.com/Nulliance/nullbin-server/internal/assets"
+	"github.com/Nulliance/nullbin-server/internal/storage"
 )
 
 func TestBurnRequiresAuthorizedSameOriginPOST(t *testing.T) {

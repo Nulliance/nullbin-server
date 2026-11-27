@@ -33,7 +33,7 @@ func newUpdateFixture(t *testing.T, installed string) updateFixture {
 			t.Fatal(err)
 		}
 	}
-	f.write(t, f.config, "jacobzymet/nullbin-go\n"+installed+"\n")
+	f.write(t, f.config, "Nulliance/nullbin-server\n"+installed+"\n")
 	f.write(t, filepath.Join(bin, "curl"), `#!/bin/sh
 printf 'request\n' >> "$NB_TEST_CALLS"
 output=
@@ -104,7 +104,7 @@ func TestUpdateNoticeVersions(t *testing.T) {
 			}
 			// A successful start records the installed version. The old
 			// cached result must stop notifying immediately, without a fetch.
-			f.write(t, f.config, "jacobzymet/nullbin-go\n"+tc.latest+"\n")
+			f.write(t, f.config, "Nulliance/nullbin-server\n"+tc.latest+"\n")
 			if out, err := f.run("update-notice"); err != nil || out != "" {
 				t.Fatalf("stale notice after update: %q (%v)", out, err)
 			}

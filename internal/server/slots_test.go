@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jacobzymet/nullbin-go/internal/storage"
+	"github.com/Nulliance/nullbin-server/internal/storage"
 )
 
 func TestSlotPoolPerClientAndGlobalCaps(t *testing.T) {

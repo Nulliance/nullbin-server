@@ -11,7 +11,7 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/jacobzymet/nullbin-go/internal/rooms"
+	"github.com/Nulliance/nullbin-server/internal/rooms"
 )
 
 // Null Chats: short-lived end-to-end encrypted group chats, kept in

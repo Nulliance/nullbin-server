@@ -12,7 +12,7 @@ import (
 	"strings"
 	"syscall"
 
-	"github.com/jacobzymet/nullbin-go/internal/storage"
+	"github.com/Nulliance/nullbin-server/internal/storage"
 )
 
 // ContentSecurityPolicy is sent on every response. 'wasm-unsafe-eval'

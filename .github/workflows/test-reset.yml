@@ -1,9 +1,0 @@
-name: Test Reset
-on: [push]
-permissions:
-  contents: read
-jobs:
-  test:
-    runs-on: ubuntu-latest
-    steps:
-      - run: echo "Triggers reset"

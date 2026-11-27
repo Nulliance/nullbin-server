@@ -33,7 +33,7 @@ ARG VERSION
 RUN NULLBIN_VERSION="$VERSION" NULLBIN_API_ORIGIN="$API_ORIGIN" NULLBIN_SITE_ORIGIN="$SITE_ORIGIN" npm run build
 
 # --- server binary ----------------------------------------------------------
-FROM --platform=$BUILDPLATFORM golang:1.27.4-alpine@sha256:0a5f7fe796599ff487605987432e7619ae45beeb2fba4c2ce0b907879932aebf AS go-base
+FROM --platform=$BUILDPLATFORM golang:1.27.4-alpine@sha256:70bd7ddea8b6cbe5d6943cde279d6b67feb10cc924fb9100d1d8757c1575b280 AS go-base
 WORKDIR /src
 ENV CGO_ENABLED=0 GOTOOLCHAIN=local GOFLAGS=-mod=readonly
 COPY go.mod ./

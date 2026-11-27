@@ -4,6 +4,8 @@
      proverif -lib proverif/room proverif/outsider.pv
      proverif -lib proverif/room proverif/member.pv
      proverif -lib proverif/room proverif/password.pv
+   (split.pv, on split detection in version 3 message records, stands
+   alone: proverif proverif/split.pv)
 
    The attacker is the server: it controls every record (sees, drops,
    replays, reorders, stamps any place as sender) and always holds the room

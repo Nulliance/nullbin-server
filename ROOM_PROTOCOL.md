@@ -444,7 +444,7 @@ only the creator's key, or a copy of a member's own keys, can.
 [ProVerif](https://bblanche.gitlabpages.inria.fr/proverif/) 2.05, which
 looks for attacks on an unbounded number of sessions. The attacker runs the
 server (it sees, drops, replays and reorders every record and stamps any
-place as sender) and always holds the room key. Three scenarios:
+place as sender) and always holds the room key. Four scenarios:
 
 - `outsider.pv`: the attacker holds only the room key (an unused invite).
 - `member.pv`: the attacker also holds an invite, so it is an admitted
@@ -452,6 +452,9 @@ place as sender) and always holds the room key. Three scenarios:
 - `password.pv`: the chat has a password (v2 join proofs); the attacker
   holds Alice's invite link, leaked before she used it, but not the
   password.
+- `split.pv`: split detection in version 3 message records (G5). It stands
+  alone, with records in the clear: the attacker is the server and also a
+  member, and every chat record commits to its sender's previous one.
 
 Run them with:
 
@@ -459,6 +462,7 @@ Run them with:
 proverif -lib proverif/room proverif/outsider.pv
 proverif -lib proverif/room proverif/member.pv
 proverif -lib proverif/room proverif/password.pv
+proverif proverif/split.pv
 ```
 
 (Without a local install: build an image from `ocaml/opam` with
@@ -474,6 +478,33 @@ proverif -lib proverif/room proverif/password.pv
 | G6: the roster key (all names) stays secret | holds | (the attacker is a member) | holds |
 | The password stays secret | | | holds |
 | The password resists offline guessing (`weaksecret`) | | | no, as R25 says: a used link and the join made with it let anyone guess offline, one Argon2id per guess |
+
+`split.pv` checks G5's message commitments; the attacker runs the server
+and is a member, and two honest readers read an honest sender's records
+and the attacker's:
+
+| Property | Result |
+|---|---|
+| No framing: no reader ever warns of a split by an honest sender | holds |
+| A record a reader takes as an honest sender's, and the previous record it commits to, are ones that sender made | holds |
+| One history: any two readers took the same record at an honest sender's place | holds |
+| Detection: a reader that read a sender's record at a place, then takes one of its records committing to a different record at that place, warns, naming that sender | holds |
+
+Its honest run happens (a reader takes a record committing to an earlier
+one), and a malicious member can be caught; both are reported false, with a
+trace, as they must be. Each of these changes makes ProVerif report an
+attack: readers not checking a record's signature, a signature that does
+not cover the previous record it commits to (both let the attacker frame
+the honest sender), an honest sender making two records at one place (one
+history fails), and a reader that does not warn (detection fails).
+Abstractions there: a place is a fresh name and a record names its previous
+one directly (the code's rule that it be the place just before is left to
+the unit tests, as are the rule for a record that commits to none and
+receipts sent alone, which need counting and time); an honest history has
+three records, since an unbounded one makes the hashes nest without end and
+ProVerif does not terminate; detection is checked along one reader's run in
+the order the code reads (forward only), since checking it against
+everything any session read does not terminate either.
 
 Each file also asks whether the honest run happens (Bob reads Alice's
 message, members are admitted); ProVerif must find that it does ("false",
@@ -492,8 +523,9 @@ by the server and by the tabs' bookkeeping, which the unit and browser
 tests cover); each chain goes to two members and carries one message
 (stepping it is modelled only for forward secrecy); the creator does not
 send; removal, receiving-key numbers, padding, schemas, record ids and the
-warnings of section 8 are not modelled (the unit tests and the room
-fuzzer, `web/test/room-fuzz.test.ts`, cover those). Primitives are ideal,
+warnings of section 8 are not modelled, apart from split detection in
+`split.pv` (the unit tests and the room fuzzer, `web/test/room-fuzz.test.ts`,
+cover the rest). Primitives are ideal,
 Argon2id included: a proof about the model is not a proof about the code.
 
 ## 11. Known limits

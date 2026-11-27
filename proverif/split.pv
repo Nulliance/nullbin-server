@@ -1,0 +1,136 @@
+(* Split detection in Null Chat message records version 3 (ROOM_PROTOCOL.md,
+   section 6 and G5). Every chat record commits to its sender's previous
+   one: its place and its content hash. Run with
+
+     proverif proverif/split.pv
+
+   This scenario stands alone: it needs only the signatures and the content
+   hash, so chain keys, encryption and admission (which room.pvl and the
+   other scenarios cover) are left out, and every record is in the clear.
+   The attacker runs the server (it sees, drops, replays, reorders and
+   re-stamps every record) and is also a member, sM, whose signing key it
+   holds. sA is an honest member. r1 and r2 are honest readers.
+
+   Abstractions: a place (gen, index) is a fresh name; an honest history
+   has three records (see Sender); a record names its previous one directly, so the code's rule that it be the place just
+   before is not modelled (the unit tests cover it, as they do the rule for
+   a record that commits to none, and receipts sent alone). A reader reads
+   each place of a sender once: in the code, a record behind a place already
+   read is unreadable, its key deleted. *)
+
+free c: channel.
+
+type skey.
+type pkey.
+
+(* Ed25519. A signature reveals what it signs (records are sent anyway). *)
+fun spk(skey): pkey.
+fun sign(bitstring, skey): bitstring.
+reduc forall m: bitstring, k: skey; verify(sign(m, k), m, spk(k)) = true.
+
+(* BLAKE2b of a record's JSON, as in receipts: one-way. *)
+fun H(bitstring): bitstring.
+
+(* The previous place and hash of a sender's first record. *)
+const none: bitstring.
+
+const sA, sM, r1, r2: bitstring.
+free skA: skey [private].
+free skM: skey. (* the malicious member's key is the attacker's *)
+
+(* What each reader read: reader, sender, place, content hash. *)
+table readT(bitstring, bitstring, bitstring, bitstring).
+
+event Made(bitstring, bitstring, bitstring).          (* sender, place, hash: an honest sender made this record *)
+event Took(bitstring, bitstring, bitstring, bitstring). (* reader, sender, place, hash *)
+event Prev(bitstring, bitstring, bitstring, bitstring). (* reader, sender, previous place, hash it commits to *)
+event Split(bitstring, bitstring).                    (* reader, sender: the warning *)
+event Followed(bitstring, bitstring, bitstring, bitstring, bitstring). (* reader, sender, place, hash read there, hash a later record commits to *)
+
+(* The honest sender: a history of three records, each at a fresh place and
+   committing to the one before, as the tab does with its saved "last".
+   Replicated, so there are any number of such histories, each with its own
+   places. (A history of unbounded length, kept in private state, makes the
+   hashes nest without end, and ProVerif does not terminate; three records
+   give a record with no previous one, and records committing to a first
+   and to a middle one.) *)
+let Sender =
+  new p1: bitstring; new t1: bitstring;
+  let rec1 = (sA, p1, none, none, t1) in
+  event Made(sA, p1, H(rec1));
+  out(c, (rec1, sign(rec1, skA)));
+  new p2: bitstring; new t2: bitstring;
+  let rec2 = (sA, p2, p1, H(rec1), t2) in
+  event Made(sA, p2, H(rec2));
+  out(c, (rec2, sign(rec2, skA)));
+  new p3: bitstring; new t3: bitstring;
+  let rec3 = (sA, p3, p2, H(rec2), t3) in
+  event Made(sA, p3, H(rec3));
+  out(c, (rec3, sign(rec3, skA))).
+
+(* Taking a record: it is read, and noted. *)
+let Take(rd: bitstring, s: bitstring, p: bitstring, pp: bitstring, ph: bitstring, h: bitstring) =
+  event Took(rd, s, p, h);
+  event Prev(rd, s, pp, ph);
+  insert readT(rd, s, p, h).
+
+(* A reader takes a record signed by its sender for that sender's place,
+   once per place. If it read the place the record commits to, the hashes
+   must agree; if not, it warns, naming the sender. *)
+let Read(rd: bitstring, s: bitstring, k: pkey) =
+  in(c, (rec: bitstring, sg: bitstring));
+  let (=s, p: bitstring, pp: bitstring, ph: bitstring, text: bitstring) = rec in
+  if verify(sg, rec, k) then
+  get readT(=rd, =s, =p, x) in 0 else
+  if pp = none then Take(rd, s, p, pp, ph, H(rec)) else
+  get readT(=rd, =s, =pp, h) in (
+    if h = ph then Take(rd, s, p, pp, ph, H(rec))
+    else (event Split(rd, s); Take(rd, s, p, pp, ph, H(rec)))
+  ) else Take(rd, s, p, pp, ph, H(rec)).
+
+(* Detection, checked on one reader's run through a sender's records in
+   the order the code can read them (forward only): it reads a record at a
+   place, then the next record, which commits to that place. Checking it
+   against the shared table instead (any record taken earlier, in any
+   session) does not terminate. *)
+let Follow(rd: bitstring, s: bitstring, k: pkey) =
+  in(c, (rec1: bitstring, sg1: bitstring));
+  let (=s, p1: bitstring, pp1: bitstring, ph1: bitstring, t1: bitstring) = rec1 in
+  if verify(sg1, rec1, k) then
+  in(c, (rec2: bitstring, sg2: bitstring));
+  let (=s, p2: bitstring, =p1, ph2: bitstring, t2: bitstring) = rec2 in
+  if verify(sg2, rec2, k) then
+  (* The warning comes first: a query's conclusion must have happened
+     before the event it is about. *)
+  if H(rec1) <> ph2 then (event Split(rd, s); event Followed(rd, s, p1, H(rec1), ph2))
+  else event Followed(rd, s, p1, H(rec1), ph2).
+
+(* No framing: no reader ever warns about the honest sender, whatever the
+   server and the malicious member do. *)
+query rd: bitstring; event(Split(rd, sA)).
+
+(* What a reader takes from the honest sender, and the history it commits
+   to, is what that sender made. *)
+query rd, p, h: bitstring; event(Took(rd, sA, p, h)) ==> event(Made(sA, p, h)).
+query rd, p, h: bitstring; event(Prev(rd, sA, p, h)) && p <> none ==> event(Made(sA, p, h)).
+
+(* One history: any two readers took the same record at an honest
+   sender's place. *)
+query x, y, p, h1, h2: bitstring; event(Took(x, sA, p, h1)) && event(Took(y, sA, p, h2)) ==> h1 = h2.
+
+(* Detection: a reader that read the malicious member's record at a place
+   and then takes one of its records committing to another record at that
+   place, warns about that member (see Follow). *)
+query rd, p, h1, h2: bitstring; event(Followed(rd, sM, p, h1, h2)) ==> h1 = h2 || event(Split(rd, sM)).
+
+(* Sanity: the honest run happens (a reader takes a record committing to
+   an earlier one), and the malicious member can be caught. Both must be
+   reported false, with a trace. *)
+query rd, p, h: bitstring; event(Prev(rd, sA, p, h)) && p <> none.
+query rd: bitstring; event(Split(rd, sM)).
+
+process
+  (! Sender)
+| (! Read(r1, sA, spk(skA))) | (! Read(r1, sM, spk(skM)))
+| (! Read(r2, sA, spk(skA))) | (! Read(r2, sM, spk(skM)))
+| (! Follow(r1, sM, spk(skM))) | (! Follow(r1, sA, spk(skA)))

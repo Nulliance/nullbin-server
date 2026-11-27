@@ -27,18 +27,18 @@ test('validMessage accepts encrypted file attachments with or without caption te
   const file: ChatFile = { id, key, name: 'photo.png', size: 12345 };
 
   const fileOnly: MessageRecord = {
-    t: 'msg', id: newRecordId(sodium), time: Date.now(), text: '', reply: null, seen: emptyAcks(), file,
+    t: 'msg', id: newRecordId(sodium), time: Date.now(), prev: null, text: '', reply: null, seen: emptyAcks(), file,
   };
   assert.equal(validMessage(fileOnly), true);
 
   const withCaption: MessageRecord = {
-    t: 'msg', id: newRecordId(sodium), time: Date.now(), text: 'Here is the screenshot', reply: null, seen: emptyAcks(), file,
+    t: 'msg', id: newRecordId(sodium), time: Date.now(), prev: null, text: 'Here is the screenshot', reply: null, seen: emptyAcks(), file,
   };
   assert.equal(validMessage(withCaption), true);
 
   // Without a file, empty text is still rejected.
   const emptyNoFile = {
-    t: 'msg', id: newRecordId(sodium), time: Date.now(), text: '', reply: null, seen: emptyAcks(),
+    t: 'msg', id: newRecordId(sodium), time: Date.now(), prev: null, text: '', reply: null, seen: emptyAcks(),
   };
   assert.equal(validMessage(emptyNoFile), false);
 });
@@ -48,7 +48,7 @@ test('validMessage rejects malformed, path-traversal, hidden-char, or oversized 
   const validKey = encodeKey(sodium, sodium.randombytes_buf(32));
   const validId = newRecordId(sodium);
   const base = (file: unknown) => ({
-    t: 'msg', id: newRecordId(sodium), time: Date.now(), text: '', reply: null, seen: emptyAcks(), file,
+    t: 'msg', id: newRecordId(sodium), time: Date.now(), prev: null, text: '', reply: null, seen: emptyAcks(), file,
   });
 
   const badCases: unknown[] = [
@@ -83,7 +83,7 @@ test('file attachment message seals and fits within room record bounds', async (
     size: 4096,
   };
   const msg: MessageRecord = {
-    t: 'msg', id: newRecordId(sodium), time: Date.now(), text: 'Attached', reply: null, seen: emptyAcks(), file,
+    t: 'msg', id: newRecordId(sodium), time: Date.now(), prev: null, text: 'Attached', reply: null, seen: emptyAcks(), file,
   };
   const sealed = sealMessage(sodium, chain, roomId, 0, sign.privateKey, msg);
   assert.ok(sealed.length > 0 && sealed.length <= 16 * 1024);
@@ -143,7 +143,7 @@ test('cleanChatFileName strips PUA/surrogates and caps UTF-16 length so validMes
     const cleaned = cleanChatFileName(raw);
     assert.ok(cleaned.length > 0 && cleaned.length <= 255);
     const msg: MessageRecord = {
-      t: 'msg', id: newRecordId(sodium), time: Date.now(), text: '', reply: null, seen: emptyAcks(),
+      t: 'msg', id: newRecordId(sodium), time: Date.now(), prev: null, text: '', reply: null, seen: emptyAcks(),
       file: { id, key, name: cleaned, size: 123 },
     };
     assert.equal(validMessage(msg), true, `cleaned name ${JSON.stringify(cleaned)} must pass validMessage`);

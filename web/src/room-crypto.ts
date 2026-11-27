@@ -57,7 +57,7 @@ import { cleanFileName } from './zip.ts';
 
 export const ROOM_KEY_BYTES = 32;
 export const CONTROL_VERSION = 1;
-export const MESSAGE_VERSION = 2;
+export const MESSAGE_VERSION = 3;
 export const RECORD_MIN_PADDED = 1024;
 /** Messages pad to at least this: their receipts (one per place) take about 1.2 KiB, and short messages should all be one size. */
 export const MESSAGE_MIN_PADDED = 2048;
@@ -142,6 +142,20 @@ export interface Ack {
   h: string;
 }
 
+/**
+ * The sender's previous chat record, which each chat record commits to: its
+ * place in the sender's chains and a hash of its content (as in receipts).
+ * So a record's hash covers all its sender's earlier ones, and a sender who
+ * shows two members different records at one place contradicts, in a later
+ * record signed with its own key, what one of them read. Null only for a
+ * sender's first record.
+ */
+export interface Prev {
+  gen: number;
+  index: number;
+  h: string;
+}
+
 /** An encrypted file shared in chat via a Paste-bridge link. */
 export interface ChatFile {
   id: string;
@@ -153,13 +167,17 @@ export interface ChatFile {
 /**
  * Chat records, encrypted with one-time message keys: a message (maybe a
  * reply, maybe with an encrypted file, always with receipts), a reaction
- * added or taken back, an edit or an unsend of one's own message.
+ * added or taken back, an edit or an unsend of one's own message, or
+ * receipts alone (posted by a tab that read messages but sent none for a
+ * while, so a member shown a different message is not left unseen). Each
+ * commits to its sender's previous one.
  */
 export type MessageRecord =
-  | { t: 'msg'; id: string; time: number; text: string; reply: Ref | null; seen: Ack[]; file?: ChatFile }
-  | { t: 'react'; id: string; time: number; target: string; author: number; emoji: string; on: boolean }
-  | { t: 'edit'; id: string; time: number; target: string; text: string }
-  | { t: 'unsend'; id: string; time: number; target: string };
+  | { t: 'msg'; id: string; time: number; prev: Prev | null; text: string; reply: Ref | null; seen: Ack[]; file?: ChatFile }
+  | { t: 'react'; id: string; time: number; prev: Prev | null; target: string; author: number; emoji: string; on: boolean }
+  | { t: 'edit'; id: string; time: number; prev: Prev | null; target: string; text: string }
+  | { t: 'unsend'; id: string; time: number; prev: Prev | null; target: string }
+  | { t: 'seen'; id: string; time: number; prev: Prev | null; seen: Ack[] };
 
 /** A decrypted record whose signature still has to be checked. */
 export interface Opened<R> {
@@ -912,6 +930,9 @@ const acksOk = (a: unknown) => {
 /** The hash in a receipt for a place we read nothing from. */
 export const NO_ACK = 'A'.repeat(22);
 
+const prevOk = (p: unknown) => p === null || (plainObject(p) && Object.keys(p).sort().join(',') === 'gen,h,index' &&
+  counter(p['gen'], 1) && counter(p['index'], 0) && typeof p['h'] === 'string' && B64URL_16.test(p['h']) && p['h'] !== NO_ACK);
+
 const MAX_CHAT_FILE_SIZE = 2 * 1024 * 1024 * 1024; // HardMaxSize (2 GiB)
 
 /**
@@ -946,18 +967,20 @@ export function validMessage(v: unknown): v is MessageRecord {
   switch (v['t']) {
     case 'msg': {
       const hasFile = 'file' in v;
-      if (!common(v, hasFile ? 'file,id,reply,seen,t,text,time' : 'id,reply,seen,t,text,time')) return false;
+      if (!common(v, hasFile ? 'file,id,prev,reply,seen,t,text,time' : 'id,prev,reply,seen,t,text,time')) return false;
       if (hasFile && !fileOk(v['file'])) return false;
       const textValid = hasFile && v['text'] === '' ? true : textOk(v['text']);
-      return textValid && (v['reply'] === null || refOk(v['reply'])) && acksOk(v['seen']);
+      return textValid && prevOk(v['prev']) && (v['reply'] === null || refOk(v['reply'])) && acksOk(v['seen']);
     }
     case 'react':
-      return common(v, 'author,emoji,id,on,t,target,time') && idOk(v['target']) && validSlot(v['author'], 0) &&
+      return common(v, 'author,emoji,id,on,prev,t,target,time') && prevOk(v['prev']) && idOk(v['target']) && validSlot(v['author'], 0) &&
         typeof v['emoji'] === 'string' && REACTIONS.includes(v['emoji']) && typeof v['on'] === 'boolean';
     case 'edit':
-      return common(v, 'id,t,target,text,time') && idOk(v['target']) && textOk(v['text']);
+      return common(v, 'id,prev,t,target,text,time') && prevOk(v['prev']) && idOk(v['target']) && textOk(v['text']);
     case 'unsend':
-      return common(v, 'id,t,target,time') && idOk(v['target']);
+      return common(v, 'id,prev,t,target,time') && prevOk(v['prev']) && idOk(v['target']);
+    case 'seen':
+      return common(v, 'id,prev,seen,t,time') && prevOk(v['prev']) && acksOk(v['seen']);
     default:
       return false;
   }

@@ -5,6 +5,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
 import { loadSodium } from '../src/sodium.ts';
+import { sealChained } from './chained.ts';
 import { cleanName } from '../src/comments.ts';
 import { paddedLength } from '../src/format.ts';
 import { encodeInviteFragment, parseInviteFragment, parseKeyFragment } from '../src/link.ts';
@@ -43,6 +44,7 @@ import {
   sealChainKey,
   sealControl,
   sealMessage,
+  MESSAGE_VERSION,
   validControl,
   validMessage,
   verifySignature,
@@ -76,7 +78,7 @@ const roomRec = (name: string, ends = 9, max = 20): ControlRecord => ({ t: 'room
 const inviteRec = (slot: number, label: string, secret = sodium.randombytes_buf(32)): ControlRecord => ({ t: 'invite', id: id(), time: 1, slot, label: boxName(sodium, ROSTER, label, ROOM, 'label', slot), check: inviteCheck(sodium, secret, ROOM, slot), exp: 9 });
 /** Receipts for every place: nothing read, except where given. */
 const receipts = (...read: Ack[]): Ack[] => Array.from({ length: 20 }, (_, slot) => read.find((r) => r.slot === slot) ?? { slot, gen: 0, index: 0, h: NO_ACK });
-const msg = (text: string): MessageRecord => ({ t: 'msg', id: id(), time: 2, text, reply: null, seen: receipts() });
+const msg = (text: string): MessageRecord => ({ t: 'msg', id: id(), time: 2, prev: null, text, reply: null, seen: receipts() });
 const ctl = (p: Person, r: ControlRecord, slot = p.slot) => sealControl(sodium, key, ROOM, slot, p.sign.privateKey, r);
 const copy = (c: Chain): Chain => ({ gen: c.gen, index: c.index, ck: c.ck.slice() });
 const keysFor = (from: Person, chain: Chain, ...to: Person[]): ControlRecord =>
@@ -123,8 +125,8 @@ test('messages: one key each, deleted once used, so earlier messages cannot be r
   const a = person(1);
   const sender = newChain(sodium, 1);
   const reader = copy(sender);
-  const first = sealMessage(sodium, sender, ROOM, 1, a.sign.privateKey, msg('one'));
-  const second = sealMessage(sodium, sender, ROOM, 1, a.sign.privateKey, msg('two'));
+  const first = sealChained(sodium, sender, ROOM, 1, a.sign.privateKey, msg('one'));
+  const second = sealChained(sodium, sender, ROOM, 1, a.sign.privateKey, msg('two'));
   assert.equal(sender.index, 2, 'the sender stepped past both keys');
   assert.equal(openMessage(sodium, reader, ROOM, 1, first, a.sign.publicKey)?.text, 'one');
   const afterFirst = reader.ck.slice();
@@ -143,20 +145,20 @@ test('messages: skipping ahead is bounded, and only an authentic message moves t
   const sender = newChain(sodium, 4);
   const reader = copy(sender);
   const forger = copy(sender);
-  const forged = sealMessage(sodium, forger, ROOM, 2, insider.sign.privateKey, msg('I am a'));
-  const real = sealMessage(sodium, sender, ROOM, 2, a.sign.privateKey, msg('really a'));
+  const forged = sealChained(sodium, forger, ROOM, 2, insider.sign.privateKey, msg('I am a'));
+  const real = sealChained(sodium, sender, ROOM, 2, a.sign.privateKey, msg('really a'));
   assert.equal(openMessage(sodium, reader, ROOM, 2, forged, a.sign.publicKey), null, 'wrong signer');
   assert.equal(reader.index, 0, 'the forgery did not consume the real message key');
   assert.equal(openMessage(sodium, reader, ROOM, 2, real, a.sign.publicKey)?.text, 'really a');
   // Another generation, another slot, too far ahead: refused.
   const later = newChain(sodium, 5);
-  assert.equal(openMessage(sodium, reader, ROOM, 2, sealMessage(sodium, later, ROOM, 2, a.sign.privateKey, msg('gen 5')), a.sign.publicKey), null);
+  assert.equal(openMessage(sodium, reader, ROOM, 2, sealChained(sodium, later, ROOM, 2, a.sign.privateKey, msg('gen 5')), a.sign.publicKey), null);
   const moved = copy(sender);
-  assert.equal(openMessage(sodium, moved, ROOM, 3, sealMessage(sodium, copy(sender), ROOM, 2, a.sign.privateKey, msg('restamped')), a.sign.publicKey), null);
+  assert.equal(openMessage(sodium, moved, ROOM, 3, sealChained(sodium, copy(sender), ROOM, 2, a.sign.privateKey, msg('restamped')), a.sign.publicKey), null);
   const far = copy(sender);
   far.index += MAX_SKIP + 1;
   for (let i = 0; i < MAX_SKIP + 1; i++) sender.ck = sodium.crypto_kdf_derive_from_key(32, 1, 'nbrmnext', sender.ck);
-  assert.equal(openMessage(sodium, copy({ ...reader }), ROOM, 2, sealMessage(sodium, far, ROOM, 2, a.sign.privateKey, msg('far')), a.sign.publicKey), null, 'more than MAX_SKIP ahead');
+  assert.equal(openMessage(sodium, copy({ ...reader }), ROOM, 2, sealChained(sodium, far, ROOM, 2, a.sign.privateKey, msg('far')), a.sign.publicKey), null, 'more than MAX_SKIP ahead');
 });
 
 test('chain keys reach only the member they are sealed to', () => {
@@ -179,10 +181,12 @@ test('short messages and control records have fixed sizes; the longest still fit
   const a = person(3);
   const chain = newChain(sodium, 1);
   const sizes = new Set<number>();
-  for (const text of ['y', 'ok', 'x'.repeat(300), 'A longer message. '.repeat(40).slice(0, 600).trim()]) sizes.add(sealMessage(sodium, chain, ROOM, 3, a.sign.privateKey, msg(text)).length);
+  for (const text of ['y', 'ok', 'x'.repeat(300), 'A longer message. '.repeat(40).slice(0, 600).trim()]) sizes.add(sealChained(sodium, chain, ROOM, 3, a.sign.privateKey, msg(text)).length);
+  // Receipts alone are the size of a short message: the server cannot tell them apart.
+  sizes.add(sealChained(sodium, chain, ROOM, 3, a.sign.privateKey, { t: 'seen', id: id(), time: 2, prev: null, seen: receipts() }).length);
   assert.deepEqual([...sizes], [1 + 4 + 4 + 24 + 16 + MESSAGE_MIN_PADDED + 64], 'header, padded ciphertext, outer signature');
   // The largest JSON a valid message makes: three UTF-8 bytes per character.
-  const big = sealMessage(sodium, chain, ROOM, 3, a.sign.privateKey, { ...msg('\u20AC'.repeat(MAX_MESSAGE_LENGTH)), reply: { id: id(), author: 19 } });
+  const big = sealChained(sodium, chain, ROOM, 3, a.sign.privateKey, { ...msg('\u20AC'.repeat(MAX_MESSAGE_LENGTH)), reply: { id: id(), author: 19 } });
   assert.ok(big.length <= MAX_RECORD_BYTES, `${big.length}`);
   // A key delivery to 19 members fits too.
   const all = Array.from({ length: 19 }, (_, i) => person(i + 1));
@@ -289,18 +293,18 @@ test('the room state: messages need the sender’s chain, sealed to us; keys onl
   enter(s, a, c, 'Cleo');
   const ada = newChain(sodium, 1);
   // Sent before we had Ada's chain: unreadable, by design.
-  assert.equal(s.apply(0, sealMessage(sodium, ada, ROOM, 0, a.sign.privateKey, msg('before'))), null);
+  assert.equal(s.apply(0, sealChained(sodium, ada, ROOM, 0, a.sign.privateKey, msg('before'))), null);
   assert.equal(s.unreadable, 1);
   // Ada's keys, sealed to Cleo only, are no use to us.
   assert.equal(s.apply(0, ctl(a, keysFor(a, ada, c))), null);
   assert.equal(s.chains.size, 0);
   const delivery = ctl(a, keysFor(a, ada, c, b));
   assert.equal(s.apply(0, delivery)?.kind, 'keys');
-  assert.equal(s.apply(0, sealMessage(sodium, ada, ROOM, 0, a.sign.privateKey, msg('hello')))?.kind, 'message');
+  assert.equal(s.apply(0, sealChained(sodium, ada, ROOM, 0, a.sign.privateKey, msg('hello')))?.kind, 'message');
   // Cleo has Ada's chain key too, but cannot post as Ada.
   const cleoForge = { gen: ada.gen, index: ada.index, ck: ada.ck.slice() };
-  assert.equal(s.apply(0, sealMessage(sodium, cleoForge, ROOM, 0, c.sign.privateKey, msg('forged'))), null);
-  assert.equal(s.apply(0, sealMessage(sodium, ada, ROOM, 0, a.sign.privateKey, msg('still Ada')))?.kind, 'message');
+  assert.equal(s.apply(0, sealChained(sodium, cleoForge, ROOM, 0, c.sign.privateKey, msg('forged'))), null);
+  assert.equal(s.apply(0, sealChained(sodium, ada, ROOM, 0, a.sign.privateKey, msg('still Ada')))?.kind, 'message');
   // A replayed old delivery cannot move the chain back to deleted keys.
   const before = s.chains.get(0)!.index;
   assert.equal(s.apply(0, sealControl(sodium, key, ROOM, 0, a.sign.privateKey, keysFor(a, { gen: 1, index: 0, ck: sodium.randombytes_buf(32) }, b))), null);
@@ -308,16 +312,16 @@ test('the room state: messages need the sender’s chain, sealed to us; keys onl
   // A new generation replaces it.
   const ada2 = newChain(sodium, 2);
   assert.equal(s.apply(0, ctl(a, keysFor(a, ada2, b)))?.kind, 'keys');
-  assert.equal(s.apply(0, sealMessage(sodium, ada2, ROOM, 0, a.sign.privateKey, msg('fresh keys')))?.kind, 'message');
+  assert.equal(s.apply(0, sealChained(sodium, ada2, ROOM, 0, a.sign.privateKey, msg('fresh keys')))?.kind, 'message');
   // Our own messages come back unreadable to us and are skipped (the page shows them when sent).
-  assert.equal(s.apply(1, sealMessage(sodium, newChain(sodium, 1), ROOM, 1, b.sign.privateKey, msg('mine'))), null);
+  assert.equal(s.apply(1, sealChained(sodium, newChain(sodium, 1), ROOM, 1, b.sign.privateKey, msg('mine'))), null);
   // Removal: their chain is deleted, and nothing more from them is accepted.
   const cleo = newChain(sodium, 1);
   s.apply(2, ctl(c, keysFor(c, cleo, b)));
   assert.ok(s.chains.has(2));
   assert.equal(s.apply(0, ctl(a, { t: 'remove', id: id(), time: 1, slot: 2 }))?.kind, 'removed');
   assert.ok(!s.chains.has(2));
-  assert.equal(s.apply(2, sealMessage(sodium, cleo, ROOM, 2, c.sign.privateKey, msg('after removal'))), null);
+  assert.equal(s.apply(2, sealChained(sodium, cleo, ROOM, 2, c.sign.privateKey, msg('after removal'))), null);
   assert.equal(s.apply(2, ctl(c, keysFor(c, newChain(sodium, 2), b))), null);
   assert.deepEqual(s.messages.map((m) => m.text), ['hello', 'still Ada', 'fresh keys']);
   assert.deepEqual(s.recipients().map((m) => m.slot), [0]);
@@ -336,7 +340,7 @@ test('the room key alone reads no message', () => {
   enter(s, a, b, 'Bob');
   const ada = newChain(sodium, 1);
   s.apply(0, ctl(a, keysFor(a, ada, b)));
-  s.apply(0, sealMessage(sodium, ada, ROOM, 0, a.sign.privateKey, msg('secret')));
+  s.apply(0, sealChained(sodium, ada, ROOM, 0, a.sign.privateKey, msg('secret')));
   assert.equal(s.messages.length, 0);
   assert.equal(s.members.size, 2);
 });
@@ -620,38 +624,38 @@ test('chat rules: only the sender edits or unsends; reactions toggle once per pe
   s.apply(1, ctl(b, join(b, 'Bob')));
   const ada = newChain(sodium, 1);
   s.apply(0, ctl(a, keysFor(a, ada, b)));
-  const fromAda = (r: MessageRecord) => s.apply(0, sealMessage(sodium, ada, ROOM, 0, a.sign.privateKey, r));
+  const fromAda = (r: MessageRecord) => s.apply(0, sealChained(sodium, ada, ROOM, 0, a.sign.privateKey, r));
   const hello = msg('hello');
   assert.equal(fromAda(hello)?.kind, 'message');
   // Bob (us) cannot edit or unsend Ada's message, even locally.
-  assert.equal(s.applyOwn({ t: 'edit', id: id(), time: 3, target: hello.id, text: 'changed by Bob' }), null);
-  assert.equal(s.applyOwn({ t: 'unsend', id: id(), time: 3, target: hello.id }), null);
+  assert.equal(s.applyOwn({ t: 'edit', id: id(), time: 3, prev: null, target: hello.id, text: 'changed by Bob' }), null);
+  assert.equal(s.applyOwn({ t: 'unsend', id: id(), time: 3, prev: null, target: hello.id }), null);
   assert.equal(s.message(`0:${hello.id}`)!.text, 'hello');
   // Ada edits it: the text changes and it is marked edited.
-  assert.equal(fromAda({ t: 'edit', id: id(), time: 3, target: hello.id, text: 'hello all' })?.kind, 'updated');
+  assert.equal(fromAda({ t: 'edit', id: id(), time: 3, prev: null, target: hello.id, text: 'hello all' })?.kind, 'updated');
   assert.equal(s.message(`0:${hello.id}`)!.text, 'hello all');
   assert.ok(s.message(`0:${hello.id}`)!.edited);
   // Reactions: one per person per emoji, and they can be taken back.
   const [thumbs, heart] = REACTIONS;
-  assert.equal(s.applyOwn({ t: 'react', id: id(), time: 4, target: hello.id, author: 0, emoji: thumbs!, on: true })?.kind, 'updated');
-  assert.equal(s.applyOwn({ t: 'react', id: id(), time: 4, target: hello.id, author: 0, emoji: thumbs!, on: true }), null, 'twice is once');
-  assert.equal(fromAda({ t: 'react', id: id(), time: 4, target: hello.id, author: 0, emoji: thumbs!, on: true })?.kind, 'updated');
+  assert.equal(s.applyOwn({ t: 'react', id: id(), time: 4, prev: null, target: hello.id, author: 0, emoji: thumbs!, on: true })?.kind, 'updated');
+  assert.equal(s.applyOwn({ t: 'react', id: id(), time: 4, prev: null, target: hello.id, author: 0, emoji: thumbs!, on: true }), null, 'twice is once');
+  assert.equal(fromAda({ t: 'react', id: id(), time: 4, prev: null, target: hello.id, author: 0, emoji: thumbs!, on: true })?.kind, 'updated');
   assert.deepEqual([...s.message(`0:${hello.id}`)!.reactions.get(thumbs!)!].sort(), [0, 1]);
-  assert.equal(s.applyOwn({ t: 'react', id: id(), time: 5, target: hello.id, author: 0, emoji: thumbs!, on: false })?.kind, 'updated');
+  assert.equal(s.applyOwn({ t: 'react', id: id(), time: 5, prev: null, target: hello.id, author: 0, emoji: thumbs!, on: false })?.kind, 'updated');
   assert.deepEqual([...s.message(`0:${hello.id}`)!.reactions.get(thumbs!)!], [0]);
-  assert.equal(s.applyOwn({ t: 'react', id: id(), time: 5, target: hello.id, author: 0, emoji: heart!, on: false }), null, 'nothing to take back');
+  assert.equal(s.applyOwn({ t: 'react', id: id(), time: 5, prev: null, target: hello.id, author: 0, emoji: heart!, on: false }), null, 'nothing to take back');
   // Records about a message we do not have change nothing.
-  assert.equal(fromAda({ t: 'edit', id: id(), time: 6, target: id(), text: 'ghost' }), null);
+  assert.equal(fromAda({ t: 'edit', id: id(), time: 6, prev: null, target: id(), text: 'ghost' }), null);
   // Unsent: the text is gone, and it can no longer be edited or reacted to.
-  assert.equal(fromAda({ t: 'unsend', id: id(), time: 7, target: hello.id })?.kind, 'updated');
+  assert.equal(fromAda({ t: 'unsend', id: id(), time: 7, prev: null, target: hello.id })?.kind, 'updated');
   const gone = s.message(`0:${hello.id}`)!;
   assert.ok(gone.deleted);
   assert.equal(gone.text, '');
   assert.equal(gone.reactions.size, 0);
-  assert.equal(fromAda({ t: 'edit', id: id(), time: 8, target: hello.id, text: 'back' }), null);
-  assert.equal(s.applyOwn({ t: 'react', id: id(), time: 8, target: hello.id, author: 0, emoji: thumbs!, on: true }), null);
+  assert.equal(fromAda({ t: 'edit', id: id(), time: 8, prev: null, target: hello.id, text: 'back' }), null);
+  assert.equal(s.applyOwn({ t: 'react', id: id(), time: 8, prev: null, target: hello.id, author: 0, emoji: thumbs!, on: true }), null);
   // Replies keep the message they reply to, and its sender.
-  const reply: MessageRecord = { t: 'msg', id: id(), time: 9, text: 'answer', reply: { id: hello.id, author: 0 }, seen: receipts() };
+  const reply: MessageRecord = { t: 'msg', id: id(), time: 9, prev: null, text: 'answer', reply: { id: hello.id, author: 0 }, seen: receipts() };
   assert.equal(s.applyOwn(reply)?.kind, 'message');
   assert.deepEqual(s.message(`1:${reply.id}`)!.reply, { id: hello.id, author: 0 });
 });
@@ -659,20 +663,20 @@ test('chat rules: only the sender edits or unsends; reactions toggle once per pe
 test('chat record schemas: reactions only from the fixed set, edits within the limit', () => {
   const target = id();
   for (const good of [
-    { t: 'react', id: id(), time: 1, target, author: 2, emoji: REACTIONS[0], on: true },
-    { t: 'edit', id: id(), time: 1, target, text: 'x' },
-    { t: 'unsend', id: id(), time: 1, target },
+    { t: 'react', id: id(), time: 1, prev: null, target, author: 2, emoji: REACTIONS[0], on: true },
+    { t: 'edit', id: id(), time: 1, prev: null, target, text: 'x' },
+    { t: 'unsend', id: id(), time: 1, prev: null, target },
   ]) assert.ok(validMessage(good), JSON.stringify(good));
   for (const bad of [
-    { t: 'react', id: id(), time: 1, target, emoji: REACTIONS[0], on: true },
-    { t: 'react', id: id(), time: 1, target, author: 20, emoji: REACTIONS[0], on: true },
-    { t: 'react', id: id(), time: 1, target, emoji: 'x', on: true },
-    { t: 'react', id: id(), time: 1, target, emoji: '<b>', on: true },
-    { t: 'react', id: id(), time: 1, target, emoji: REACTIONS[0], on: 'yes' },
-    { t: 'react', id: id(), time: 1, target: 'nope', emoji: REACTIONS[0], on: true },
-    { t: 'edit', id: id(), time: 1, target, text: '' },
-    { t: 'edit', id: id(), time: 1, target, text: 'x'.repeat(MAX_MESSAGE_LENGTH + 1) },
-    { t: 'unsend', id: id(), time: 1, target, extra: 1 },
+    { t: 'react', id: id(), time: 1, prev: null, target, emoji: REACTIONS[0], on: true },
+    { t: 'react', id: id(), time: 1, prev: null, target, author: 20, emoji: REACTIONS[0], on: true },
+    { t: 'react', id: id(), time: 1, prev: null, target, emoji: 'x', on: true },
+    { t: 'react', id: id(), time: 1, prev: null, target, emoji: '<b>', on: true },
+    { t: 'react', id: id(), time: 1, prev: null, target, emoji: REACTIONS[0], on: 'yes' },
+    { t: 'react', id: id(), time: 1, prev: null, target: 'nope', emoji: REACTIONS[0], on: true },
+    { t: 'edit', id: id(), time: 1, prev: null, target, text: '' },
+    { t: 'edit', id: id(), time: 1, prev: null, target, text: 'x'.repeat(MAX_MESSAGE_LENGTH + 1) },
+    { t: 'unsend', id: id(), time: 1, prev: null, target, extra: 1 },
     { t: 'delete', id: id(), time: 1, target },
   ]) assert.ok(!validMessage(bad), JSON.stringify(bad));
 });
@@ -724,12 +728,12 @@ test('replies and reactions name the sender, so reusing an id cannot stand in fo
   s.apply(0, ctl(a, keysFor(a, ada, b)));
   s.apply(2, ctl(m, keysFor(m, mal, b)));
   const x = id(); // a message of Ada's that Bob never had
-  assert.equal(s.apply(2, sealMessage(sodium, mal, ROOM, 2, m.sign.privateKey, { t: 'msg', id: x, time: 2, text: 'Send the deposit to me', reply: null, seen: receipts() }))?.kind, 'message');
-  const e = s.apply(0, sealMessage(sodium, ada, ROOM, 0, a.sign.privateKey, { t: 'msg', id: id(), time: 3, text: 'Yes, do it', reply: { id: x, author: 0 }, seen: receipts() }));
+  assert.equal(s.apply(2, sealChained(sodium, mal, ROOM, 2, m.sign.privateKey, { t: 'msg', id: x, time: 2, prev: null, text: 'Send the deposit to me', reply: null, seen: receipts() }))?.kind, 'message');
+  const e = s.apply(0, sealChained(sodium, ada, ROOM, 0, a.sign.privateKey, { t: 'msg', id: id(), time: 3, prev: null, text: 'Yes, do it', reply: { id: x, author: 0 }, seen: receipts() }));
   const reply = e?.kind === 'message' ? e.message : null;
   assert.ok(reply);
   assert.deepEqual({ author: reply.quote!.author, text: reply.quote!.text, target: reply.quote!.target }, { author: 0, text: null, target: null }, 'quotes Ada’s unknown message, not Mallory’s');
-  assert.equal(s.apply(0, sealMessage(sodium, ada, ROOM, 0, a.sign.privateKey, { t: 'react', id: id(), time: 4, target: x, author: 0, emoji: REACTIONS[0]!, on: true })), null);
+  assert.equal(s.apply(0, sealChained(sodium, ada, ROOM, 0, a.sign.privateKey, { t: 'react', id: id(), time: 4, prev: null, target: x, author: 0, emoji: REACTIONS[0]!, on: true })), null);
   assert.equal(s.message(`2:${x}`)!.reactions.size, 0, 'a reaction to Ada’s message does not land on Mallory’s');
 });
 
@@ -742,11 +746,11 @@ test('a quote keeps the text replied to; the message itself shows the edit', () 
   const ada = newChain(sodium, 1);
   s.apply(0, ctl(a, keysFor(a, ada, b)));
   const meet = msg('Meet at 6');
-  s.apply(0, sealMessage(sodium, ada, ROOM, 0, a.sign.privateKey, meet));
-  const e = s.applyOwn({ t: 'msg', id: id(), time: 3, text: 'Agreed', reply: { id: meet.id, author: 0 }, seen: receipts() });
+  s.apply(0, sealChained(sodium, ada, ROOM, 0, a.sign.privateKey, meet));
+  const e = s.applyOwn({ t: 'msg', id: id(), time: 3, prev: null, text: 'Agreed', reply: { id: meet.id, author: 0 }, seen: receipts() });
   const reply = e?.kind === 'message' ? e.message : null;
   assert.equal(reply!.quote!.text, 'Meet at 6');
-  s.apply(0, sealMessage(sodium, ada, ROOM, 0, a.sign.privateKey, { t: 'edit', id: id(), time: 4, target: meet.id, text: 'Share the room with my friend' }));
+  s.apply(0, sealChained(sodium, ada, ROOM, 0, a.sign.privateKey, { t: 'edit', id: id(), time: 4, prev: null, target: meet.id, text: 'Share the room with my friend' }));
   assert.equal(reply!.quote!.text, 'Meet at 6');
   assert.equal(reply!.quote!.target!.text, 'Share the room with my friend');
 });
@@ -798,14 +802,14 @@ test('records made with our keys that this tab never posted mean another copy is
   const s = new RoomState(sodium, key, ROOM, { slot: 1, signPublic: b.sign.publicKey, boxes, posted: (h) => posted.has(h) });
   s.apply(0, ctl(a, join(a, 'Ada')));
   const ours = (bytes: Uint8Array) => {
-    posted.add(signatureHash(sodium, bytes[0] === 2 ? outerSignature(bytes) : openControl(sodium, key, ROOM, 1, bytes)!.signature));
+    posted.add(signatureHash(sodium, bytes[0] === MESSAGE_VERSION ? outerSignature(bytes) : openControl(sodium, key, ROOM, 1, bytes)!.signature));
     return bytes;
   };
   // Bob's tab remembers its own join before posting it, like any record.
   s.apply(1, ours(ctl(b, join(b, 'Bob'))));
   s.apply(0, ctl(a, admit(b, 'Bob')));
   const chain = newChain(sodium, 1);
-  const sent = ours(sealMessage(sodium, chain, ROOM, 1, b.sign.privateKey, msg('ours')));
+  const sent = ours(sealChained(sodium, chain, ROOM, 1, b.sign.privateKey, msg('ours')));
   assert.ok(checkOuterSignature(sodium, b.sign.publicKey, ROOM, 1, sent));
   assert.ok(!checkOuterSignature(sodium, a.sign.publicKey, ROOM, 1, sent), 'signed by Bob only');
   assert.ok(!checkOuterSignature(sodium, b.sign.publicKey, ROOM, 2, sent), 'for his place only');
@@ -825,7 +829,7 @@ test('records made with our keys that this tab never posted mean another copy is
   s.apply(1, forged);
   assert.equal(s.cloned, false, 'a message the server changed');
   // A copy of our keys sealing a message, even at a place behind ours.
-  s.apply(1, sealMessage(sodium, newChain(sodium, 1), ROOM, 1, b.sign.privateKey, msg('a copy')));
+  s.apply(1, sealChained(sodium, newChain(sodium, 1), ROOM, 1, b.sign.privateKey, msg('a copy')));
   assert.ok(s.cloned, 'a message with our tag that we never posted');
   const t = new RoomState(sodium, key, ROOM, { slot: 1, signPublic: b.sign.publicKey, boxes, posted: (h) => posted.has(h) });
   t.apply(0, ctl(a, join(a, 'Ada')));
@@ -1040,7 +1044,7 @@ test('keys that keep going to others after we were let in, but not to us, show w
   s.apply(0, ctl(a, keysFor(a, g1, c)));
   clock += 121_000;
   assert.deepEqual(s.skipped(120_000), [], 'one delivery is not enough: a sender with a stale view, gone offline');
-  s.apply(0, sealMessage(sodium, g1, ROOM, 0, a.sign.privateKey, msg('for Cleo')));
+  s.apply(0, sealChained(sodium, g1, ROOM, 0, a.sign.privateKey, msg('for Cleo')));
   assert.deepEqual(s.skipped(120_000), [0], 'then a message on that chain');
   assert.deepEqual(s.skipped(10 * 60_000), [], 'and only once it has lasted');
   // Once our delivery comes, it is over.
@@ -1072,7 +1076,7 @@ test('a sender whose records step back is splitting the room', () => {
   const g2 = newChain(sodium, 2);
   s.apply(3, ctl(m, keysFor(m, g2, b)));
   assert.equal(s.forks.size, 0);
-  s.apply(3, sealMessage(sodium, g1, ROOM, 3, m.sign.privateKey, msg('north gate')));
+  s.apply(3, sealChained(sodium, g1, ROOM, 3, m.sign.privateKey, msg('north gate')));
   assert.equal(s.forks.get(3), 'order');
   // A delivery far ahead of the chain we hold is no honest step either.
   const t = stateOf(b);
@@ -1091,7 +1095,7 @@ test('a sender whose records step back is splitting the room', () => {
   enter(u, a, b, 'Bob');
   const ada2 = newChain(sodium, 1);
   u.apply(0, ctl(a, keysFor(a, ada2, b)));
-  const once = sealMessage(sodium, ada2, ROOM, 0, a.sign.privateKey, msg('once'));
+  const once = sealChained(sodium, ada2, ROOM, 0, a.sign.privateKey, msg('once'));
   u.apply(0, once);
   u.apply(0, once);
   assert.equal(u.forks.size, 0);
@@ -1110,7 +1114,7 @@ test('receipts show when two members read different messages at the same place',
   s.apply(0, ctl(a, keysFor(a, ada, b, c)));
   s.apply(2, ctl(c, keysFor(c, cleo, b)));
   const hi = msg('hi');
-  s.apply(0, sealMessage(sodium, ada, ROOM, 0, a.sign.privateKey, hi));
+  s.apply(0, sealChained(sodium, ada, ROOM, 0, a.sign.privateKey, hi));
   const acks = s.acks();
   assert.equal(acks.length, 20, 'one receipt per place, always');
   assert.deepEqual([acks[0]!.slot, acks[0]!.gen, acks[0]!.index, acks[0]!.h], [0, 1, 0, contentHash(sodium, hi)]);
@@ -1118,10 +1122,10 @@ test('receipts show when two members read different messages at the same place',
   assert.ok(validMessage({ ...msg('x'), seen: acks }));
   assert.ok(!validMessage({ ...msg('x'), seen: acks.slice(1) }), 'not fewer');
   // Cleo agrees about Ada's message: nothing.
-  s.apply(2, sealMessage(sodium, cleo, ROOM, 2, c.sign.privateKey, { ...msg('same'), seen: receipts({ slot: 0, gen: 1, index: 0, h: contentHash(sodium, hi) }) }));
+  s.apply(2, sealChained(sodium, cleo, ROOM, 2, c.sign.privateKey, { ...msg('same'), seen: receipts({ slot: 0, gen: 1, index: 0, h: contentHash(sodium, hi) }) }));
   assert.equal(s.forkNotes.size, 0);
   // Cleo read something else there.
-  s.apply(2, sealMessage(sodium, cleo, ROOM, 2, c.sign.privateKey, { ...msg('other'), seen: receipts({ slot: 0, gen: 1, index: 0, h: contentHash(sodium, msg('not hi')) }) }));
+  s.apply(2, sealChained(sodium, cleo, ROOM, 2, c.sign.privateKey, { ...msg('other'), seen: receipts({ slot: 0, gen: 1, index: 0, h: contentHash(sodium, msg('not hi')) }) }));
   assert.ok(s.forkNotes.has('2:0'));
   // A receipt about a place we have not read yet is checked when we read it.
   const t = stateOf(b);
@@ -1132,9 +1136,9 @@ test('receipts show when two members read different messages at the same place',
   const cleo2 = newChain(sodium, 1);
   t.apply(0, ctl(a, keysFor(a, ada2, b, c)));
   t.apply(2, ctl(c, keysFor(c, cleo2, b)));
-  t.apply(2, sealMessage(sodium, cleo2, ROOM, 2, c.sign.privateKey, { ...msg('early'), seen: receipts({ slot: 0, gen: 1, index: 0, h: contentHash(sodium, msg('something else')) }) }));
+  t.apply(2, sealChained(sodium, cleo2, ROOM, 2, c.sign.privateKey, { ...msg('early'), seen: receipts({ slot: 0, gen: 1, index: 0, h: contentHash(sodium, msg('something else')) }) }));
   assert.equal(t.forkNotes.size, 0);
-  t.apply(0, sealMessage(sodium, ada2, ROOM, 0, a.sign.privateKey, hi));
+  t.apply(0, sealChained(sodium, ada2, ROOM, 0, a.sign.privateKey, hi));
   assert.ok(t.forkNotes.has('2:0'));
 });
 
@@ -1414,7 +1418,7 @@ test('wiping the state forgets keys and what was decrypted', () => {
   enter(s, a, b, 'Bob');
   const chain = newChain(sodium, 1);
   s.apply(0, ctl(a, keysFor(a, copy(chain), b)));
-  s.apply(0, sealMessage(sodium, chain, ROOM, 0, a.sign.privateKey, msg('secret words')));
+  s.apply(0, sealChained(sodium, chain, ROOM, 0, a.sign.privateKey, msg('secret words')));
   assert.equal(s.messages.length, 1);
   assert.equal(s.members.get(0)!.name, 'Ada');
   s.wipe();
@@ -1495,4 +1499,169 @@ test('receiving-key snapshots include newer observed rotations', () => {
   const saved = s.receivingPins().get(1)!;
   assert.equal(saved.n, 1);
   assert.deepEqual(saved.key, newest.publicKey);
+});
+
+test('a sender whose own records contradict each other split the room, and is named for it', () => {
+  // Version 3 records commit to their sender's previous one. Mal (with the
+  // server) shows Bob and Cleo different messages at one place, then writes
+  // on: the next record commits to one of them, so whoever read the other
+  // holds two records signed by Mal that cannot both be true.
+  const a = person(0);
+  const b = person(1);
+  const m = person(3);
+  const s = stateOf(b);
+  s.apply(0, ctl(a, join(a, 'Ada')));
+  enter(s, a, b, 'Bob');
+  enter(s, a, m, 'Mal');
+  const g1 = newChain(sodium, 1);
+  s.apply(3, ctl(m, keysFor(m, g1, b)));
+  const forBob = msg('meet at the north gate');
+  const forCleo = msg('meet at the south gate');
+  const cleoCopy = copy(g1);
+  s.apply(3, sealMessage(sodium, g1, ROOM, 3, m.sign.privateKey, forBob));
+  sealMessage(sodium, cleoCopy, ROOM, 3, m.sign.privateKey, forCleo); // what Cleo got instead
+  assert.equal(s.forks.size, 0, 'one message per place, as far as Bob can see');
+  const next = { ...msg('see you there'), prev: { gen: 1, index: 0, h: contentHash(sodium, forCleo) } };
+  s.apply(3, sealMessage(sodium, g1, ROOM, 3, m.sign.privateKey, next));
+  assert.equal(s.forks.get(3), 'split');
+});
+
+test('every record after a sender’s first commits to the one just before it', () => {
+  const a = person(0);
+  const b = person(1);
+  const fresh = () => {
+    const s = stateOf(b);
+    s.apply(0, ctl(a, join(a, 'Ada')));
+    enter(s, a, b, 'Bob');
+    const chain = newChain(sodium, 1);
+    s.apply(0, ctl(a, keysFor(a, chain, b)));
+    return { s, chain };
+  };
+  const seal = (chain: Chain, r: MessageRecord) => sealMessage(sodium, chain, ROOM, 0, a.sign.privateKey, r);
+  // An honest run: none first, then each the one before.
+  {
+    const { s, chain } = fresh();
+    const one = msg('one');
+    s.apply(0, seal(chain, one));
+    const two = { ...msg('two'), prev: { gen: 1, index: 0, h: contentHash(sodium, one) } };
+    s.apply(0, seal(chain, two));
+    s.apply(0, seal(chain, { ...msg('three'), prev: { gen: 1, index: 1, h: contentHash(sodium, two) } }));
+    assert.equal(s.forks.size, 0);
+    assert.equal(s.messages.length, 3);
+  }
+  // None, past a chain's first record.
+  {
+    const { s, chain } = fresh();
+    s.apply(0, seal(chain, msg('one')));
+    s.apply(0, seal(chain, msg('two, starting over')));
+    assert.equal(s.forks.get(0), 'split');
+  }
+  // A place that is not the one just before.
+  {
+    const { s, chain } = fresh();
+    const one = msg('one');
+    s.apply(0, seal(chain, one));
+    s.apply(0, seal(chain, { ...msg('two'), prev: { gen: 1, index: 0, h: contentHash(sodium, one) } }));
+    s.apply(0, seal(chain, { ...msg('three'), prev: { gen: 1, index: 0, h: contentHash(sodium, one) } }));
+    assert.equal(s.forks.get(0), 'split');
+  }
+  // A new chain's first record commits to the last of an earlier chain;
+  // one that commits to none, after Bob read earlier ones, starts a second
+  // history.
+  {
+    const { s, chain } = fresh();
+    const one = msg('one');
+    s.apply(0, seal(chain, one));
+    const g2 = newChain(sodium, 2);
+    s.apply(0, ctl(a, keysFor(a, g2, b)));
+    s.apply(0, seal(g2, { ...msg('new chain'), prev: { gen: 1, index: 0, h: contentHash(sodium, one) } }));
+    assert.equal(s.forks.size, 0);
+    const g3 = newChain(sodium, 3);
+    s.apply(0, ctl(a, keysFor(a, g3, b)));
+    s.apply(0, seal(g3, msg('no history')));
+    assert.equal(s.forks.get(0), 'split');
+  }
+  // A first readable record committing to nothing is fine for a reader who
+  // has read nothing earlier from that sender (they joined later, say).
+  {
+    const { s } = fresh();
+    const g4 = newChain(sodium, 4);
+    s.apply(0, ctl(a, keysFor(a, g4, b)));
+    s.apply(0, seal(g4, msg('first one Bob can read')));
+    assert.equal(s.forks.size, 0);
+  }
+  // Within a chain, a record behind one already read cannot be read at all
+  // (its key is gone); the step back itself is the warning.
+  {
+    const { s, chain } = fresh();
+    const late = seal(copy(chain), msg('one'));
+    advanceChain(sodium, chain, 1);
+    s.apply(0, seal(chain, { ...msg('two'), prev: { gen: 1, index: 0, h: contentHash(sodium, msg('not one')) } }));
+    s.apply(0, late);
+    assert.equal(s.forks.get(0), 'order');
+  }
+  // A previous record we never read (here: one whose key we never got)
+  // leaves nothing to compare.
+  {
+    const { s } = fresh();
+    const g2 = newChain(sodium, 2);
+    s.apply(0, ctl(a, keysFor(a, g2, b)));
+    s.apply(0, seal(g2, { ...msg('two'), prev: { gen: 1, index: 0, h: contentHash(sodium, msg('never read')) } }));
+    assert.equal(s.forks.size, 0);
+    assert.equal(s.messages.length, 1);
+  }
+});
+
+test('receipts can travel alone, and count like a message’s', () => {
+  const a = person(0);
+  const b = person(1);
+  const c = person(2);
+  const s = stateOf(b);
+  s.apply(0, ctl(a, join(a, 'Ada')));
+  enter(s, a, b, 'Bob');
+  enter(s, a, c, 'Cleo');
+  const ada = newChain(sodium, 1);
+  s.apply(0, ctl(a, keysFor(a, ada, b)));
+  const cleo = newChain(sodium, 1);
+  s.apply(2, ctl(c, keysFor(c, cleo, b)));
+  const hi = msg('hi');
+  s.apply(0, sealChained(sodium, ada, ROOM, 0, a.sign.privateKey, hi));
+  const seen = (read: Ack): MessageRecord => ({ t: 'seen', id: id(), time: 3, prev: null, seen: receipts(read) });
+  assert.equal(s.apply(2, sealChained(sodium, cleo, ROOM, 2, c.sign.privateKey, seen({ slot: 0, gen: 1, index: 0, h: contentHash(sodium, hi) }))), null, 'nothing to show');
+  assert.equal(s.messages.length, 1);
+  assert.equal(s.forkNotes.size, 0);
+  // Cleo's tab read something else at Ada's place: Bob is told.
+  s.apply(2, sealChained(sodium, cleo, ROOM, 2, c.sign.privateKey, seen({ slot: 0, gen: 1, index: 0, h: contentHash(sodium, msg('not hi')) })));
+  assert.ok(s.forkNotes.has('2:0'));
+  assert.equal(s.forks.size, 0, 'Cleo’s own records agree with each other');
+});
+
+test('version 3 chat records: every one commits to a previous record, or to none', () => {
+  const r = msg('hi');
+  assert.ok(validMessage(r));
+  assert.ok(validMessage({ ...r, prev: { gen: 1, index: 0, h: 'B'.repeat(22) } }));
+  assert.ok(validMessage({ t: 'seen', id: id(), time: 1, prev: null, seen: receipts() }));
+  for (const bad of [
+    { ...r, prev: undefined }, (({ prev: _, ...rest }) => rest)(r),
+    { ...r, prev: { gen: 0, index: 0, h: 'B'.repeat(22) } }, { ...r, prev: { gen: 1, index: -1, h: 'B'.repeat(22) } },
+    { ...r, prev: { gen: 1, index: 0, h: NO_ACK } }, { ...r, prev: { gen: 1, index: 0, h: 'short' } },
+    { ...r, prev: { gen: 1, index: 0, h: 'B'.repeat(22), extra: 1 } }, { ...r, prev: 'B'.repeat(22) },
+    { t: 'seen', id: id(), time: 1, prev: null, seen: receipts(), text: 'x' }, { t: 'seen', id: id(), time: 1, prev: null },
+  ]) assert.ok(!validMessage(bad), JSON.stringify(bad));
+  assert.equal(MESSAGE_VERSION, 3);
+});
+
+test('messages from an older version of the page are noticed, not read', () => {
+  const a = person(0);
+  const b = person(1);
+  const s = stateOf(b);
+  s.apply(0, ctl(a, join(a, 'Ada')));
+  enter(s, a, b, 'Bob');
+  const chain = newChain(sodium, 1);
+  s.apply(0, ctl(a, keysFor(a, chain, b)));
+  const old = sealChained(sodium, chain, ROOM, 0, a.sign.privateKey, msg('from an old tab'));
+  old[0] = MESSAGE_VERSION - 1;
+  assert.equal(s.apply(0, old), null);
+  assert.equal(s.olderVersion, true);
+  assert.equal(s.messages.length, 0);
 });

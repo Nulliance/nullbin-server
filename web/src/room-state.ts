@@ -60,6 +60,7 @@ import {
   type ChatFile,
   type Ack,
   type MessageRecord,
+  type Prev,
   type Ref,
 } from './room-crypto.ts';
 
@@ -261,7 +262,9 @@ export class RoomState {
    * the history: they, or the server reordering them, are splitting the
    * room).
    */
-  readonly forks = new Map<number, 'keys' | 'order'>();
+  readonly forks = new Map<number, 'keys' | 'order' | 'split'>();
+  /** Some messages came in an older version, from a tab that needs reloading. */
+  olderVersion = false;
   /**
    * Senders whose chain went to others after we were let in, at a
    * generation we do not have: since when (Date.now()), that generation,
@@ -433,6 +436,10 @@ export class RoomState {
     this.applied++;
     if (bytes[0] === MESSAGE_VERSION) return this.incoming(from, bytes);
     if (bytes[0] !== CONTROL_VERSION) {
+      // Messages from a tab still running an older version of the page,
+      // which this one cannot read (and which cannot read ours). Nobody is
+      // named: the version byte is not signed in a way we can check.
+      if (bytes[0] === MESSAGE_VERSION - 1) this.olderVersion = true;
       this.rejected++;
       return null;
     }
@@ -802,7 +809,8 @@ export class RoomState {
   private notePlace(slot: number, gen: number, index: number, message: boolean): void {
     const next = this.nextPlace.get(slot) ?? { gen: 0, index: 0 };
     if (gen < next.gen || (gen === next.gen && index < next.index)) {
-      this.forks.set(slot, 'order');
+      // Weaker than a fork already found: that one stays to be shown.
+      this.forks.set(slot, this.forks.get(slot) ?? 'order');
       return;
     }
     this.nextPlace.set(slot, { gen, index: message ? index + 1 : index });
@@ -826,6 +834,42 @@ export class RoomState {
     }
   }
 
+  /**
+   * Checks the previous record a sender's record commits to against what we
+   * read from that sender. Both are signed with the sender's key, so a
+   * contradiction shows the sender (or someone with their keys) made two
+   * different records for one place: it showed members different
+   * conversations, and now one of them is reading the other's. Only the
+   * sender's own signatures are evidence here, so the warning names them.
+   */
+  private checkPrev(slot: number, at: { gen: number; index: number }, prev: Prev | null): void {
+    if (prev === null) {
+      // Only a sender's first record commits to none. After records we
+      // read from them, one with no history starts a second one; within a
+      // chain, every record after the first has a record before it.
+      const read = this.readAt.get(slot);
+      const earlier = read !== undefined && [...read.keys()].some((k) => {
+        const [g, i] = k.split(':').map(Number) as [number, number];
+        return g < at.gen || (g === at.gen && i < at.index);
+      });
+      if (at.index > 0 || earlier) this.forks.set(slot, 'split');
+      return;
+    }
+    // The record just before: the previous place of this chain, or for a
+    // chain's first record, a place in an earlier chain.
+    if (at.index > 0 ? prev.gen !== at.gen || prev.index !== at.index - 1 : prev.gen >= at.gen) {
+      this.forks.set(slot, 'split');
+      return;
+    }
+    // A place we never read (its message unreadable, or from before we
+    // joined) leaves nothing to compare. It cannot come later either: we
+    // hold only each sender's current chain, so a record behind the place
+    // we reached is unreadable (and its arrival is a step back, warned of
+    // as such).
+    const h = this.readAt.get(slot)?.get(`${prev.gen}:${prev.index}`);
+    if (h !== undefined && h !== prev.h) this.forks.set(slot, 'split');
+  }
+
   private checkClaim(claimer: number, a: Ack): void {
     if (a.gen === 0) return; // nothing read there
     const h = this.readAt.get(a.slot)?.get(`${a.gen}:${a.index}`);
@@ -846,8 +890,10 @@ export class RoomState {
     if (this.seen.has(key)) return null;
     this.seen.add(key);
     // Receipts: what we read here, and what the sender says they read.
+    if (at && from !== this.me.slot) this.checkPrev(from, at, r.prev);
     if (at) this.noteRead(from, at, contentHash(this.sodium, r));
-    if (r.t === 'msg') for (const a of r.seen) this.checkClaim(from, a);
+    if (r.t === 'msg' || r.t === 'seen') for (const a of r.seen) this.checkClaim(from, a);
+    if (r.t === 'seen') return null; // receipts alone: nothing to show
     if (r.t === 'msg') {
       // A reply quotes what its target said when the reply arrived; one
       // whose target we never had says so for good.

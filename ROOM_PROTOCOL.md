@@ -1,7 +1,7 @@
 # Null Chat protocol
 
 This document specifies how Null Chats work, for anyone reviewing their
-security. It describes version 1 of control records and version 2 of
+security. It describes version 1 of control records and version 3 of
 message records, as implemented in `web/src/room-crypto.ts` (formats and
 primitives), `web/src/room-state.ts` (which records a tab trusts) and
 `web/src/room.ts` (what a tab sends, and when). Where this document and the
@@ -29,11 +29,13 @@ stores and relays opaque records and is not trusted. The protocol aims for:
   member's help) shows members different conversations, members are warned
   once evidence of it reaches them, and the warning names only someone
   whose own signed records show it. A sender who shows two members
-  different messages at one place is seen only when a receipt for that
-  place crosses: the warning then names the receipt's sender and the
-  message's sender as the two possible causes, since nothing tells a false
-  receipt from a split message. Until a deceived member posts again, no
-  receipt shows it, so nobody is warned (section 9).
+  different messages at one place contradicts, in its next record (which
+  commits to its previous one), what one of them read, and that member is
+  warned, naming the sender. A sender who instead keeps a separate history
+  for each group is seen when receipts cross, which members' tabs send
+  within minutes even if they write nothing; that warning names the
+  receipt's sender and the message's sender, since nothing tells a false
+  receipt from a split history (section 9).
 - **G6 Name privacy.** Names, invite labels and the room's name are hidden
   from the server and from anyone holding only the room key.
 
@@ -118,9 +120,9 @@ length and all-zero padding.
 
 signature = `Sign(S_from, "nullbin room record v1\0<room>\0<from>\0" || JSON)`.
 
-**Message record** (version 2):
+**Message record** (version 3):
 
-    2 || gen (4, BE) || index (4, BE) || nonce (24)
+    3 || gen (4, BE) || index (4, BE) || nonce (24)
       || AEAD(plain, key = MK, AD = "nullbin room msg v1 <room> <from> <gen> <index>")
       || outer (64)
 
@@ -184,6 +186,19 @@ removed. `room`, `invite`, `remove` and `admit` must come from place 0.
 | `edit` | `target`, `text` | replace the text of the sender's own message `target` |
 | `unsend` | `target` | delete the sender's own message `target` |
 | `react` | `target`, `author`, `emoji` (one of six), `on` | add or remove a reaction |
+| `seen` | `seen` (20 receipts) | receipts alone; shown to nobody |
+
+Every message record also has `prev`: the sender's previous message record,
+as `{gen, index, h}` with `h` its hash as in a receipt, or null for the
+sender's first. For a record at `(g, i)` with `i > 0` it must name
+`(g, i − 1)`; at `(g, 0)` a place in an earlier generation. So a record's
+hash covers its sender's whole history. A reader that read the place
+`prev` names compares the hashes; a mismatch, a `prev` naming any other
+place, or a null `prev` after records it read from that sender is a
+*split*: two different records the sender signed for one history (section
+8). A place the reader never read leaves nothing to compare. A tab keeps
+its last record's place and hash with its chain, so a reload continues the
+history.
 
 Edits and unsends look up `<from>:<target>`, so they only reach the sender's
 own messages; reactions and replies name the target's author and id. A
@@ -218,7 +233,13 @@ timing of uploads and downloads can hint at it.
 A **receipt** is `{slot, gen, index, h}`: for each of the 20 places, the
 newest place the sender read there and `h = b64u(H(16, JSON of that record))`,
 or `gen = 0` and a fixed `h` for nothing read. Every message carries all 20,
-so its size does not depend on what was read.
+so its size does not depend on what was read. Since each record commits to
+the one before, `h` covers everything its sender sent up to there.
+
+A tab that read new messages but has sent no receipts for 2 minutes posts a
+`seen` record (at most one every 10 minutes, and none once the room holds
+800 records), so a member shown something different is found even if they
+never write. It is the size of a short message.
 
 ## 7. Flows
 
@@ -371,7 +392,8 @@ at `ends`, or when the server restarts.
 | out of order | a sender's signed places step back, or a receiving-key number jumps by more than 64 | the sender, saying the server may be the cause |
 | left out | for two minutes, deliveries from s go to others but none we can open | the sender, or the server |
 | stale key | a delivery sealed to a key we replaced long before | the sender, or the server |
-| receipts | a member's receipts disagree with what we read at that place | the member whose receipts disagree |
+| split | a sender's record commits to a previous record other than the one we read from them (or to none after we read some) | the sender |
+| receipts | a member's receipts disagree with what we read at that place | the member whose receipts disagree, and the sender of the message at that place |
 | damaged invite / contested / bad proof / late / full | section 7.3 | the place |
 | over limit | an admit that would pass the signed `max` (not let in) | nobody |
 
@@ -396,17 +418,23 @@ only the creator's key, or a copy of a member's own keys, can.
   deliveries and are deleted two minutes later. A stolen device exposes the
   chains it holds (from then on) and deliveries sealed to receiving keys
   not yet deleted.
-- **G5.** Commitments, forward-only places and receipts catch members shown
-  different chains or messages, once the evidence reaches them. Chains are
-  caught by commitments as soon as a member holding the real one reads
-  another's delivery. Different messages at one place of one chain are
-  caught only by receipts: the member shown one must post again after
-  reading it, and the member shown the other must read that post. Until
-  then nothing shows it (each tab sees one valid message at the place), and
-  the warning cannot tell a split message from a false receipt, so it names
-  both senders. A commitment that crosses recipients for every message
-  (such as a hash of each message in the next key delivery) would catch it
-  sooner; that is a protocol change for a later version.
+- **G5.** Commitments, forward-only places, records that commit to their
+  sender's previous one, and receipts catch members shown different chains
+  or messages, once the evidence reaches them. Chains are caught by
+  commitments as soon as a member holding the real one reads another's
+  delivery. Different messages at one place are caught as soon as the
+  sender writes again to both: the next record commits to one of them, and
+  the member who read the other holds two records signed by the sender that
+  contradict each other, so the warning can name the sender. A sender who
+  keeps a separate history for each group, never writing one record to
+  both, is caught by receipts: each tab sends its receipts within about 2
+  to 12 minutes of reading even if its member writes nothing, a receipt's
+  hash covers the whole history up to it, and a member who read something
+  else is told. That warning cannot tell a split history from a false
+  receipt, so it names both senders. What stays unseen: a server that also
+  hides members' receipts from each other (it controls availability), a
+  member whose tab is closed before it sends any, and a room past 800
+  records, where tabs stop sending receipts alone.
 - **G6.** Names are encrypted under RO, which travels only sealed to admitted
   members; joiners' names travel sealed to the creator.
 
@@ -475,7 +503,8 @@ withhold or delay anything; a malicious server can show a late joiner an
 old receiving key of someone (whose old secret, if stolen, then reads what
 the joiner sends); a link that leaks before its invitee uses it lets its
 holder take the place; a malicious member can fill the room or end it;
-receipts are each member's own word; lookalike names are folded from a
+receipts are each member's own word, and a member's tab sends them alone
+at most every 10 minutes (and not past 800 records); lookalike names are folded from a
 short list, so comparing safety codes is the real check.
 
 ## 12. Constants
@@ -489,6 +518,7 @@ short list, so comparing safety codes is the real check.
 | Receiving-key numbers | 1 to 4,096, at most 64 ahead |
 | Receiving-key rotation / grace | 3 minutes / 2 minutes |
 | Left-out warning | after 2 minutes |
+| Receipts alone | after 2 minutes without sending receipts; at most one per 10 minutes; none past 800 records |
 | Stale-key and end-time slack | 10 minutes |
 | Invite lifetime | chosen per invite: 5 minutes, 15 minutes or 1 hour (its expiry signed); joins seen 10 minutes late are refused |
 | Member limit | 2 to 20 (signed), the creator included |

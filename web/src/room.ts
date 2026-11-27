@@ -74,6 +74,8 @@ import {
   type Chain,
   type ControlRecord,
   type MessageRecord,
+  type Prev,
+  contentHash,
 } from './room-crypto.ts';
 import { RoomState, type BoxKey, type Member, type Message, type RoomEvent } from './room-state.ts';
 import { loadSodium, type Sodium } from './sodium.ts';
@@ -115,6 +117,7 @@ interface Session {
   sentTo: number[]; // slots holding our current chain
   sent: number; // messages sent with the current chain
   rotate: boolean; // replace our chain before the next message
+  last: Prev | null; // our last chat record (its place and hash), which the next one commits to
   peers: (StoredChain & { slot: number })[];
   known: { slot: number; key: string }[]; // signing keys we trust by slot: the creator's (from the invite) and admitted members'
   invites: { slot: number; secret: string; exp: number }[]; // the creator's invite secrets, to check joins' proofs, and when each stops working (ms)
@@ -160,6 +163,13 @@ function validChain(sodium: Sodium, c: unknown): c is StoredChain {
   return n(o['gen'], 1) && n(o['index'], 0) && typeof o['ck'] === 'string' && bytesOf(sodium, o['ck'], 32);
 }
 
+function validPrev(v: unknown): v is Prev {
+  if (typeof v !== 'object' || v === null) return false;
+  const o = v as Record<string, unknown>;
+  const n = (x: unknown, min: number) => typeof x === 'number' && Number.isInteger(x) && x >= min && x <= MAX_COUNTER;
+  return Object.keys(o).sort().join(',') === 'gen,h,index' && n(o['gen'], 1) && n(o['index'], 0) && typeof o['h'] === 'string' && /^[A-Za-z0-9_-]{22}$/.test(o['h']) && o['h'] !== 'A'.repeat(22);
+}
+
 function bytesOf(sodium: Sodium, s: unknown, length: number): boolean {
   if (typeof s !== 'string') return false;
   try {
@@ -197,6 +207,7 @@ function loadSession(sodium: Sodium, id: string): Session | null {
     (o['chain'] === null || validChain(sodium, o['chain'])) &&
     Array.isArray(o['sentTo']) && o['sentTo'].every(slotOk) &&
     typeof o['sent'] === 'number' && Number.isInteger(o['sent']) && o['sent'] >= 0 && typeof o['rotate'] === 'boolean' &&
+    (o['last'] === undefined || o['last'] === null || validPrev(o['last'])) &&
     Array.isArray(o['peers']) && o['peers'].every((p: unknown) => validChain(sodium, p) && slotOk((p as unknown as Record<string, unknown>)['slot'])) &&
     Array.isArray(o['known']) && o['known'].length <= 20 && o['known'].every((k: unknown) => {
       const x = (typeof k === 'object' && k !== null ? k : {}) as Record<string, unknown>;
@@ -226,6 +237,7 @@ function loadSession(sodium: Sodium, id: string): Session | null {
       return slotOk(x['slot']) && typeof x['n'] === 'number' && Number.isInteger(x['n']) && x['n'] >= 0 && x['n'] <= MAX_COUNTER && bytesOf(sodium, x['key'], 32);
     });
   if (ok && ends === undefined) o['ends'] = null; // sessions from before expiry pinning
+  if (ok && o['last'] === undefined) o['last'] = null; // sessions from before records committed to the last one
   return ok ? (o as unknown as Session) : null;
 }
 
@@ -290,7 +302,7 @@ function newSession(sodium: Sodium, roomKey: Uint8Array, slot: number, member: s
   return {
     ends: null, key: b64(sodium, roomKey), slot, member, name, sign: b64(sodium, sign), boxes: [{ n: 0, secret: b64(sodium, box), retired: null }],
     boxRotate: false, boxRotated: Date.now(), pendingBox: null, owner, known: [{ slot: 0, key: b64(sodium, creator) }], removedSlots: [],
-    invites: [], password: null, settings: null, joinProof: null, inviteCheck: null, chain: null, sentTo: [], sent: 0, rotate: false, peers: [], posted: [], peerBoxes: [], verified: [], roster: null, nameSecret: null,
+    invites: [], password: null, settings: null, joinProof: null, inviteCheck: null, chain: null, sentTo: [], sent: 0, rotate: false, last: null, peers: [], posted: [], peerBoxes: [], verified: [], roster: null, nameSecret: null,
   };
 }
 
@@ -299,7 +311,7 @@ function wipeSession(session: Session): void {
   Object.assign(session, {
     ends: null, key: '', member: '', sign: '', owner: null, password: null, settings: null, roster: null, nameSecret: null,
     boxes: [], pendingBox: null, chain: null, peers: [], invites: [], joinProof: null, inviteCheck: null,
-    known: [], peerBoxes: [], posted: [], verified: [], sentTo: [], name: '',
+    known: [], peerBoxes: [], posted: [], verified: [], sentTo: [], name: '', last: null,
   } satisfies Partial<Session>);
 }
 
@@ -806,6 +818,12 @@ const REJOIN_MS = 30_000;
 const CONFIRM_GAP_MS = 500;
 /** How long keys may keep going to others but not to us before the page says so (a stale view catches up sooner). */
 const SKIPPED_MS = 2 * 60_000;
+/** A tab that read new messages sends its receipts alone after this long without sending any. */
+const RECEIPT_IDLE_MS = 2 * 60_000;
+/** At most one receipts-alone record per tab this often. */
+const RECEIPT_GAP_MS = 10 * 60_000;
+/** No receipts-alone records past this many records in the room (it holds 1,000): messages need the room. */
+const RECEIPT_ROOM_LIMIT = 800;
 /** How far the server's end time may pass the creator's signed one before the page says so (clocks differ). */
 const ENDS_SLACK_MS = 10 * 60_000;
 /** After waiting this long to be let in, the page explains what may be wrong. */
@@ -1480,8 +1498,19 @@ function openChat(sodium: Sodium, id: string, session: Session): void {
     }
   };
 
-  /** Encrypts, signs and posts one chat record; it is applied here at once. Returns true if sent. */
-  const sendChat = async (record: MessageRecord): Promise<boolean> => {
+  /** Our receipts as last sent (other places only) and when: an automatic receipt goes out only when they changed. */
+  let receiptsSent = '';
+  let receiptsSentAt = Date.now();
+  let autoReceiptAt = 0;
+  const othersRead = (seen: readonly { slot: number; gen: number; index: number; h: string }[]) =>
+    JSON.stringify(seen.filter((a) => a.slot !== session.slot));
+
+  /**
+   * Encrypts, signs and posts one chat record; it is applied here at once.
+   * Returns true if sent. Its prev is set here: every record commits to our
+   * last one (see Prev), which is saved before the record is posted.
+   */
+  const sendChat = async (draft: MessageRecord): Promise<boolean> => {
     if (expired()) return false;
     // Keys go to the members we know of. An old view may miss a new member
     // or a new receiving key: fetch the room again first.
@@ -1491,23 +1520,59 @@ function openChat(sodium: Sodium, id: string, session: Session): void {
     }
     let sent = false as boolean;
     let at: { gen: number; index: number } | undefined;
+    let record = null as MessageRecord | null;
     await exclusive(async () => {
       await syncRoomKeys(shareKeys, () => session.rotate, () => expired());
       if (expired() || !chain) return;
       // Sealing steps our chain past this record's key and deletes it.
       at = { gen: chain.gen, index: chain.index };
+      record = { ...draft, prev: session.last };
       const bytes = sealMessage(sodium, chain, id, session.slot, signSecret, record);
+      // The next record commits to this one, whether or not this post's
+      // reply arrives: if it never reached the room, nobody can compare.
+      session.last = { gen: at.gen, index: at.index, h: contentHash(sodium, record) };
       session.sent++;
       persist();
       await post(bytes);
       sent = true;
     });
-    if (!sent || ended) return false;
+    if (!sent || ended || !record) return false;
+    if (record.t === 'msg' || record.t === 'seen') {
+      receiptsSent = othersRead(record.seen);
+      receiptsSentAt = Date.now();
+    }
     show(status, false);
     const e = state.applyOwn(record, at);
     if (e) show1(e, true);
     void poll();
     return true;
+  };
+  /**
+   * Receipts alone, for a tab that read new messages but has sent none for
+   * a while. A member shown a different message than the others is then
+   * found within minutes, without having to write anything: their tab's
+   * receipts disagree with what the others read (see ROOM_PROTOCOL.md, G5).
+   * Each uses one of the room's 1,000 records, so they are few: only after
+   * RECEIPT_IDLE_MS without sending receipts, at most one per RECEIPT_GAP_MS,
+   * and none once the room is nearly full.
+   */
+  let sendingReceipts = false;
+  const sendReceiptsIfDue = async () => {
+    if (ended || pollingPaused || sendingReceipts || composerLocked || !state.members.has(session.slot) || state.removed.has(session.slot)) return;
+    const now = Date.now();
+    if (now - receiptsSentAt < RECEIPT_IDLE_MS || now - autoReceiptAt < RECEIPT_GAP_MS || after >= RECEIPT_ROOM_LIMIT) return;
+    const seen = state.acks();
+    const others = othersRead(seen);
+    if (others === receiptsSent || !seen.some((a) => a.slot !== session.slot && a.gen !== 0)) return;
+    sendingReceipts = true;
+    autoReceiptAt = now;
+    try {
+      await sendChat({ t: 'seen', id: newRecordId(sodium), time: now, prev: null, seen });
+    } catch {
+      // Tried again after the gap; nothing to show for it.
+    } finally {
+      sendingReceipts = false;
+    }
   };
   const failed = (e: unknown, what: string) => {
     if (ended) return;
@@ -1962,7 +2027,7 @@ function openChat(sodium: Sodium, id: string, session: Session): void {
     }
   };
   const react = (m: Message, emoji: string, on: boolean) => {
-    sendChat({ t: 'react', id: newRecordId(sodium), time: Date.now(), target: m.id, author: m.from, emoji, on }).catch((e) => failed(e, 'The reaction was not sent.'));
+    sendChat({ t: 'react', id: newRecordId(sodium), time: Date.now(), prev: null, target: m.id, author: m.from, emoji, on }).catch((e) => failed(e, 'The reaction was not sent.'));
   };
   const messageOf = (n: EventTarget | null): Message | undefined => {
     const li = n instanceof Element ? n.closest<HTMLLIElement>('.nb-m') : null;
@@ -2051,7 +2116,7 @@ function openChat(sodium: Sodium, id: string, session: Session): void {
           }
           if (Date.now() - Number(b.dataset['armed']) < CONFIRM_GAP_MS) return; // a double-click does not confirm
           closeMenu(true);
-          sendChat({ t: 'unsend', id: newRecordId(sodium), time: Date.now(), target: m.id }).then((ok) => {
+          sendChat({ t: 'unsend', id: newRecordId(sodium), time: Date.now(), prev: null, target: m.id }).then((ok) => {
             if (!ok) return;
             const up = uploadedFiles.get(m.id);
             if (up) {
@@ -2324,6 +2389,8 @@ function openChat(sodium: Sodium, id: string, session: Session): void {
     if (expired() || pollingPaused) return Promise.resolve();
     polling ??= fetchAll().finally(() => {
       polling = null;
+      // Outside the poll: sending waits for a fresh one.
+      window.setTimeout(() => void sendReceiptsIfDue(), 0);
     });
     return polling;
   }
@@ -2411,7 +2478,13 @@ function openChat(sodium: Sodium, id: string, session: Session): void {
         warnedForks.add(`${kind}:${slot}`);
         add(kind === 'keys'
           ? system(nameNode(slot), ' gave different people different keys, so they can show each of you different messages. Remove them, or leave the chat.')
-          : system(nameNode(slot), '’s messages and keys arrived out of order: they, or the server, may be showing people different conversations. Compare with the others another way, and leave if in doubt.'), false, false);
+          : kind === 'split'
+            ? system(nameNode(slot), ' sent you a message that contradicts one they sent you before: they (or someone with their keys) are showing people different conversations. Remove them, or leave the chat.')
+            : system(nameNode(slot), '’s messages and keys arrived out of order: they, or the server, may be showing people different conversations. Compare with the others another way, and leave if in doubt.'), false, false);
+      }
+      if (state.olderVersion && !warnedForks.has('older')) {
+        warnedForks.add('older');
+        add(system('Some messages here were sent from a page with an older version of Nullbin, which this one can’t read (and which can’t read yours). Whoever has had the chat open for a while should reload it.'), false, false);
       }
       for (const slot of state.skipped(SKIPPED_MS)) {
         if (warnedForks.has(`skipped:${slot}`)) continue;
@@ -2873,7 +2946,7 @@ function openChat(sodium: Sodium, id: string, session: Session): void {
     let uploaded: { id: string; deleteToken: string } | null = null;
     try {
       if (current?.kind === 'edit') {
-        if (value !== current.target.text) await sendChat({ t: 'edit', id: newRecordId(sodium), time: Date.now(), target: current.target.id, text: value });
+        if (value !== current.target.text) await sendChat({ t: 'edit', id: newRecordId(sodium), time: Date.now(), prev: null, target: current.target.id, text: value });
       } else {
         let chatFile = undefined;
         if (fileToSend) {
@@ -2901,8 +2974,8 @@ function openChat(sodium: Sodium, id: string, session: Session): void {
         // see whether they read the same.
         const msgId = newRecordId(sodium);
         const msg: MessageRecord = chatFile
-          ? { t: 'msg', id: msgId, time: Date.now(), text: value, reply: current?.kind === 'reply' ? { id: current.target.id, author: current.target.from } : null, seen: state.acks(), file: chatFile }
-          : { t: 'msg', id: msgId, time: Date.now(), text: value, reply: current?.kind === 'reply' ? { id: current.target.id, author: current.target.from } : null, seen: state.acks() };
+          ? { t: 'msg', id: msgId, time: Date.now(), prev: null, text: value, reply: current?.kind === 'reply' ? { id: current.target.id, author: current.target.from } : null, seen: state.acks(), file: chatFile }
+          : { t: 'msg', id: msgId, time: Date.now(), prev: null, text: value, reply: current?.kind === 'reply' ? { id: current.target.id, author: current.target.from } : null, seen: state.acks() };
         if (!validMessage(msg)) throw new Error('Invalid message.');
         const ok = await sendChat(msg);
         if (uploaded) {

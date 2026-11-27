@@ -3307,3 +3307,65 @@ test('Null Chat: an invite that expired before the creator could let them in is 
   assert.ok(a.sent.some((s) => s.method === 'POST' && s.path.endsWith('/members/1/remove')), 'the place was closed');
   await a.check(/404/);
 });
+
+test('Null Chat: a member who only reads sends receipts on their own, shown to nobody', { timeout: 120_000 }, async (t) => {
+  // Version 3 (audit A2): a member shown a different message than the
+  // others is found even if they never write, because their tab sends what
+  // it read after a while. Bob's clock is fast-forwarded past the wait.
+  await restartAPI();
+  t.after(() => restartAPI());
+  const a = await open();
+  t.after(() => a.context.close());
+  await goto(a, `${origin}/chat`);
+  await a.page.fill('#room-you', 'Ada');
+  await a.page.click('#room-create-submit');
+  await a.page.waitForSelector('#room-chat:not([hidden])');
+  await a.page.waitForFunction(() => !(document.getElementById('room-text') as HTMLTextAreaElement).disabled);
+  await a.page.click('#room-invite-open');
+  await a.page.fill('#room-invite-label', 'Bob');
+  await a.page.click('#room-invite-create');
+  await a.page.waitForSelector('#room-invite-result:not([hidden])');
+  const link = (await a.page.textContent('#room-invite-link')) ?? '';
+  await a.page.click('#room-invite-close');
+  const b = await open();
+  t.after(() => b.context.close());
+  await b.page.clock.install();
+  await b.page.clock.resume(); // real time until fast-forwarded
+  await goto(b, link);
+  await b.page.waitForSelector('#room-join:not([hidden])');
+  await b.page.fill('#room-join-name', 'Bob');
+  await b.page.click('#room-join-submit');
+  // Bob's page runs on a fake clock, so it is polled from here, not with
+  // waitForFunction (which waits on the page's own timers).
+  const until = async (what: string, check: () => boolean) => {
+    for (let i = 0; i < 120; i++) {
+      if (await b.page.evaluate(check)) return;
+      await new Promise((r) => setTimeout(r, 500));
+    }
+    throw new Error(`Bob's page never got there: ${what}`);
+  };
+  await until('composer unlocked', () => !(document.getElementById('room-text') as HTMLTextAreaElement).disabled);
+  // New members read only what is sent after they are let in.
+  await a.page.waitForFunction(() => /Bob joined/.test(document.getElementById('room-messages')?.textContent ?? ''), null, { timeout: 30_000 });
+  await a.page.fill('#room-text', 'only Bob reads this');
+  await a.page.press('#room-text', 'Enter');
+  await until('message read', () => /only Bob reads this/.test(document.getElementById('room-messages')?.textContent ?? ''));
+  // Chat records only (version 3); key changes are control records (version 1).
+  const posts = () => b.sent.filter((s) => s.method === 'POST' && s.path.endsWith('/records') && s.body?.[0] === 3).length;
+  const before = posts();
+  await new Promise((r) => setTimeout(r, 3000));
+  assert.equal(posts(), before, 'nothing goes out right away');
+  await b.page.clock.fastForward('03:00');
+  for (let i = 0; i < 80 && posts() === before; i++) await new Promise((r) => setTimeout(r, 500));
+  assert.equal(posts(), before + 1, 'one record with receipts alone');
+  const aMessages = await a.page.locator('#room-messages .nb-m').count();
+  await a.page.waitForTimeout(3000);
+  assert.equal(await a.page.locator('#room-messages .nb-m').count(), aMessages, 'shown to nobody');
+  assert.equal(await b.page.locator('#room-messages .nb-m.nb-own').count(), 0, 'not even to Bob');
+  // Nothing new read since: no more of them.
+  await b.page.clock.fastForward('15:00');
+  await new Promise((r) => setTimeout(r, 25_000));
+  assert.equal(posts(), before + 1, 'no receipts again without new reads');
+  await a.check();
+  await b.check();
+});

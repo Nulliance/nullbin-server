@@ -20,6 +20,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
 import { loadSodium } from '../src/sodium.ts';
+import { sealChained } from './chained.ts';
 import {
   MAX_BOX_N,
   REACTIONS,
@@ -131,7 +132,7 @@ function scenario(seed: number, hostile: boolean) {
       const to = people.filter((q) => q !== p && !removed.has(q.slot)).map((q) => ({ slot: q.slot, n: 0, box: sealChainKey(sodium, c!.ck, q.box.publicKey, place, q.slot) }));
       ctl(p, { t: 'keys', id: newRecordId(sodium), time: time(), gen: c.gen, index: c.index, commit: chainCommit(sodium, c.ck, place), to });
     }
-    log.push({ from: p.slot, bytes: sealMessage(sodium, c, ROOM, p.slot, p.sign.privateKey, rec) });
+    log.push({ from: p.slot, bytes: sealChained(sodium, c, ROOM, p.slot, p.sign.privateKey, rec) });
     c.sent++;
   };
   const steps = 30 + r.int(60);
@@ -151,13 +152,13 @@ function scenario(seed: number, hostile: boolean) {
       messages.set(p.slot, (messages.get(p.slot) ?? 0) + 1);
     } else if (kind < 8) {
       const text = `edited ${r.pick(WORDS)} #${seed}.${i}`;
-      send(p, { t: 'edit', id: newRecordId(sodium), time: time(), target: r.pick(own).id, text });
+      send(p, { t: 'edit', id: newRecordId(sodium), time: time(), prev: null, target: r.pick(own).id, text });
       said.get(p.slot)!.add(text);
     } else if (kind < 9) {
       const t = r.pick(all);
-      send(p, { t: 'react', id: newRecordId(sodium), time: time(), target: t.id, author: t.author, emoji: r.pick(REACTIONS), on: true });
+      send(p, { t: 'react', id: newRecordId(sodium), time: time(), prev: null, target: t.id, author: t.author, emoji: r.pick(REACTIONS), on: true });
     } else {
-      send(p, { t: 'unsend', id: newRecordId(sodium), time: time(), target: r.pick(own).id });
+      send(p, { t: 'unsend', id: newRecordId(sodium), time: time(), prev: null, target: r.pick(own).id });
     }
     // Once, the creator removes Cleo; everyone starts new chains without her.
     if (!removed.has(2) && i === Math.floor(steps / 2) && r.chance(0.5)) {
@@ -180,7 +181,7 @@ function forge(s: Scenario): Posted | null {
   // must be judged on what they say; sometimes one nobody has.
   const real = s.chains.get(mal.slot);
   const malChain = real && r.chance(0.8) ? real : newChain(sodium, 1 + r.int(3));
-  const malMsg = (rec: MessageRecord, slot = mal.slot): Posted => ({ from: slot, bytes: sealMessage(sodium, malChain, ROOM, slot, mal.sign.privateKey, rec) });
+  const malMsg = (rec: MessageRecord, slot = mal.slot): Posted => ({ from: slot, bytes: sealChained(sodium, malChain, ROOM, slot, mal.sign.privateKey, rec) });
   const id = () => newRecordId(sodium);
   const k = encodeKey(sodium, mal.sign.publicKey);
   const b = encodeKey(sodium, mal.box.publicKey);
@@ -211,11 +212,11 @@ function forge(s: Scenario): Posted | null {
     case 11: // posing as the creator: signed by Mal, posted at the creator's place
       return malCtl({ t: 'join', id: id(), time: s.time(), name: boxName(sodium, s.roster, 'Ada', ROOM, 'member', 0), key: k, box: b, namekey: encodeKey(sodium, s.names.publicKey) }, 0);
     case 12: return malCtl({ t: 'admit', id: id(), time: s.time(), slot: 1, key: k, roster: sealRoster(sodium, s.roster, mal.box.publicKey, ROOM, 1), name: boxName(sodium, s.roster, 'Bob', ROOM, 'member', 1) }, 0);
-    case 13: return all.length === 0 ? null : malMsg({ t: 'edit', id: id(), time: s.time(), target: r.pick(all).id, text: 'I owe Mal money' });
-    case 14: return all.length === 0 ? null : malMsg({ t: 'unsend', id: id(), time: s.time(), target: r.pick(all).id });
-    case 15: return malMsg({ t: 'msg', id: id(), time: s.time(), text: 'as you said', reply: { id: r.pick([...all.map((m) => m.id), id()]), author: r.int(5) }, seen: NO_RECEIPTS });
-    case 16: return malMsg({ t: 'msg', id: id(), time: s.time(), text: 'it is me, Bob', reply: null, seen: NO_RECEIPTS }, 1); // signed by Mal at Bob's place
-    case 17: return malMsg({ t: 'msg', id: id(), time: s.time(), text: 'false receipts', reply: null, seen: NO_RECEIPTS.map((a) => ({ ...a, gen: r.int(3), index: r.int(60), h: encodeKey(sodium, r.bytes(32)).slice(0, a.h.length) })) });
+    case 13: return all.length === 0 ? null : malMsg({ t: 'edit', id: id(), time: s.time(), prev: null, target: r.pick(all).id, text: 'I owe Mal money' });
+    case 14: return all.length === 0 ? null : malMsg({ t: 'unsend', id: id(), time: s.time(), prev: null, target: r.pick(all).id });
+    case 15: return malMsg({ t: 'msg', id: id(), time: s.time(), prev: null, text: 'as you said', reply: { id: r.pick([...all.map((m) => m.id), id()]), author: r.int(5) }, seen: NO_RECEIPTS });
+    case 16: return malMsg({ t: 'msg', id: id(), time: s.time(), prev: null, text: 'it is me, Bob', reply: null, seen: NO_RECEIPTS }, 1); // signed by Mal at Bob's place
+    case 17: return malMsg({ t: 'msg', id: id(), time: s.time(), prev: null, text: 'false receipts', reply: null, seen: NO_RECEIPTS.map((a) => ({ ...a, gen: r.int(3), index: r.int(60), h: encodeKey(sodium, r.bytes(32)).slice(0, a.h.length) })) });
     case 18: return { from: ada.slot, bytes: sealControl(sodium, key, ROOM, 0, mal.sign.privateKey, { t: 'keys', id: id(), time: s.time(), gen: 1, index: 0, commit: encodeKey(sodium, r.bytes(32)), to: [] }) };
     default: return honest; // a replay
   }
